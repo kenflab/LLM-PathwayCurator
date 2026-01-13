@@ -1,0 +1,7 @@
+{
+  "disease": "HNSC",
+  "tissue": "oral_cavity",
+  "perturbation": "TP53_mut_vs_wt",
+  "comparison": "tumor",
+  "notes": "Demo sample card for LLM-PathwayCurator."
+}
