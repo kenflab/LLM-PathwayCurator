@@ -1,6 +1,8 @@
+# LLM-PathwayCurator/tests/test_demo_cli.py
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 
@@ -28,12 +30,28 @@ def _write_demo_evidence(path):
         w.writerows(rows)
 
 
+def _write_sample_card(path):
+    obj = {
+        "disease": "TP53-mut cancer",
+        "tissue": "tumor",
+        "perturbation": "NA",
+        "comparison": "mut vs wt",
+        "notes": "demo",
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 def test_demo_cli_runs(tmp_path):
     outdir = tmp_path / "out"
     outdir.mkdir(parents=True, exist_ok=True)
 
     ev = tmp_path / "de_table.tsv"
     _write_demo_evidence(ev)
+
+    sc = tmp_path / "sample_card.json"
+    _write_sample_card(sc)
 
     cmd = [
         sys.executable,
@@ -43,7 +61,7 @@ def test_demo_cli_runs(tmp_path):
         "--evidence-table",
         str(ev),
         "--sample-card",
-        "examples/demo/sample_card.json",
+        str(sc),
         "--outdir",
         str(outdir),
     ]
@@ -52,3 +70,5 @@ def test_demo_cli_runs(tmp_path):
     audit = pd.read_csv(outdir / "audit_log.tsv", sep="\t")
     assert "status" in audit.columns
     assert (outdir / "report.md").exists()
+    # optional: reproducible artifacts
+    assert (outdir / "distilled.tsv").exists()

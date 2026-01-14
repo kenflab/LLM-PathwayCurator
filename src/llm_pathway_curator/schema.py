@@ -1,3 +1,4 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/dschema.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -53,12 +54,22 @@ class EvidenceTable:
     def _parse_genes(x: object) -> list[str]:
         if x is None:
             return []
-        if isinstance(x, list):
+        if isinstance(x, (list, tuple, set)):
             return [str(g).strip() for g in x if str(g).strip()]
         s = str(x).strip()
         if not s or s.lower() in {"na", "nan", "none"}:
             return []
-        return [g.strip() for g in s.split(",") if g.strip()]
+        # allow both comma and semicolon separators
+        s = s.replace(";", ",")
+        genes = [g.strip() for g in s.split(",") if g.strip()]
+        # de-dup while preserving order
+        seen: set[str] = set()
+        out: list[str] = []
+        for g in genes:
+            if g not in seen:
+                seen.add(g)
+                out.append(g)
+        return out
 
     @classmethod
     def _read_flexible(cls, path: str) -> pd.DataFrame:
@@ -103,8 +114,10 @@ class EvidenceTable:
 
         df["direction"] = df["direction"].map(cls._normalize_direction)
 
-        df["evidence_genes_list"] = df["evidence_genes"].map(cls._parse_genes)
-        df["evidence_genes"] = df["evidence_genes_list"].map(lambda xs: ",".join(xs))
+        # Keep list[str] as the canonical representation
+        df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
+        # Optional: also store a stable string version for TSV writing/debugging
+        df["evidence_genes_str"] = df["evidence_genes"].map(lambda xs: ",".join(xs))
 
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
         df["qval"] = pd.to_numeric(df["qval"], errors="coerce")

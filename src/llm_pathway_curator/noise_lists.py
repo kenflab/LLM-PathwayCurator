@@ -1,1 +1,250 @@
-from __future__ import annotations
+# LLM-PathwayCurator/src/llm_pathway_curator/noise_lists.py
+
+"""
+Noise module definitions for LLM-scCurator.
+
+This module centralizes regex patterns and curated gene lists that represent
+biological/technical programs which commonly dominate naive marker rankings and
+confuse LLM-based interpretation (e.g., ribosomal/mitochondrial, stress, cell cycle,
+TCR/Ig clonotypes, uninformative locus IDs).
+
+These definitions are used by the masking/distillation stage to:
+- suppress ubiquitous programs in prompt marker lists, and
+- optionally rescue sentinel markers (e.g., proliferation) to avoid over-filtering.
+
+Notes
+-----
+- Patterns are written to be Human/Mouse compatible when possible (case-aware).
+- This file is intentionally dependency-free and safe to import.
+- Edit conservatively: changes may affect benchmarking reproducibility.
+"""
+
+# Regex patterns for biological noise modules (Human & Mouse compatible)
+NOISE_PATTERNS = {
+    # --- Technical / Mapping Artifacts ---
+    "Ensembl_ID": r"^(ENSG|ENSMUSG)\d+",  # Meaningless IDs for LLMs
+    "LINC_Noise": r"^(LINC|linc)\d+$",  # Human LINC#### / linc####
+    "Mouse_Predicted_Gm": r"^Gm\d+$",  # Mouse predicted genes
+    "Mouse_Rik": r"^[0-9A-Za-z]+Rik$",  # Mouse Rik
+    "LOC_Locus": r"^LOC\d+$",  # Unannotated locus identifiers
+    # --- Lineage Noise (Variable Regions) ---
+    "TCR_Clone": r"^TR[ABGD][VDJ]",  # T-cell Receptors (Human)
+    "TCR_Clone_Mouse": r"^Tr[abgd][vdj]",  # T-cell Receptors (Mouse)
+    "Ig_Clone": r"^IG[HKL][VDJ]",  # Immunoglobulins (Human)
+    "Ig_Clone_Mouse": r"^Ig[hkl][vdj]",  # Immunoglobulins (Mouse)
+    # --- Ig Constant Regions (Human) ---
+    "Ig_Constant_Heavy": r"^IGH[-_]?((M|D)|G[1-4]|A[1-2]|E)$",  # IGHM, IGHD, IGHG1–4, IGHA1–2, IGHE
+    "Ig_Constant_Light_Kappa": r"^IGKC$",  # IGKC
+    "Ig_Constant_Light_Lambda": r"^IGLC.*$",  # IGLC1–7
+    # --- Ig Constant Regions (Mouse) ---
+    "Ig_Constant_Heavy_Mouse": r"^Igh[-_]?((m|d)|g[1-4]|a|e)$",  # Ighm, Ighd, Ighg1–4, Igha, I ghe
+    "Ig_Constant_Light_Kappa_Mouse": r"^Igkc$",  # Igkc
+    "Ig_Constant_Light_Lambda_Mouse": r"^Iglc.*$",  # Iglc1–7
+    # --- Biological State Noise ---
+    "Mito_Artifact": r"^[Mm][Tt]-",  # Mitochondrial (MT- or mt-)
+    "Ribo_Artifact": r"^[Rr][Pp][LSls]",  # Ribosomal (RPS/RPL or Rps/Rpl)
+    "HeatShock": r"^[Hh][Ss][Pp]",  # Heat shock (HSP or Hsp)
+    "JunFos_Stress": r"^(JUN|FOS|Jun|Fos)",  # Dissociation stress
+    "Hemo_Contam": r"^[Hh][Bb][ABab]",  # Hemoglobin
+    "Translation_Factor": r"^(EEF|EIF|TPT1|Eef|Eif|Tpt1)",  # Translation
+    # --- Chromatin & Proliferation Artifacts ---
+    "Histone": r"^(HIST|Hist)",
+    # --- Donor/Batch Confounders ---
+    # 1. HLA Class I (Human): Ubiquitous & Interferon-sensitive.
+    "HLA_ClassI_Noise": r"^HLA-[ABCEFG]",  # Keeps Class II (HLA-D) for APC definition.
+    # 2. MHC Class I (Mouse): H-2K, H-2D, H-2L.
+    "MHC_ClassI_Noise": r"^H2-[DKL]",  # Keeps Class II (H-2A, H-2E) for APC definition.
+    # 3. Sex Chromosome (Gender Batch Effect Removal)
+    "SexChromosome": r"^(XIST|UTY|DDX3Y|Xist|Uty|Ddx3y)",  # Removes XIST (Female)
+    # and Y-linked genes (Male)
+}
+
+
+# Full Cell Cycle Genes from Tirosh et al. (Science 2016)
+# Combined G1/S, G2/M, and Melanoma Core Cycling Genes
+# Defined in Human format (All Caps)
+_HUMAN_CC_GENES = {
+    # G1/S
+    "MCM5",
+    "PCNA",
+    "TYMS",
+    "FEN1",
+    "MCM2",
+    "MCM4",
+    "RRM1",
+    "UNG",
+    "GINS2",
+    "MCM6",
+    "CDCA7",
+    "DTL",
+    "PRIM1",
+    "UHRF1",
+    "MLF1IP",
+    "HELLS",
+    "RFC2",
+    "RPA2",
+    "NASP",
+    "RAD51AP1",
+    "GMNN",
+    "WDR76",
+    "SLBP",
+    "CCNE2",
+    "UBR7",
+    "POLD3",
+    "MSH2",
+    "ATAD2",
+    "RAD51",
+    "RRM2",
+    "CDC45",
+    "CDC6",
+    "EXO1",
+    "TIPIN",
+    "DSCC1",
+    "BLM",
+    "CASP8AP2",
+    "USP1",
+    "CLSPN",
+    "POLA1",
+    "CHAF1B",
+    "BRIP1",
+    "E2F8",
+    # G2/M
+    "HMGB2",
+    "CDK1",
+    "NUSAP1",
+    "UBE2C",
+    "BIRC5",
+    "TPX2",
+    "TOP2A",
+    "NDC80",
+    "CKS2",
+    "NUF2",
+    "CKS1B",
+    "MKI67",
+    "TMPO",
+    "CENPF",
+    "TACC3",
+    "FAM64A",
+    "SMC4",
+    "CCNB2",
+    "CKAP2L",
+    "CKAP2",
+    "AURKB",
+    "BUB1",
+    "KIF11",
+    "ANP32E",
+    "TUBB4B",
+    "GTSE1",
+    "KIF20B",
+    "HJURP",
+    "CDCA3",
+    "HN1",
+    "CDC20",
+    "TTK",
+    "CDC25C",
+    "KIF2C",
+    "RANGAP1",
+    "NCAPD2",
+    "DLGAP5",
+    "CDCA2",
+    "CDCA8",
+    "ECT2",
+    "KIF23",
+    "HMMR",
+    "AURKA",
+    "PSRC1",
+    "ANLN",
+    "LBR",
+    "CKAP5",
+    "CENPE",
+    "CTCF",
+    "NEK2",
+    "G2E3",
+    "GAS2L3",
+    "CBX5",
+    "CENPA",
+    # Melanoma Core Cycling (Additional)
+    "TK1",
+    "UBE2T",
+    "MAD2L1",
+    "ZWINT",
+    "MCM7",
+    "KIAA0101",
+    "PTTG1",
+    "CENPM",
+    "KPNA2",
+    "ASF1B",
+    "KIF22",
+    "FANCI",
+    "TUBA1B",
+    "CDKN3",
+    "WDR34",
+    "CCNB1",
+    "PBK",
+    "RPL39L",
+    "SNRNP25",
+    "TUBG1",
+    "RNASEH2A",
+    "DTYMK",
+    "RFC3",
+    "H2AFZ",
+    "NUDT1",
+    "RFC4",
+    "RACGAP1",
+    "KIFC1",
+    "TUBB6",
+    "ORC6",
+    "CENPW",
+    "CCNA2",
+    "EZH2",
+    "DEK",
+    "DSN1",
+    "DHFR",
+    "TCF19",
+    "HAT1",
+    "VRK1",
+    "SDF2L1",
+    "PHF19",
+    "SHCBP1",
+    "SAE1",
+    "CDCA5",
+    "OIP5",
+    "RANBP1",
+    "LMNB1",
+    "TROAP",
+    "RFC5",
+    "DNMT1",
+    "MND1",
+    "TIMELESS",
+    "HMGB1",
+    "ZWILCH",
+    "ASPM",
+    "POLA2",
+    "FABP5",
+    "TMEM194A",
+}
+
+# Sentinel proliferation markers we want to keep (not mask by default)
+PROLIFERATION_SENTINELS = {
+    "MKI67",
+    "CDK1",
+    "CCNB1",
+    "CCNB2",
+    "PCNA",
+    "TOP2A",
+    "BIRC5",
+    "Mki67",
+    "Cdk1",
+    "Ccnb1",
+    "Ccnb2",
+    "Pcna",
+    "Top2a",
+    "Birc5",
+}
+
+# Automatically generate Mouse format (Title Case: Mki67, Pcna)
+# This makes the tool universal without manual listing.
+_CELL_CYCLE_ALL = _HUMAN_CC_GENES.union({g.capitalize() for g in _HUMAN_CC_GENES})
+CELL_CYCLE_GENES = _CELL_CYCLE_ALL.difference(PROLIFERATION_SENTINELS)
+
+NOISE_LISTS = {"CellCycle_State": CELL_CYCLE_GENES}
