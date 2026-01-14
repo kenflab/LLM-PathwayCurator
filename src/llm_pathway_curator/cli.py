@@ -1,12 +1,15 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/cli.py
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 
 from .audit import audit_claims
 from .distill import distill_evidence
+from .modules import attach_module_ids, factorize_modules_connected_components
 from .report import write_report
 from .sample_card import SampleCard
 from .schema import EvidenceTable
@@ -26,15 +29,31 @@ def cmd_run(args: argparse.Namespace) -> None:
     ev = EvidenceTable.read_tsv(args.evidence_table).df
     card = SampleCard.from_json(args.sample_card)
 
+    # A) distill (evidence hygiene)
     distilled = distill_evidence(ev, card)
+
+    # B) modules (evidence factorization)
+    mod_out = factorize_modules_connected_components(distilled)
+    distilled = attach_module_ids(distilled, mod_out.term_modules_df)
+
+    # C) claims -> audit -> report
     proposed = select_claims(distilled, card)
     audited = audit_claims(proposed, distilled, card)
 
     write_report(audited, distilled, card, args.outdir)
 
-    audited.to_csv(os.path.join(args.outdir, "audit_log.tsv"), sep="\t", index=False)
-    with open(os.path.join(args.outdir, "sample_card.resolved.json"), "w") as f:
-        json.dump(card.model_dump(), f, indent=2)
+    # Persist resolved SampleCard
+    out_sc = os.path.join(args.outdir, "sample_card.resolved.json")
+    with open(out_sc, "w", encoding="utf-8") as f:
+        json.dump(card.model_dump(), f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    # Optional: also persist modules/edges for debugging (cheap + useful)
+    mod_out.modules_df.to_csv(os.path.join(args.outdir, "modules.tsv"), sep="\t", index=False)
+    mod_out.term_modules_df.to_csv(
+        os.path.join(args.outdir, "term_modules.tsv"), sep="\t", index=False
+    )
+    mod_out.edges_df.to_csv(os.path.join(args.outdir, "term_gene_edges.tsv"), sep="\t", index=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,7 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     p = build_parser()
     args = p.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception as e:
+        # Minimal, reproducible failure (nice for CI)
+        print(f"[ERROR] {type(e).__name__}: {e}", file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
