@@ -1,4 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/modules.py
+
+# LLM-PathwayCurator/src/llm_pathway_curator/modules.py
 from __future__ import annotations
 
 import math
@@ -18,18 +20,18 @@ class ModuleOutputs:
 def build_term_gene_edges(
     evidence_df: pd.DataFrame,
     *,
-    term_id_col: str = "term_id",
+    term_id_col: str = "term_uid",
     genes_col: str = "evidence_genes",
 ) -> pd.DataFrame:
     """
     Build a term-gene edge list from EvidenceTable-like df.
 
     Expects:
-      - term_id_col: str
-      - genes_col: list[str] in each row (canonical), OR comma-separated string (accepted)
+      - term_id_col: term identifier column (default: term_uid)
+      - genes_col: list[str] per row OR comma-separated string (accepted)
 
     Returns edges_df with columns:
-      - term_id
+      - term_uid
       - gene_id
       - weight (currently 1.0)
     """
@@ -41,8 +43,8 @@ def build_term_gene_edges(
     rows: list[tuple[str, str, float]] = []
 
     for _, r in evidence_df[[term_id_col, genes_col]].iterrows():
-        term_id = str(r[term_id_col]).strip()
-        if not term_id:
+        term_uid = str(r[term_id_col]).strip()
+        if not term_uid:
             continue
 
         genes = r[genes_col]
@@ -60,23 +62,23 @@ def build_term_gene_edges(
                 elif isinstance(pd.isna(genes), bool) and bool(pd.isna(genes)):
                     genes_list = []
                 else:
-                    s = str(genes).strip().replace(";", ",")
+                    s = str(genes).strip().replace(";", ",").replace("|", ",")
                     genes_list = [g.strip() for g in s.split(",") if g.strip()]
             except Exception:
-                s = str(genes).strip().replace(";", ",")
+                s = str(genes).strip().replace(";", ",").replace("|", ",")
                 genes_list = [g.strip() for g in s.split(",") if g.strip()]
 
         for g in genes_list:
-            rows.append((term_id, g, 1.0))
+            rows.append((term_uid, g, 1.0))
 
-    edges = pd.DataFrame(rows, columns=["term_id", "gene_id", "weight"])
+    edges = pd.DataFrame(rows, columns=["term_uid", "gene_id", "weight"])
     if edges.empty:
-        return pd.DataFrame(columns=["term_id", "gene_id", "weight"])
+        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
 
     edges = (
-        edges.groupby(["term_id", "gene_id"], as_index=False)["weight"]
+        edges.groupby(["term_uid", "gene_id"], as_index=False)["weight"]
         .sum()
-        .sort_values(["term_id", "gene_id"], kind="mergesort")
+        .sort_values(["term_uid", "gene_id"], kind="mergesort")
         .reset_index(drop=True)
     )
     return edges
@@ -92,7 +94,10 @@ def filter_hub_genes(edges: pd.DataFrame, *, max_term_degree: int | None = 200) 
     if edges.empty or max_term_degree is None:
         return edges
 
-    deg = edges.groupby("gene_id")["term_id"].nunique()
+    if "gene_id" not in edges.columns or "term_uid" not in edges.columns:
+        raise ValueError("filter_hub_genes: edges must have columns term_uid, gene_id")
+
+    deg = edges.groupby("gene_id")["term_uid"].nunique()
     hubs = set(deg[deg > int(max_term_degree)].index.tolist())
     if not hubs:
         return edges
@@ -102,7 +107,7 @@ def filter_hub_genes(edges: pd.DataFrame, *, max_term_degree: int | None = 200) 
 
 def _connected_components_from_edges(edges: pd.DataFrame) -> pd.DataFrame:
     if edges.empty:
-        return pd.DataFrame(columns=["node", "kind", "term_id", "gene_id", "component"])
+        return pd.DataFrame(columns=["node", "kind", "term_uid", "gene_id", "component"])
 
     adj: dict[str, set[str]] = {}
 
@@ -110,7 +115,7 @@ def _connected_components_from_edges(edges: pd.DataFrame) -> pd.DataFrame:
         adj.setdefault(a, set()).add(b)
         adj.setdefault(b, set()).add(a)
 
-    for t, g in edges[["term_id", "gene_id"]].itertuples(index=False):
+    for t, g in edges[["term_uid", "gene_id"]].itertuples(index=False):
         _add_edge(f"T:{t}", f"G:{g}")
 
     seen: set[str] = set()
@@ -142,11 +147,12 @@ def _connected_components_from_edges(edges: pd.DataFrame) -> pd.DataFrame:
         else:
             nodes.append((node, "gene", None, node[2:], cid))
 
-    out = pd.DataFrame(nodes, columns=["node", "kind", "term_id", "gene_id", "component"])
+    out = pd.DataFrame(nodes, columns=["node", "kind", "term_uid", "gene_id", "component"])
+
     # stable ordering
     kind_order = pd.Categorical(out["kind"], categories=["term", "gene"], ordered=True)
     out = out.assign(kind=kind_order).sort_values(
-        ["component", "kind", "term_id", "gene_id"], kind="mergesort"
+        ["component", "kind", "term_uid", "gene_id"], kind="mergesort"
     )
     return out.reset_index(drop=True)
 
@@ -156,18 +162,24 @@ def factorize_modules_connected_components(
     *,
     module_prefix: str = "M",
     max_term_degree: int | None = 200,
+    term_id_col: str = "term_uid",
+    genes_col: str = "evidence_genes",
 ) -> ModuleOutputs:
     """
     Deterministic v0 factorization:
       EvidenceTable(term->genes) -> edges -> (optional hub filtering) -> connected components.
+
+    NOTE(v0):
+      - module membership is keyed by term_uid (stable join key).
+      - modules_df 'term_ids' contains term_uid strings for reproducible joins.
     """
-    edges = build_term_gene_edges(evidence_df)
+    edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
 
     # Add degrees for audit/debug (cheap, useful)
     if not edges.empty:
         edges = edges.copy()
-        edges["gene_term_degree"] = edges.groupby("gene_id")["term_id"].transform("nunique")
-        edges["term_gene_degree"] = edges.groupby("term_id")["gene_id"].transform("nunique")
+        edges["gene_term_degree"] = edges.groupby("gene_id")["term_uid"].transform("nunique")
+        edges["term_gene_degree"] = edges.groupby("term_uid")["gene_id"].transform("nunique")
 
     edges_f = filter_hub_genes(edges, max_term_degree=max_term_degree)
 
@@ -175,9 +187,17 @@ def factorize_modules_connected_components(
 
     if nodes.empty:
         modules_df = pd.DataFrame(
-            columns=["module_id", "n_terms", "n_genes", "rep_gene_ids", "term_ids"]
+            columns=[
+                "module_id",
+                "n_terms",
+                "n_genes",
+                "rep_gene_ids",
+                "term_ids",
+                "rep_gene_ids_str",
+                "term_ids_str",
+            ]
         )
-        term_modules_df = pd.DataFrame(columns=["term_id", "module_id"])
+        term_modules_df = pd.DataFrame(columns=["term_uid", "module_id"])
         return ModuleOutputs(
             modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f
         )
@@ -188,11 +208,11 @@ def factorize_modules_connected_components(
     nodes = nodes.copy()
     nodes["module_id"] = nodes["component"].map(comp_to_mid)
 
-    term_modules = (
-        nodes[nodes["kind"].eq("term")][["term_id", "module_id"]]
+    term_modules_df = (
+        nodes[nodes["kind"].eq("term")][["term_uid", "module_id"]]
         .dropna()
         .drop_duplicates()
-        .sort_values(["module_id", "term_id"], kind="mergesort")
+        .sort_values(["module_id", "term_uid"], kind="mergesort")
         .reset_index(drop=True)
     )
 
@@ -203,11 +223,11 @@ def factorize_modules_connected_components(
     )
     term_lists = (
         nodes[nodes["kind"].eq("term")]
-        .groupby("module_id")["term_id"]
+        .groupby("module_id")["term_uid"]
         .apply(lambda s: sorted([t for t in s.dropna().astype(str).tolist() if t]))
     )
 
-    modules_rows = []
+    modules_rows: list[dict[str, object]] = []
     for mid in sorted(comp_to_mid.values()):
         genes = gene_lists.get(mid, [])
         terms = term_lists.get(mid, [])
@@ -218,7 +238,7 @@ def factorize_modules_connected_components(
                 "n_terms": int(len(terms)),
                 "n_genes": int(len(genes)),
                 "rep_gene_ids": rep,
-                "term_ids": terms,
+                "term_ids": terms,  # v0: term_uid list (stable join key)
                 # TSV-friendly
                 "rep_gene_ids_str": ",".join(rep),
                 "term_ids_str": ",".join(terms),
@@ -229,22 +249,22 @@ def factorize_modules_connected_components(
         pd.DataFrame(modules_rows).sort_values("module_id", kind="mergesort").reset_index(drop=True)
     )
 
-    return ModuleOutputs(modules_df=modules_df, term_modules_df=term_modules, edges_df=edges_f)
+    return ModuleOutputs(modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f)
 
 
 def attach_module_ids(
     evidence_df: pd.DataFrame,
     term_modules_df: pd.DataFrame,
     *,
-    term_id_col: str = "term_id",
+    term_id_col: str = "term_uid",
 ) -> pd.DataFrame:
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col}")
-    if "term_id" not in term_modules_df.columns or "module_id" not in term_modules_df.columns:
-        raise ValueError("term_modules_df must have columns: term_id, module_id")
+    if term_id_col not in term_modules_df.columns or "module_id" not in term_modules_df.columns:
+        raise ValueError(f"term_modules_df must have columns: {term_id_col}, module_id")
 
     out = evidence_df.merge(
-        term_modules_df.rename(columns={"term_id": term_id_col}),
+        term_modules_df,
         on=term_id_col,
         how="left",
         validate="m:1",  # v0 assumption: each term maps to one module

@@ -12,6 +12,19 @@ Status = Literal["PASS", "ABSTAIN", "FAIL"]
 ContextKey = Literal["disease", "tissue", "perturbation", "comparison"]
 
 
+def _dedup_preserve_order(xs: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in xs:
+        x = str(x).strip()
+        if not x or x.lower() in {"na", "nan", "none"}:
+            continue
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 def _split_listlike(v: Any) -> list[str]:
     """
     Accept list/tuple/set OR comma/semicolon-separated strings.
@@ -42,10 +55,17 @@ class EvidenceRef(BaseModel):
     gene_ids: list[str] = Field(default_factory=list)
     term_ids: list[str] = Field(default_factory=list)
 
+    @field_validator("module_id", mode="before")
+    @classmethod
+    def _strip_module_id(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
     @field_validator("gene_ids", "term_ids", mode="before")
     @classmethod
     def _ensure_list(cls, v: Any) -> list[str]:
-        return _split_listlike(v)
+        return _dedup_preserve_order(_split_listlike(v))
 
 
 class Claim(BaseModel):
@@ -55,17 +75,18 @@ class Claim(BaseModel):
     context_keys: list[ContextKey] = Field(default_factory=list)
     evidence_ref: EvidenceRef
 
+    @field_validator("claim_id", "entity", mode="before")
+    @classmethod
+    def _non_empty(cls, v: Any) -> str:
+        s = "" if v is None else str(v).strip()
+        if not s:
+            raise ValueError("must be non-empty")
+        return s
+
     @field_validator("direction", mode="before")
     @classmethod
     def _dir_canonical(cls, v: Any) -> str:
         return _norm_direction(v)
-
-    def polarity(self) -> Literal["pos", "neg", "na"]:
-        if self.direction == "up":
-            return "pos"
-        if self.direction == "down":
-            return "neg"
-        return "na"
 
 
 # ---- audited outputs ----

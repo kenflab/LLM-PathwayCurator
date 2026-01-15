@@ -186,3 +186,11 @@ class EvidenceTable:
         #     ...
 
         return cls(df=df)
+
+    def write_tsv(self, path: str) -> None:
+        out = self.df.copy()
+        if "evidence_genes_str" not in out.columns:
+            out["evidence_genes_str"] = out["evidence_genes"].map(lambda xs: ",".join(xs))
+        out = out.drop(columns=["evidence_genes"], errors="ignore")
+        out = out.rename(columns={"evidence_genes_str": "evidence_genes"})
+        out.to_csv(path, sep="\t", index=False)

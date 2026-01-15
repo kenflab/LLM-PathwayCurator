@@ -92,7 +92,6 @@ def risk_coverage_curve(
     if not np.isfinite(scores.to_numpy()).all():
         raise ValueError("risk_coverage_curve: score contains non-finite values")
 
-    # default thresholds: deterministic, downsampled if huge
     if decision_thresholds is None:
         uniq = np.unique(scores.to_numpy())
         uniq = np.sort(uniq)
@@ -109,17 +108,17 @@ def risk_coverage_curve(
     for thr in decision_thresholds:
         s = base_status.copy()
 
-        # Decide PASS among non-FAIL by score threshold
-        non_fail = s != "FAIL"
-        if pass_if_score_ge:
-            pass_mask = non_fail & (scores >= float(thr))
-        else:
-            pass_mask = non_fail & (scores <= float(thr))
+        # SAFETY: never upgrade ABSTAIN -> PASS; never change FAIL
+        pass_now = s == "PASS"
 
-        # non-FAIL but not pass_mask => ABSTAIN
-        s = s.where(~non_fail, other="ABSTAIN")
-        s = s.where(~pass_mask, other="PASS")
-        # FAIL remains FAIL (already excluded by non_fail mask)
+        if pass_if_score_ge:
+            keep_pass = pass_now & (scores >= float(thr))
+        else:
+            keep_pass = pass_now & (scores <= float(thr))
+
+        # demote PASS -> ABSTAIN, then re-promote only those that keep_pass
+        s = s.where(~pass_now, other="ABSTAIN")
+        s = s.where(~keep_pass, other="PASS")
 
         m = risk_coverage_from_status(s)
         m["threshold"] = float(thr)
