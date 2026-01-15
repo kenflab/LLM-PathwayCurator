@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from .sample_card import SampleCard
+
+# optional metrics export
+try:
+    from .calibrate import risk_coverage_curve, risk_coverage_from_status
+except Exception:  # pragma: no cover
+    risk_coverage_curve = None
+    risk_coverage_from_status = None
 
 
 def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
@@ -21,11 +29,23 @@ def _subset_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return df[keep].copy() if keep else df.copy()
 
 
+def _is_na_scalar(x: Any) -> bool:
+    if x is None:
+        return True
+    if isinstance(x, (list, tuple, set, dict)):
+        return False
+    try:
+        return bool(pd.isna(x))
+    except Exception:
+        return False
+
+
 def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     TSV-safe conversion for list-like columns.
     - If a <col>_str already exists, prefer it.
     - Otherwise stringify list/tuple/set as comma-joined.
+    - Scalar NA (None/pd.NA/nan) -> "" to stabilize artifacts.
     """
     out = df.copy()
     for c in list(out.columns):
@@ -35,7 +55,6 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
         if c_str in out.columns:
             continue
 
-        # detect list-like objects in this column (cheap sample)
         s = out[c]
         if s.dtype == "object":
             sample = s.dropna().head(20).tolist()
@@ -43,15 +62,18 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
                 out[c_str] = s.map(
                     lambda x: ",".join(map(str, x))
                     if isinstance(x, (list, tuple, set))
-                    else ("" if pd.isna(x) else str(x))
+                    else ("" if _is_na_scalar(x) else str(x))
                 )
+            else:
+                # still normalize scalar NA for stability (optional but nice)
+                out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
+        else:
+            # non-object columns: keep, but normalize pandas NA in Float64, etc.
+            out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
     return out
 
 
 def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Return (abstain_summary, fail_summary) as small tables.
-    """
     if "status" not in audit_log.columns:
         return (pd.DataFrame(), pd.DataFrame())
 
@@ -81,6 +103,14 @@ def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
     return abs_sum, fail_sum
 
 
+def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
+    # Prefer stability-derived score if present, else context proxy, else stat
+    for c in ["term_survival_agg", "context_score", "stat"]:
+        if c in audit_log.columns:
+            return c
+    return None
+
+
 def write_report(
     audit_log: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard, outdir: str
 ) -> None:
@@ -90,11 +120,6 @@ def write_report(
     # TSV-safe artifacts
     audit_out = _stringify_list_columns(audit_log)
     dist_out = _stringify_list_columns(distilled)
-
-    # Prefer canonical string columns if present
-    if "evidence_genes_str" in dist_out.columns:
-        # keep original list column for in-memory use, but TSV uses *_str
-        pass
 
     audit_tsv = out_path / "audit_log.tsv"
     distilled_tsv = out_path / "distilled.tsv"
@@ -109,15 +134,33 @@ def write_report(
         n_abs = int((audit_log[status_col] == "ABSTAIN").sum())
         n_fail = int((audit_log[status_col] == "FAIL").sum())
 
-    # small reason summaries
     abs_sum, fail_sum = _reason_summary(audit_log)
+
+    # risk/coverage summary + curve artifact (optional)
+    rc_summary: dict[str, float] | None = None
+    rc_curve_path: Path | None = None
+    score_col = _pick_score_col(audit_log)
+
+    if status_col and (risk_coverage_from_status is not None):
+        try:
+            rc_summary = risk_coverage_from_status(audit_log[status_col])
+        except Exception:
+            rc_summary = None
+
+    if status_col and score_col and (risk_coverage_curve is not None):
+        try:
+            curve = risk_coverage_curve(audit_log, score_col=score_col, status_col=status_col)
+            rc_curve_path = out_path / "risk_coverage.tsv"
+            curve.to_csv(rc_curve_path, sep="\t", index=False)
+        except Exception:
+            rc_curve_path = None
 
     # Stable “top” ordering
     def _top(df: pd.DataFrame) -> pd.DataFrame:
         cols = df.columns
-        if "term_survival" in cols:
+        if "term_survival_agg" in cols:
             return df.sort_values(
-                ["term_survival", "claim_id"], ascending=[False, True], kind="mergesort"
+                ["term_survival_agg", "claim_id"], ascending=[False, True], kind="mergesort"
             )
         if "stat" in cols:
             return df.sort_values(["stat", "claim_id"], ascending=[False, True], kind="mergesort")
@@ -137,6 +180,22 @@ def write_report(
     lines.append("")
     lines.append(f"## Decisions (PASS/ABSTAIN/FAIL): {n_pass}/{n_abs}/{n_fail}")
     lines.append("")
+
+    # one-line risk/coverage summary (decision-grade)
+    if rc_summary is not None:
+        lines.append("## Risk–Coverage summary")
+        lines.append("")
+        lines.append(
+            f"- coverage_pass_total: {rc_summary.get('coverage_pass_total', float('nan')):.3f}"
+        )
+        risk_decided = rc_summary.get("risk_fail_given_decided", float("nan"))
+        lines.append(f"- risk_fail_given_decided: {risk_decided:.3f}")
+
+        risk_total = rc_summary.get("risk_fail_total", float("nan"))
+        lines.append(f"- risk_fail_total: {risk_total:.3f}")
+        if score_col:
+            lines.append(f"- score_col_for_curve: {score_col}")
+        lines.append("")
 
     if not abs_sum.empty or not fail_sum.empty:
         lines.append("## Reason summary")
@@ -158,7 +217,19 @@ def write_report(
     lines.append(
         _safe_table_md(
             _subset_cols(
-                pass_df, ["claim_id", "entity", "direction", "module_id", "term_ids", "audit_notes"]
+                pass_df,
+                [
+                    "claim_id",
+                    "entity",
+                    "direction",
+                    "module_id",
+                    "term_ids",
+                    "gene_ids",
+                    "term_survival_agg",
+                    "context_score",
+                    "stat",
+                    "audit_notes",
+                ],
             ),
             n=5,
         )
@@ -174,7 +245,16 @@ def write_report(
         _safe_table_md(
             _subset_cols(
                 abs_df,
-                ["claim_id", "entity", "direction", "module_id", "abstain_reason", "audit_notes"],
+                [
+                    "claim_id",
+                    "entity",
+                    "direction",
+                    "module_id",
+                    "abstain_reason",
+                    "term_survival_agg",
+                    "context_score",
+                    "audit_notes",
+                ],
             ),
             n=5,
         )
@@ -201,10 +281,13 @@ def write_report(
     lines.append("")
     lines.append(_safe_table_md(_stringify_list_columns(audit_log), n=20))
     lines.append("")
+
     lines.append("## Reproducible artifacts")
     lines.append("")
     lines.append(f"- audit_log.tsv: {audit_tsv.name}")
     lines.append(f"- distilled.tsv: {distilled_tsv.name}")
+    if rc_curve_path is not None:
+        lines.append(f"- risk_coverage.tsv: {rc_curve_path.name}")
     lines.append("")
 
     report_path = out_path / "report.md"

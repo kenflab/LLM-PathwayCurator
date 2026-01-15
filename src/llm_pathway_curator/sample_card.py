@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 def _norm_str(x: Any) -> str:
     """
     Normalize context strings:
-      - None/NaN/empty/"na"/"nan"/"none" -> "NA"
+      - NA/None/NaN/empty/"na"/"nan"/"none" -> "NA"
       - strip whitespace + BOM
     """
     if x is None:
@@ -94,3 +94,28 @@ class SampleCard(BaseModel):
                 base.setdefault("extra", {})
                 base["extra"][k] = v
         return SampleCard(**base)
+
+    def counterfactual(
+        self,
+        *,
+        disease: str | None = None,
+        tissue: str | None = None,
+        perturbation: str | None = None,
+        comparison: str | None = None,
+        notes: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> SampleCard:
+        patch: dict[str, Any] = {}
+        if disease is not None:
+            patch["disease"] = disease
+        if tissue is not None:
+            patch["tissue"] = tissue
+        if perturbation is not None:
+            patch["perturbation"] = perturbation
+        if comparison is not None:
+            patch["comparison"] = comparison
+        if notes is not None:
+            patch["notes"] = notes
+        if extra is not None:
+            patch["extra"] = extra
+        return self.apply_patch(patch)

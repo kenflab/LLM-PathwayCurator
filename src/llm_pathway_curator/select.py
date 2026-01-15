@@ -11,7 +11,7 @@ from .sample_card import SampleCard
 
 # Canonical claim direction (auditable)
 _ALLOWED_DIRECTIONS = {"up", "down", "na"}
-_NA_TOKENS = {"na", "nan", "none", ""}
+_NA_TOKENS = {"na", "nan", "none", "", "NA"}
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -138,10 +138,12 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
       - v0 chooses one term_id per claim (term_ids=[term_id]).
       - Later LLM-min can expand to module-level typed claims, but must remain schema-bound.
     """
-    required = {"term_id", "term_name", "stat", "direction", "evidence_genes"}
+    required = {"term_id", "term_name", "source", "stat", "direction", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
     if missing:
         raise ValueError(f"select_claims: missing columns in distilled: {missing}")
+
+    has_term_uid = "term_uid" in distilled.columns
 
     toks = _context_tokens(card)
 
@@ -155,8 +157,15 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
 
     df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
 
+    # tie-break key
+    df["term_uid"] = (
+        df["term_uid"].astype(str).str.strip()
+        if has_term_uid
+        else (df["source"].astype(str).str.strip() + ":" + df["term_id"].astype(str).str.strip())
+    )
+
     df = (
-        df.sort_values(["context_score", "stat", "term_id"], ascending=[False, False, True])
+        df.sort_values(["context_score", "stat", "term_uid"], ascending=[False, False, True])
         .head(int(k))
         .copy()
     )
@@ -177,17 +186,18 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
         term_name = str(r["term_name"]).strip()
         direction = _norm_direction(r.get("direction", "na"))
         genes = _as_gene_list(r.get("evidence_genes"))
+        source = str(r["source"]).strip()
+        term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
-        module_id = (
-            str(r["module_id"]).strip()
-            if has_module
-            and (not _is_na_scalar(r.get("module_id")))
-            and str(r.get("module_id")).strip()
-            else f"M_fallback_{_make_id(term_id)}"
-        )
+        module_id = ""
+        if has_module and (not _is_na_scalar(r.get("module_id"))):
+            module_id = str(r.get("module_id")).strip()
 
-        # stable claim_id key
-        ctx_key = "|".join([term_id] + ctx_vals)
+        if (not module_id) or (module_id in _NA_TOKENS) or (module_id.lower() in _NA_TOKENS):
+            module_id = f"M_fallback_{_make_id(term_uid)}"
+
+        # stable claim_id key (MUST use term_uid, not term_id)
+        ctx_key = "|".join([term_uid] + ctx_vals)
 
         claim = Claim(
             claim_id=f"c_{_make_id(ctx_key)}",
@@ -197,7 +207,7 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
             evidence_ref=EvidenceRef(
                 module_id=module_id,
                 gene_ids=genes[:10],
-                term_ids=[term_id],
+                term_ids=[term_uid],
             ),
         )
 
@@ -207,6 +217,9 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
                 "entity": claim.entity,
                 "direction": claim.direction,
                 "context_keys": ",".join(claim.context_keys),
+                "term_uid": term_uid,
+                "source": source,
+                "term_name": term_name,
                 "module_id": claim.evidence_ref.module_id,
                 "gene_ids": ",".join(claim.evidence_ref.gene_ids),
                 "term_ids": ",".join(claim.evidence_ref.term_ids),

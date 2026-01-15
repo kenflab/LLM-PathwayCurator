@@ -18,24 +18,36 @@ class MaskResult:
     gene_reasons: dict[str, str]
 
 
+def _dedup_preserve_order(xs: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in xs:
+        x = str(x).strip()
+        if not x:
+            continue
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 def _as_gene_list(x: Any) -> list[str]:
     if x is None:
         return []
     if isinstance(x, (list, tuple, set)):
-        return [str(g).strip() for g in x if str(g).strip()]
+        genes = [str(g).strip() for g in x if str(g).strip()]
+        return _dedup_preserve_order(genes)
     s = str(x).strip().replace(";", ",")
     if not s or s.lower() in {"na", "nan", "none"}:
         return []
-    return [g.strip() for g in s.split(",") if g.strip()]
+    genes = [g.strip() for g in s.split(",") if g.strip()]
+    return _dedup_preserve_order(genes)
 
 
 def build_noise_gene_reasons(
     *,
-    rescue_modules: tuple[str, ...] | None = None,
     whitelist: list[str] | None = None,
 ) -> dict[str, str]:
-    if rescue_modules is None:
-        rescue_modules = RESCUE_MODULES_DEFAULT
     if whitelist is None:
         whitelist = []
 
@@ -72,7 +84,7 @@ def apply_gene_masking(
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_gene_masking: missing column {genes_col}")
 
-    list_reasons = build_noise_gene_reasons(rescue_modules=rescue_modules, whitelist=whitelist)
+    list_reasons = build_noise_gene_reasons(whitelist=whitelist)
 
     import re
 

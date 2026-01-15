@@ -98,6 +98,20 @@ def read_metascape_table(path: str) -> pd.DataFrame:
     return pd.read_csv(path, sep=r"\s+", engine="python")
 
 
+def _normalize_term_id(term: Any) -> str:
+    s = _clean_str(term)
+    if not s:
+        return ""
+    u = s.upper()
+    # Already canonical
+    if u.startswith("GO:"):
+        return s
+    # GO without colon (rare, but defensive)
+    if u.startswith("GO") and len(u) > 2 and u[2:].isdigit():
+        return "GO:" + s[2:]
+    return s
+
+
 def metascape_to_evidence_table(
     metascape_df: pd.DataFrame,
     *,
@@ -176,7 +190,7 @@ def metascape_to_evidence_table(
 
     out = pd.DataFrame(
         {
-            "term_id": df["term_id_raw"].map(lambda s: f"GO:{s}" if s.startswith("GO") else s),
+            "term_id": df["term_id_raw"].map(_normalize_term_id),
             "term_name": df["term_name"],
             "source": config.source_name,
             "stat": stat.astype(float),
