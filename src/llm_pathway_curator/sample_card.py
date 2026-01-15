@@ -5,17 +5,34 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 
 
 def _norm_str(x: Any) -> str:
-    """Normalize context strings: None/empty -> 'NA', strip whitespace."""
+    """
+    Normalize context strings:
+      - None/NaN/empty/"na"/"nan"/"none" -> "NA"
+      - strip whitespace + BOM
+    """
     if x is None:
         return "NA"
+    # pandas NA safety for scalars
+    try:
+        if not isinstance(x, (list, tuple, set, dict)) and bool(pd.isna(x)):
+            return "NA"
+    except Exception:
+        pass
+
     if not isinstance(x, str):
         x = str(x)
-    x = x.strip()
-    return x if x else "NA"
+
+    x = x.strip().lstrip("\ufeff")
+    if not x:
+        return "NA"
+    if x.lower() in {"na", "nan", "none"}:
+        return "NA"
+    return x
 
 
 class SampleCard(BaseModel):
@@ -26,11 +43,14 @@ class SampleCard(BaseModel):
     notes: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
-    # normalize core context fields
     @field_validator("disease", "tissue", "perturbation", "comparison", mode="before")
     @classmethod
     def _normalize_core(cls, v: Any) -> str:
         return _norm_str(v)
+
+    def context_key(self) -> str:
+        """Stable key for caching / claim IDs."""
+        return "|".join([self.disease, self.tissue, self.perturbation, self.comparison])
 
     @classmethod
     def from_json(cls, path: str | Path) -> SampleCard:
@@ -61,15 +81,15 @@ class SampleCard(BaseModel):
     def apply_patch(self, patch: dict[str, Any]) -> SampleCard:
         """
         Create a counterfactual SampleCard by overwriting a subset of fields.
-        Allowed keys: disease/tissue/perturbation/comparison/notes/extra
-        Unknown keys go into extra.
+        - Allowed: disease/tissue/perturbation/comparison/notes/extra
+        - Unknown keys go into extra (shallow merge).
         """
         base = self.model_dump()
         for k, v in patch.items():
             if k in {"disease", "tissue", "perturbation", "comparison", "notes"}:
                 base[k] = v
             elif k == "extra" and isinstance(v, dict):
-                base["extra"] = {**base.get("extra", {}), **v}
+                base["extra"] = {**base.get("extra", {}), **v}  # shallow merge
             else:
                 base.setdefault("extra", {})
                 base["extra"][k] = v

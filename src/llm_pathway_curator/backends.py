@@ -29,7 +29,7 @@ def _is_soft_error_json(s: str) -> bool:
     """
     Detect a standardized soft error JSON payload.
 
-    We standardize on:
+    Standard:
       {"error": {"message": "...", "type": "...", "retryable": true/false}}
     """
     try:
@@ -37,8 +37,6 @@ def _is_soft_error_json(s: str) -> bool:
     except Exception:
         return False
     if not isinstance(obj, dict):
-        return False
-    if "error" not in obj:
         return False
     err = obj.get("error")
     return isinstance(err, dict) and isinstance(err.get("message", ""), str)
@@ -58,26 +56,32 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
       - retryable exceptions (heuristics)
       - "soft error" string payloads (e.g., "OpenAI Error: ...")
       - standardized soft error JSON payloads: {"error": {...}}
+
+    Notes:
+      - json_mode is taken ONLY from kwargs to avoid signature/args ambiguity.
+      - JSON parse failure in json_mode: allow at most one retry.
     """
 
+    # Keep this conservative: only clearly non-retryable auth/config errors.
     NON_RETRYABLE_PATTERNS = [
         "401",
         "403",
         "invalid_api_key",
         "unauthorized",
         "forbidden",
-        "400",
         "bad request",
         "invalid_request",
         "model not found",
         "insufficient_quota",
-        "quota",
         "billing",
     ]
 
+    # Things that usually benefit from retry/backoff.
     RETRYABLE_HINTS = [
         "429",
         "rate limit",
+        "ratelimit",
+        "too many requests",
         "500",
         "502",
         "503",
@@ -85,8 +89,11 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
         "timeout",
         "timed out",
         "connection",
+        "api connection",
         "temporarily",
         "unavailable",
+        "service unavailable",
+        "overloaded",
     ]
 
     def _should_retry_error_text(err_text: str) -> bool:
@@ -100,12 +107,10 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            x = 0
+            attempt = 0
             json_mode = bool(kwargs.get("json_mode", False))
-            if "json_mode" not in kwargs and len(args) >= 3:
-                json_mode = bool(args[2])
 
-            parsefail_used = False  # allow at most one retry for JSON parse failures
+            parsefail_used = False  # allow at most one retry for JSON parse failures in json_mode
 
             while True:
                 try:
@@ -122,19 +127,19 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
                         if s.startswith(("Gemini Error:", "OpenAI Error:", "Ollama Error:")):
                             retryable = _should_retry_error_text(s)
 
-                        # standardized JSON soft error
+                        # standardized JSON soft error (preferred in json_mode)
                         elif json_mode and s.startswith("{") and s.endswith("}"):
                             if _is_soft_error_json(s):
                                 try:
-                                    err = json.loads(s)["error"]
+                                    err = json.loads(s).get("error", {}) or {}
+                                    msg = str(err.get("message", ""))
                                     retryable = bool(
                                         err.get("retryable", False)
-                                    ) or _should_retry_error_text(err.get("message", ""))
+                                    ) or _should_retry_error_text(msg)
                                 except Exception:
                                     retryable = False
                             else:
-                                # json_mode requested but got unparsable/invalid JSON
-                                # -> allow one retry
+                                # json_mode requested but got invalid JSON -> allow one retry
                                 try:
                                     json.loads(s)
                                 except Exception:
@@ -142,13 +147,13 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
                                     parsefail_used = True
 
                     if retryable:
-                        if x == retries:
+                        if attempt >= retries:
                             return result
-                        sleep = backoff_in_seconds * (2**x)
+                        sleep = backoff_in_seconds * (2**attempt)
                         sleep *= 1.0 + random.uniform(-0.1, 0.1)
-                        logging.debug("LLM retry. attempt=%d sleep=%.2fs", x + 1, sleep)
+                        logging.debug("LLM retry. attempt=%d sleep=%.2fs", attempt + 1, sleep)
                         time.sleep(max(0.0, sleep))
-                        x += 1
+                        attempt += 1
                         continue
 
                     return result
@@ -157,15 +162,18 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
                     msg = str(e)
                     if not _should_retry_error_text(msg):
                         raise
-                    if x == retries:
+                    if attempt >= retries:
                         raise
-                    sleep = backoff_in_seconds * (2**x)
+                    sleep = backoff_in_seconds * (2**attempt)
                     sleep *= 1.0 + random.uniform(-0.1, 0.1)
                     logging.debug(
-                        "LLM retry (exception). attempt=%d sleep=%.2fs err=%s", x + 1, sleep, msg
+                        "LLM retry (exception). attempt=%d sleep=%.2fs err=%s",
+                        attempt + 1,
+                        sleep,
+                        msg,
                     )
                     time.sleep(max(0.0, sleep))
-                    x += 1
+                    attempt += 1
 
         return wrapper
 
@@ -199,14 +207,13 @@ class GeminiBackend(BaseLLMBackend):
             response = self.model.generate_content(prompt, generation_config=generation_config)
             return response.text
         except Exception as e:
+            msg = str(e)
+            retryable = any(
+                h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+            )
             if json_mode:
-                # Mark retryable conservatively only if it looks transient
-                msg = str(e)
-                retryable = any(
-                    h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
-                )
                 return _soft_error_json(msg, err_type="gemini_error", retryable=retryable)
-            return f"Gemini Error: {e}"
+            return f"Gemini Error: {msg}"
 
 
 class OpenAIBackend(BaseLLMBackend):
@@ -238,7 +245,7 @@ class OpenAIBackend(BaseLLMBackend):
             resp = self.client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content
 
-        first_exc = None
+        first_exc: Exception | None = None
         try:
             return _call(with_seed=True)
         except Exception as e:
@@ -247,14 +254,28 @@ class OpenAIBackend(BaseLLMBackend):
                 return _call(with_seed=False)
             except Exception as e2:
                 err = e2 if e2 is not None else first_exc
+                msg = str(err)
+
+                # Mark retryable conservatively only if it looks transient
+                retryable = any(
+                    h in msg.lower()
+                    for h in [
+                        "429",
+                        "timeout",
+                        "503",
+                        "unavailable",
+                        "rate limit",
+                        "too many requests",
+                        "overloaded",
+                    ]
+                )
+
                 if json_mode:
-                    msg = str(err)
-                    retryable = any(
-                        h in msg.lower()
-                        for h in ["429", "timeout", "503", "unavailable", "rate limit"]
-                    )
                     return _soft_error_json(msg, err_type="openai_error", retryable=retryable)
-                return f"OpenAI Error: {err}"
+
+                # Keep existing behavior for non-json_mode to avoid breaking downstream
+                # expectations,but ensure retry decorator can see retry hints.
+                return f"OpenAI Error: {msg}"
 
 
 class OllamaBackend(BaseLLMBackend):
@@ -333,13 +354,13 @@ class OllamaBackend(BaseLLMBackend):
             return content if content else raw.strip()
 
         except Exception as e:
+            msg = str(e)
+            retryable = any(
+                h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+            )
             if json_mode:
-                msg = str(e)
-                retryable = any(
-                    h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
-                )
                 return _soft_error_json(msg, err_type="ollama_error", retryable=retryable)
-            return f"Ollama Error: {e}"
+            return f"Ollama Error: {msg}"
 
 
 class LocalLLMBackend(BaseLLMBackend):
