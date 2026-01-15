@@ -1,4 +1,4 @@
-# LLM-PathwayCurator/src/llm_pathway_curator/dschema.py
+# LLM-PathwayCurator/src/llm_pathway_curator/schema.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,7 +15,6 @@ REQUIRED_EVIDENCE_COLS = [
     "evidence_genes",
 ]
 
-# Minimal alias support (optional, can expand later)
 ALIASES = {
     "term": "term_id",
     "id": "term_id",
@@ -36,33 +35,79 @@ class EvidenceTable:
 
     @staticmethod
     def _normalize_col(c: str) -> str:
-        # strip whitespace + BOM, normalize to lower, replace spaces with underscore
         c = c.strip().lstrip("\ufeff")
         c = c.replace(" ", "_")
         return c.lower()
 
     @staticmethod
+    def _is_na_scalar(x: object) -> bool:
+        """pd.isna is unsafe for list-like; only treat scalars here."""
+        if x is None:
+            return True
+        # pandas considers strings as scalars; lists/tuples/sets are not
+        if isinstance(x, (list, tuple, set, dict)):
+            return False
+        try:
+            return bool(pd.isna(x))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _clean_required_str(x: object) -> str:
+        if EvidenceTable._is_na_scalar(x):
+            return ""
+        s = str(x).strip()
+        if s.lower() in {"na", "nan", "none"}:
+            return ""
+        return s
+
+    @staticmethod
     def _normalize_direction(x: object) -> str:
+        if EvidenceTable._is_na_scalar(x):
+            return "na"
         s = str(x).strip().lower()
-        if s in {"up", "down", "activated", "suppressed"}:
-            return s
+        if s in {
+            "up",
+            "upregulated",
+            "increase",
+            "increased",
+            "activated",
+            "+",
+            "pos",
+            "positive",
+            "1",
+        }:
+            return "up"
+        if s in {
+            "down",
+            "downregulated",
+            "decrease",
+            "decreased",
+            "suppressed",
+            "-",
+            "neg",
+            "negative",
+            "-1",
+        }:
+            return "down"
         if s in {"na", "none", "", "nan"}:
             return "na"
         return "na"
 
     @staticmethod
     def _parse_genes(x: object) -> list[str]:
-        if x is None:
+        # IMPORTANT: avoid pd.isna(x) on list-like (can raise)
+        if EvidenceTable._is_na_scalar(x):
             return []
         if isinstance(x, (list, tuple, set)):
-            return [str(g).strip() for g in x if str(g).strip()]
-        s = str(x).strip()
-        if not s or s.lower() in {"na", "nan", "none"}:
-            return []
-        # allow both comma and semicolon separators
-        s = s.replace(";", ",")
-        genes = [g.strip() for g in s.split(",") if g.strip()]
-        # de-dup while preserving order
+            genes = [str(g).strip() for g in x if str(g).strip()]
+        else:
+            s = str(x).strip()
+            if not s or s.lower() in {"na", "nan", "none"}:
+                return []
+            s = s.replace(";", ",").replace("|", ",")
+            genes = [g.strip() for g in s.split(",") if g.strip()]
+
         seen: set[str] = set()
         out: list[str] = []
         for g in genes:
@@ -73,33 +118,31 @@ class EvidenceTable:
 
     @classmethod
     def _read_flexible(cls, path: str) -> pd.DataFrame:
-        """
-        Read TSV/CSV/whitespace-separated tables robustly.
-        Handles common failure mode: everything becomes 1 column because sep mismatch.
-        """
-        # Try strict TSV first
         df = pd.read_csv(path, sep="\t")
-        if df.shape[1] == 1:
-            # Maybe CSV or whitespace-delimited; try auto-sep
-            df2 = pd.read_csv(path, sep=None, engine="python")
-            if df2.shape[1] > 1:
-                df = df2
-            else:
-                # last resort: whitespace
-                df3 = pd.read_csv(path, sep=r"\s+", engine="python")
-                if df3.shape[1] > 1:
-                    df = df3
-        return df
+        if df.shape[1] > 1:
+            return df
+        df2 = pd.read_csv(path, sep=None, engine="python")
+        if df2.shape[1] > 1:
+            return df2
+        return pd.read_csv(path, sep=r"\s+", engine="python")
 
     @classmethod
     def read_tsv(cls, path: str) -> EvidenceTable:
-        df = cls._read_flexible(path)
+        df_raw = cls._read_flexible(path)
 
-        # normalize column names + alias mapping
-        cols_norm = [cls._normalize_col(c) for c in df.columns]
+        cols_norm = [cls._normalize_col(c) for c in df_raw.columns]
         cols_mapped = [ALIASES.get(c, c) for c in cols_norm]
-        df = df.copy()
+
+        df = df_raw.copy()
         df.columns = cols_mapped
+
+        # NEW: detect duplicate columns after aliasing (v0 safest)
+        dup = df.columns[df.columns.duplicated()].tolist()
+        if dup:
+            raise ValueError(
+                f"EvidenceTable has duplicate columns after aliasing: {sorted(set(dup))}. "
+                f"Columns={list(df.columns)}"
+            )
 
         missing = [c for c in REQUIRED_EVIDENCE_COLS if c not in df.columns]
         if missing:
@@ -107,29 +150,39 @@ class EvidenceTable:
                 f"EvidenceTable missing columns: {missing}. Found columns: {list(df.columns)}"
             )
 
-        # basic hygiene
-        df["term_id"] = df["term_id"].astype(str).str.strip()
-        df["term_name"] = df["term_name"].astype(str).str.strip()
-        df["source"] = df["source"].astype(str).str.strip()
+        df["term_id"] = df["term_id"].map(cls._clean_required_str)
+        df["term_name"] = df["term_name"].map(cls._clean_required_str)
+        df["source"] = df["source"].map(cls._clean_required_str)
 
         df["direction"] = df["direction"].map(cls._normalize_direction)
 
-        # Keep list[str] as the canonical representation
         df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
-        # Optional: also store a stable string version for TSV writing/debugging
+
+        # NEW: always regenerate to keep consistent with parsed genes
         df["evidence_genes_str"] = df["evidence_genes"].map(lambda xs: ",".join(xs))
 
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
         df["qval"] = pd.to_numeric(df["qval"], errors="coerce")
 
-        bad = df["term_id"].eq("") | df["term_name"].eq("") | df["source"].eq("")
-        if bad.any():
-            i = df.index[bad][0]
+        bad_required = df["term_id"].eq("") | df["term_name"].eq("") | df["source"].eq("")
+        if bad_required.any():
+            i = int(df.index[bad_required][0])
             raise ValueError(f"EvidenceTable has empty required fields at row index={i}")
 
         if df["stat"].isna().any():
-            i = df.index[df["stat"].isna()][0]
+            i = int(df.index[df["stat"].isna()][0])
             raise ValueError(f"EvidenceTable has non-numeric stat at row index={i}")
 
-        # qval may be NA; allowed
+        empty_ev = df["evidence_genes"].map(len).eq(0)
+        if empty_ev.any():
+            i = int(df.index[empty_ev][0])
+            raise ValueError(
+                f"EvidenceTable has empty evidence_genes at row index={i} "
+                f"(term_id={df.loc[i, 'term_id']})"
+            )
+
+        # Optional (recommended): qval sanity (do not hard-fail; just clip or warn later)
+        # if ((df["qval"].notna()) & ((df["qval"] < 0) | (df["qval"] > 1))).any():
+        #     ...
+
         return cls(df=df)

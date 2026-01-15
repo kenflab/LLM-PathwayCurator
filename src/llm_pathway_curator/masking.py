@@ -14,15 +14,6 @@ RESCUE_MODULES_DEFAULT = ("LINC_Noise", "Hemo_Contam")
 
 @dataclass(frozen=True)
 class MaskResult:
-    """
-    masked_distilled:
-      - evidence_genes をマスク済み（list[str] のまま）
-      - evidence_genes_str を再生成（任意）
-      - masked_genes_count を追加（任意）
-    gene_reasons:
-      - gene -> reason（辞書）
-    """
-
     masked_distilled: pd.DataFrame
     gene_reasons: dict[str, str]
 
@@ -43,13 +34,6 @@ def build_noise_gene_reasons(
     rescue_modules: tuple[str, ...] | None = None,
     whitelist: list[str] | None = None,
 ) -> dict[str, str]:
-    """
-    Build a global noise-gene reason map from NOISE_LISTS / NOISE_PATTERNS.
-
-    Note: regex-based patterns cannot enumerate all possible symbols without a universe;
-    therefore, this function only returns list-based reasons.
-    Regex masking is applied per-row using the observed genes.
-    """
     if rescue_modules is None:
         rescue_modules = RESCUE_MODULES_DEFAULT
     if whitelist is None:
@@ -60,7 +44,6 @@ def build_noise_gene_reasons(
         for g in genes:
             reasons[g] = f"Module_{module_name}"
 
-    # whitelist rescue
     for g in whitelist:
         reasons.pop(g, None)
 
@@ -73,24 +56,14 @@ def apply_gene_masking(
     genes_col: str = "evidence_genes",
     rescue_modules: tuple[str, ...] | None = None,
     whitelist: list[str] | None = None,
+    seed: int | None = None,
 ) -> MaskResult:
     """
-    Apply biological-noise masking to EvidenceTable-like df.
-
-    Inputs:
-      distilled[genes_col] should be list[str] (preferred) or string.
-
-    Behavior:
-      - list-based masking: remove genes appearing in NOISE_LISTS
-      - regex-based masking: remove genes matching NOISE_PATTERNS
-      - rescue policy: for modules in rescue_modules, keep ONE sentinel gene per row
-        if multiple genes match that module (deterministic: lexicographically smallest)
-
-    Returns:
-      MaskResult with:
-        - masked_distilled (same shape, genes masked)
-        - gene_reasons dict (gene -> reason code)
+    NOTE(v0): `seed` is accepted for CLI-level reproducibility plumbing.
+    Masking in v0 is deterministic, so seed is intentionally unused.
     """
+    _ = seed  # keep v0 deterministic, but don't crash if CLI passes seed
+
     if rescue_modules is None:
         rescue_modules = RESCUE_MODULES_DEFAULT
     if whitelist is None:
@@ -99,15 +72,11 @@ def apply_gene_masking(
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_gene_masking: missing column {genes_col}")
 
-    # Precompute list-based reasons
     list_reasons = build_noise_gene_reasons(rescue_modules=rescue_modules, whitelist=whitelist)
 
-    # Regex patterns (module -> compiled pattern)
-    compiled = {k: v for k, v in NOISE_PATTERNS.items()}  # assume already regex strings
-    # compile lazily to avoid importing re at module import time (optional)
     import re
 
-    compiled = {k: re.compile(pat) for k, pat in compiled.items()}
+    compiled = {k: re.compile(pat) for k, pat in NOISE_PATTERNS.items()}
 
     gene_reasons: dict[str, str] = {}
     out = distilled.copy()
@@ -122,23 +91,18 @@ def apply_gene_masking(
             masked_counts.append(0)
             continue
 
-        # Whitelist: never mask these
         wl = set(whitelist)
 
-        # 1) list-based removals
-        kept = []
-        removed = []
+        kept: list[str] = []
+        removed: list[tuple[str, str]] = []
         for g in genes:
             if g in wl:
                 kept.append(g)
-                continue
-            if g in list_reasons:
+            elif g in list_reasons:
                 removed.append((g, list_reasons[g]))
             else:
                 kept.append(g)
 
-        # 2) regex-based removals (+ rescue)
-        # For each module, check which of the *current* kept genes match.
         kept2 = kept[:]
         for module_name, rx in compiled.items():
             matches = [g for g in kept2 if (g not in wl) and bool(rx.match(g))]
@@ -146,20 +110,16 @@ def apply_gene_masking(
                 continue
 
             if module_name in rescue_modules and len(matches) >= 2:
-                # deterministic sentinel: keep lexicographically smallest
                 sentinel = sorted(matches)[0]
                 for g in matches:
-                    if g == sentinel:
-                        continue
-                    removed.append((g, f"Module_{module_name} (Redundant)"))
+                    if g != sentinel:
+                        removed.append((g, f"Module_{module_name} (Redundant)"))
                 kept2 = [g for g in kept2 if (g == sentinel) or (g not in matches)]
             else:
-                # mask all matches
                 for g in matches:
                     removed.append((g, f"Module_{module_name}"))
                 kept2 = [g for g in kept2 if g not in matches]
 
-        # record reasons (global dict; last write wins is fine for v0)
         for g, reason in removed:
             gene_reasons[g] = reason
 
