@@ -18,7 +18,7 @@ from .adapters.metascape import MetascapeAdapterConfig, convert_metascape_table_
 from .audit import audit_claims
 from .distill import distill_evidence
 from .modules import attach_module_ids, factorize_modules_connected_components
-from .report import write_report
+from .report import write_report, write_report_jsonl
 from .sample_card import SampleCard
 from .schema import EvidenceTable
 from .select import select_claims
@@ -172,6 +172,16 @@ def cmd_run(args: argparse.Namespace) -> None:
         write_report(audited, distilled2, card, str(outdir))
         meta["artifacts"]["report_dir"] = str(outdir)
 
+        # 6) report.jsonl (Fig2-ready; explicit contract)
+        _mark_step("report_jsonl")
+        jsonl_path = write_report_jsonl(
+            audit_log=audited,
+            card=card,
+            outdir=str(outdir),
+            run_id=run_id,
+        )
+        meta["artifacts"]["report_jsonl"] = str(jsonl_path)
+
         meta["status"] = "ok"
         meta["finished_epoch"] = time.time()
         _write_json(meta_path, meta)
@@ -232,6 +242,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument(
         "--run-meta", default="run_meta.json", help="Filename for run metadata JSON inside outdir"
+    )
+    p_run.add_argument(
+        "--benchmark-id",
+        default="",
+        help="(optional) benchmark identifier for report.jsonl (e.g., PANCAN_TP53_v1)",
+    )
+    p_run.add_argument(
+        "--cancer",
+        default="",
+        help="(optional) cancer label for report.jsonl (default: SampleCard.disease)",
+    )
+    p_run.add_argument(
+        "--method",
+        default="ours",
+        help="(optional) method label for report.jsonl (e.g., ours, baseline_qonly)",
     )
     p_run.set_defaults(func=cmd_run)
 

@@ -1,19 +1,35 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/report.py
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from .audit_reasons import (
+    ABSTAIN_REASONS,
+    FAIL_CONTRADICTION,
+    FAIL_EVIDENCE_DRIFT,
+    FAIL_REASONS,
+    FAIL_SCHEMA_VIOLATION,
+)
 from .sample_card import SampleCard
 
-# optional metrics export
+# optional metrics export (report.md only)
 try:
     from .calibrate import risk_coverage_curve, risk_coverage_from_status
 except Exception:  # pragma: no cover
     risk_coverage_curve = None
     risk_coverage_from_status = None
+
+
+# -----------------------------
+# Small helpers (stable)
+# -----------------------------
+_NA_TOKENS = {"", "na", "nan", "none", "NA"}
 
 
 def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
@@ -22,11 +38,6 @@ def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
         return head.to_markdown(index=False)
     except Exception:
         return head.to_csv(sep="\t", index=False)
-
-
-def _subset_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    keep = [c for c in cols if c in df.columns]
-    return df[keep].copy() if keep else df.copy()
 
 
 def _prefer_str_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
@@ -60,7 +71,7 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     TSV-safe conversion for list-like columns.
     - If a <col>_str already exists, prefer it.
     - Otherwise stringify list/tuple/set as comma-joined.
-    - Scalar NA (None/pd.NA/nan) -> "" to stabilize artifacts.
+    - Scalar NA -> "" to stabilize artifacts.
     """
     out = df.copy()
     for c in list(out.columns):
@@ -123,13 +134,233 @@ def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
     return None
 
 
-def write_report(
-    audit_log: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard, outdir: str
-) -> None:
+def _hash12(s: str) -> str:
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]
+
+
+def _as_list(x: Any) -> list[str]:
+    """
+    Robust list normalization:
+    - list/tuple/set -> list[str]
+    - comma-joined string -> split, strip, drop empties
+    - scalar -> [str(x)]
+    """
+    if x is None or _is_na_scalar(x):
+        return []
+    if isinstance(x, list):
+        items = [str(v).strip() for v in x]
+    elif isinstance(x, (tuple, set)):
+        items = [str(v).strip() for v in list(x)]
+    elif isinstance(x, str):
+        s = x.strip()
+        if not s or s in _NA_TOKENS or s.lower() in _NA_TOKENS:
+            return []
+        items = [t.strip() for t in s.replace(";", ",").split(",")]
+    else:
+        items = [str(x).strip()]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in items:
+        if not t:
+            continue
+        if t in _NA_TOKENS or t.lower() in _NA_TOKENS:
+            continue
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _to_float_or_none(x: Any) -> float | None:
+    if x is None or _is_na_scalar(x):
+        return None
+    try:
+        # handle empty strings
+        s = str(x).strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _reason_codes_from_row(row: pd.Series) -> list[str]:
+    """
+    v1 contract:
+    - FAIL -> [fail_reason] (must be in FAIL_REASONS)
+    - ABSTAIN -> [abstain_reason] (must be in ABSTAIN_REASONS)
+    - PASS -> ["OK"]
+    """
+    status = str(row.get("status", "")).upper().strip()
+    if status == "FAIL":
+        fr = str(row.get("fail_reason", "")).strip()
+        return [fr] if fr in FAIL_REASONS else ["unknown_fail"]
+    if status == "ABSTAIN":
+        ar = str(row.get("abstain_reason", "")).strip()
+        return [ar] if ar in ABSTAIN_REASONS else ["unknown_abstain"]
+    if status == "PASS":
+        return ["OK"]
+    return ["UNKNOWN"]
+
+
+def _audit_flags_from_row(row: pd.Series) -> dict[str, bool]:
+    """
+    v1 contract:
+    audit_flags reflect ONLY auditable FAIL reasons.
+    """
+    fr = str(row.get("fail_reason", "")).strip()
+    return {
+        "evidence_drift": fr == FAIL_EVIDENCE_DRIFT,
+        "contradiction": fr == FAIL_CONTRADICTION,
+        "schema_violation": fr == FAIL_SCHEMA_VIOLATION,
+    }
+
+
+def _claim_uid_from_row(row: pd.Series, card: SampleCard) -> str:
+    """
+    Meaning-stable id (no evidence hash).
+    Keep this conservative and stable:
+    - disease + comparison + entity_id + direction
+    """
+    disease = str(getattr(card, "disease", "") or row.get("cancer", "") or "").strip()
+    comparison = str(getattr(card, "comparison", "") or row.get("comparison", "") or "").strip()
+    entity_id = str(
+        row.get("entity_id", "") or row.get("entity", "") or row.get("term_id", "") or ""
+    ).strip()
+    direction = str(row.get("direction", "") or "").strip()
+    return f"{disease}|{comparison}|{entity_id}|{direction}"
+
+
+# -----------------------------
+# v1 JSONL export (Fig2-ready)
+# -----------------------------
+def write_report_jsonl(
+    audit_log: pd.DataFrame,
+    card: SampleCard,
+    outdir: str,
+    *,
+    run_id: str,
+) -> Path:
+    """
+    Write Fig2-ready records:
+    - metrics.survival is term_survival_agg (required column; values may be NA)
+    - audit_flags reflect FAIL reasons (stable)
+    - reason_codes uses stable tokens from audit_reasons.py
+    """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # TSV-safe artifacts
+    if run_id is None:
+        run_id = datetime.now(timezone.utc).isoformat()
+
+    if "term_survival_agg" not in audit_log.columns:
+        raise ValueError("audit_log must contain term_survival_agg for v1 (metrics.survival)")
+
+    # Make list-like fields TSV/JSON safe, but keep numeric series from the original frame.
+    df = _stringify_list_columns(audit_log)
+
+    # normalize numeric fields (robust to "" from TSV-safe artifacts)
+    surv_s = pd.to_numeric(audit_log.get("term_survival_agg"), errors="coerce")
+    ctx_s = (
+        pd.to_numeric(audit_log.get("context_score"), errors="coerce")
+        if "context_score" in audit_log.columns
+        else None
+    )
+    stat_s = (
+        pd.to_numeric(audit_log.get("stat"), errors="coerce")
+        if "stat" in audit_log.columns
+        else None
+    )
+
+    jsonl_path = out_path / "report.jsonl"
+
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for i, row in df.iterrows():
+            claim_uid = _claim_uid_from_row(row, card)
+
+            evidence = {
+                "module_ids": _as_list(row.get("module_id")),
+                "term_ids": _as_list(row.get("term_ids")),
+                "gene_ids": _as_list(row.get("gene_ids")),
+            }
+            evidence_hash = _hash12(json.dumps(evidence, sort_keys=True, ensure_ascii=False))
+            claim_id = f"{claim_uid}|{evidence_hash}"
+
+            # numeric metrics (None if missing)
+            survival_val: float | None = None
+            if surv_s is not None:
+                v = surv_s.loc[i]
+                survival_val = None if pd.isna(v) else float(v)
+
+            context_val: float | None = None
+            if ctx_s is not None:
+                v = ctx_s.loc[i]
+                context_val = None if pd.isna(v) else float(v)
+
+            stat_val: float | None = None
+            if stat_s is not None:
+                v = stat_s.loc[i]
+                stat_val = None if pd.isna(v) else float(v)
+
+            rec = {
+                "run_id": str(run_id),
+                "claim_uid": claim_uid,
+                "claim_id": claim_id,
+                "claim": {
+                    # v1: keep coarse; refine later via claim_schema.py
+                    "entity_type": str(row.get("entity_type", "pathway")),
+                    "entity_id": str(
+                        row.get("entity_id", "")
+                        or row.get("entity", "")
+                        or row.get("term_id", "")
+                        or ""
+                    ),
+                    "entity_name": str(
+                        row.get("entity_name", "")
+                        or row.get("entity", "")
+                        or row.get("term_name", "")
+                        or ""
+                    ),
+                    "direction": str(row.get("direction", "") or ""),
+                    "context": {
+                        "comparison": str(getattr(card, "comparison", "") or ""),
+                        "disease": str(getattr(card, "disease", "") or ""),
+                        "tissue": str(getattr(card, "tissue", "") or ""),
+                        "perturbation": str(getattr(card, "perturbation", "") or ""),
+                    },
+                },
+                "evidence_refs": evidence,
+                "metrics": {
+                    "survival": survival_val,
+                    "context_score": context_val,
+                    "stat": stat_val,
+                },
+                "audit_flags": _audit_flags_from_row(row),
+                "reason_codes": _reason_codes_from_row(row),
+                "context_keys_used": _as_list(row.get("context_keys_used")),
+            }
+
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    return jsonl_path
+
+
+# -----------------------------
+# Markdown report (human-facing)
+# -----------------------------
+def write_report(
+    audit_log: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard, outdir: str
+) -> None:
+    """
+    Human-facing report.md + TSV artifacts.
+    Note:
+      - This function does NOT write report.jsonl.
+      - JSONL export is explicit via write_report_jsonl(...).
+    """
+    out_path = Path(outdir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
     audit_out = _stringify_list_columns(audit_log)
     dist_out = _stringify_list_columns(distilled)
 
@@ -148,7 +379,6 @@ def write_report(
 
     abs_sum, fail_sum = _reason_summary(audit_log)
 
-    # risk/coverage summary + curve artifact (optional)
     rc_summary: dict[str, float] | None = None
     rc_curve_path: Path | None = None
     score_col = _pick_score_col(audit_log)

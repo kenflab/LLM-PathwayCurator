@@ -1,0 +1,4 @@
+figure_id,panel,script,input_paths,output_paths,notes
+Fig2,prep,paper/scripts/bench_fig2.py,"report.jsonl + labels.tsv",paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,"tau sweep; label_policy=R1_only; FAIL from audit_flags"
+Fig2,A,paper/scripts/fig2_plot.py,paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,paper/source_data/PANCAN_TP53_v1/fig/Fig2_HNSC.pdf,"by_cancer main panel"
+FigS2,all,paper/scripts/fig2_plot_multipanel.py,paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,paper/source_data/PANCAN_TP53_v1/fig/Fig2_Supp_multipanel.pdf,"multipanel across cancers"
