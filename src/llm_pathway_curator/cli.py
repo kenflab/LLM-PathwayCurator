@@ -241,22 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed", type=int, default=None, help="Optional seed (plumbing; v0 deterministic)"
     )
     p_run.add_argument(
-        "--run-meta", default="run_meta.json", help="Filename for run metadata JSON inside outdir"
-    )
-    p_run.add_argument(
-        "--benchmark-id",
-        default="",
-        help="(optional) benchmark identifier for report.jsonl (e.g., PANCAN_TP53_v1)",
-    )
-    p_run.add_argument(
-        "--cancer",
-        default="",
-        help="(optional) cancer label for report.jsonl (default: SampleCard.disease)",
-    )
-    p_run.add_argument(
-        "--method",
-        default="ours",
-        help="(optional) method label for report.jsonl (e.g., ours, baseline_qonly)",
+        "--run-meta",
+        default="run_meta.json",
+        help="Filename for run metadata JSON inside outdir",
     )
     p_run.set_defaults(func=cmd_run)
 

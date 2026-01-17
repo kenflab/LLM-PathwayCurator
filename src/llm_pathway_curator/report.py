@@ -134,10 +134,6 @@ def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
     return None
 
 
-def _hash12(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]
-
-
 def _as_list(x: Any) -> list[str]:
     """
     Robust list normalization:
@@ -172,36 +168,95 @@ def _as_list(x: Any) -> list[str]:
     return out
 
 
-def _to_float_or_none(x: Any) -> float | None:
-    if x is None or _is_na_scalar(x):
-        return None
-    try:
-        # handle empty strings
-        s = str(x).strip()
-        if not s:
-            return None
-        return float(s)
-    except Exception:
-        return None
+def _sorted_list(x: Any) -> list[str]:
+    return sorted(_as_list(x))
 
 
-def _reason_codes_from_row(row: pd.Series) -> list[str]:
+def _canonical_json(obj: Any) -> str:
+    """
+    Deterministic JSON for hashing.
+    """
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _sha1(s: str) -> str:
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+
+
+def _claim_id_v1(
+    *,
+    entity_id: str,
+    direction: str,
+    context: dict[str, str],
+    context_keys: list[str],
+    gene_set_hash: str,
+    module_ids: list[str],
+    term_ids: list[str],
+) -> str:
+    payload = {
+        "v": 1,
+        "entity_id": (entity_id or "").strip(),
+        "direction": (direction or "").strip(),
+        "context": {
+            k: (context.get(k, "") or "").strip()
+            for k in ["disease", "tissue", "perturbation", "comparison"]
+        },
+        "context_keys": sorted([k.strip() for k in context_keys if k and k.strip()]),
+        "gene_set_hash": (gene_set_hash or "").strip(),
+        "module_ids": sorted([m.strip() for m in module_ids if m and m.strip()]),
+        "term_ids": sorted([t.strip() for t in term_ids if t and t.strip()]),
+    }
+    return _sha1(_canonical_json(payload))
+
+
+def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"{who} missing required columns: {missing}")
+
+
+def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
+    for k in keys:
+        if k in row.index:
+            v = row.get(k)
+            # treat NA-ish as missing
+            if v is None or _is_na_scalar(v):
+                continue
+            return v
+    return None
+
+
+def _reason_codes_and_details_from_row(row: pd.Series) -> tuple[list[str], dict[str, Any]]:
     """
     v1 contract:
-    - FAIL -> [fail_reason] (must be in FAIL_REASONS)
-    - ABSTAIN -> [abstain_reason] (must be in ABSTAIN_REASONS)
+    - FAIL -> [fail_reason] (token from FAIL_REASONS)
+    - ABSTAIN -> [abstain_reason] (token from ABSTAIN_REASONS)
     - PASS -> ["OK"]
+    For unknown tokens, preserve the raw value in details.
     """
+    details: dict[str, Any] = {}
     status = str(row.get("status", "")).upper().strip()
+
     if status == "FAIL":
-        fr = str(row.get("fail_reason", "")).strip()
-        return [fr] if fr in FAIL_REASONS else ["unknown_fail"]
+        raw = "" if row.get("fail_reason") is None else str(row.get("fail_reason")).strip()
+        if raw in FAIL_REASONS:
+            return [raw], details
+        details["raw_fail_reason"] = raw
+        # keep token stable; do not silently invent new reasons
+        return ["unknown_fail"], details
+
     if status == "ABSTAIN":
-        ar = str(row.get("abstain_reason", "")).strip()
-        return [ar] if ar in ABSTAIN_REASONS else ["unknown_abstain"]
+        raw = "" if row.get("abstain_reason") is None else str(row.get("abstain_reason")).strip()
+        if raw in ABSTAIN_REASONS:
+            return [raw], details
+        details["raw_abstain_reason"] = raw
+        return ["unknown_abstain"], details
+
     if status == "PASS":
-        return ["OK"]
-    return ["UNKNOWN"]
+        return ["OK"], details
+
+    details["raw_status"] = status
+    return ["UNKNOWN"], details
 
 
 def _audit_flags_from_row(row: pd.Series) -> dict[str, bool]:
@@ -217,19 +272,28 @@ def _audit_flags_from_row(row: pd.Series) -> dict[str, bool]:
     }
 
 
-def _claim_uid_from_row(row: pd.Series, card: SampleCard) -> str:
-    """
-    Meaning-stable id (no evidence hash).
-    Keep this conservative and stable:
-    - disease + comparison + entity_id + direction
-    """
-    disease = str(getattr(card, "disease", "") or row.get("cancer", "") or "").strip()
-    comparison = str(getattr(card, "comparison", "") or row.get("comparison", "") or "").strip()
-    entity_id = str(
-        row.get("entity_id", "") or row.get("entity", "") or row.get("term_id", "") or ""
-    ).strip()
-    direction = str(row.get("direction", "") or "").strip()
-    return f"{disease}|{comparison}|{entity_id}|{direction}"
+def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
+    if hasattr(card, "audit_tau") and callable(card.audit_tau):
+        try:
+            return float(card.audit_tau())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    v = getattr(card, "audit_tau", None)
+    if v is not None:
+        try:
+            return float(v)
+        except Exception:
+            pass
+
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict) and "audit_tau" in extra:
+            return float(extra["audit_tau"])
+    except Exception:
+        pass
+
+    return float(default)
 
 
 # -----------------------------
@@ -241,26 +305,37 @@ def write_report_jsonl(
     outdir: str,
     *,
     run_id: str,
+    method: str | None = None,
+    tau: float | None = None,
+    cancer: str | None = None,
+    comparison: str | None = None,
 ) -> Path:
     """
-    Write Fig2-ready records:
-    - metrics.survival is term_survival_agg (required column; values may be NA)
-    - audit_flags reflect FAIL reasons (stable)
-    - reason_codes uses stable tokens from audit_reasons.py
+    Fig2-ready JSONL (stable contract).
+
+    Required columns in audit_log (v1):
+      - status
+      - term_survival_agg
+      - gene_set_hash
+      - entity_id or term_id (fallback)
+    Optional:
+      - context_score, stat
+      - module_id/module_ids, term_ids/term_id(s), gene_ids/gene_id(s)
+      - cancer (row-level)
+      - comparison (row-level)
+      - context_keys_used (row-level)
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    if run_id is None:
+    if not run_id:
         run_id = datetime.now(timezone.utc).isoformat()
 
-    if "term_survival_agg" not in audit_log.columns:
-        raise ValueError("audit_log must contain term_survival_agg for v1 (metrics.survival)")
+    _require_columns(audit_log, ["status", "term_survival_agg", "gene_set_hash"], "audit_log")
 
-    # Make list-like fields TSV/JSON safe, but keep numeric series from the original frame.
+    # stringify list columns for robust I/O (do not use for numerics)
     df = _stringify_list_columns(audit_log)
 
-    # normalize numeric fields (robust to "" from TSV-safe artifacts)
     surv_s = pd.to_numeric(audit_log.get("term_survival_agg"), errors="coerce")
     ctx_s = (
         pd.to_numeric(audit_log.get("context_score"), errors="coerce")
@@ -273,73 +348,134 @@ def write_report_jsonl(
         else None
     )
 
+    # method/tau: do not require user input (Less is more)
+    method_val = "" if method is None else str(method).strip()
+    tau_val = _get_tau_default(card, default=0.8) if tau is None else float(tau)
+
+    # grouping keys (prefer explicit args)
+    default_cancer = str(cancer or getattr(card, "cancer", None) or "").strip()
+    default_comparison = str(comparison or getattr(card, "comparison", None) or "").strip()
+
     jsonl_path = out_path / "report.jsonl"
+    created_at = datetime.now(timezone.utc).isoformat()
 
     with jsonl_path.open("w", encoding="utf-8") as f:
         for i, row in df.iterrows():
-            claim_uid = _claim_uid_from_row(row, card)
+            status = str(row.get("status", "")).upper().strip()
+            decision = status  # PASS/ABSTAIN/FAIL
+
+            entity_id = str(
+                _get_first_present(row, ["entity_id", "entity", "term_id"]) or ""
+            ).strip()
+
+            direction = str(row.get("direction", "") or "").strip()
+
+            # context (do NOT infer context_keys; keep missing visible)
+            ctx = {
+                "comparison": str(default_comparison or row.get("comparison", "") or "").strip(),
+                "disease": str(getattr(card, "disease", "") or "").strip(),
+                "tissue": str(getattr(card, "tissue", "") or "").strip(),
+                "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
+            }
+
+            context_keys = _sorted_list(row.get("context_keys_used"))
+            # no inference: if missing, keep empty (audit layer should decide)
+
+            # evidence refs (column-name tolerant)
+            module_ids = _sorted_list(_get_first_present(row, ["module_ids", "module_id"]) or [])
+            term_ids = _sorted_list(
+                _get_first_present(row, ["term_ids", "term_id", "term_id(s)"]) or []
+            )
+            gene_ids = _sorted_list(
+                _get_first_present(row, ["gene_ids", "gene_id", "gene_id(s)"]) or []
+            )
 
             evidence = {
-                "module_ids": _as_list(row.get("module_id")),
-                "term_ids": _as_list(row.get("term_ids")),
-                "gene_ids": _as_list(row.get("gene_ids")),
+                "module_ids": module_ids,
+                "term_ids": term_ids,
+                "gene_ids": gene_ids,
             }
-            evidence_hash = _hash12(json.dumps(evidence, sort_keys=True, ensure_ascii=False))
-            claim_id = f"{claim_uid}|{evidence_hash}"
 
-            # numeric metrics (None if missing)
-            survival_val: float | None = None
-            if surv_s is not None:
-                v = surv_s.loc[i]
-                survival_val = None if pd.isna(v) else float(v)
+            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
 
-            context_val: float | None = None
+            claim_id = _claim_id_v1(
+                entity_id=entity_id,
+                direction=direction,
+                context=ctx,
+                context_keys=context_keys,
+                gene_set_hash=gene_set_hash,
+                module_ids=module_ids,
+                term_ids=term_ids,
+            )
+
+            # numeric metrics
+            survival_val = None if pd.isna(surv_s.loc[i]) else float(surv_s.loc[i])
+
+            context_val = None
             if ctx_s is not None:
                 v = ctx_s.loc[i]
                 context_val = None if pd.isna(v) else float(v)
 
-            stat_val: float | None = None
+            stat_val = None
             if stat_s is not None:
                 v = stat_s.loc[i]
                 stat_val = None if pd.isna(v) else float(v)
 
+            # reason_codes + details
+            reason_codes, reason_details = _reason_codes_and_details_from_row(row)
+
+            # grouping cancer key (prefer row-level cancer, then arg)
+            cancer_key = str(
+                _get_first_present(row, ["cancer", "cancer_type"]) or default_cancer
+            ).strip()
+
             rec = {
+                # provenance
+                "schema_version": "report_jsonl_v1",
+                "created_at": created_at,
                 "run_id": str(run_id),
-                "claim_uid": claim_uid,
+                # fig2 group keys
+                "method": method_val,
+                "cancer": cancer_key,
+                "comparison": str(ctx["comparison"]),
+                "tau": float(tau_val),
+                # contract keys
                 "claim_id": claim_id,
-                "claim": {
-                    # v1: keep coarse; refine later via claim_schema.py
-                    "entity_type": str(row.get("entity_type", "pathway")),
-                    "entity_id": str(
-                        row.get("entity_id", "")
-                        or row.get("entity", "")
-                        or row.get("term_id", "")
-                        or ""
-                    ),
-                    "entity_name": str(
-                        row.get("entity_name", "")
-                        or row.get("entity", "")
-                        or row.get("term_name", "")
-                        or ""
-                    ),
-                    "direction": str(row.get("direction", "") or ""),
-                    "context": {
-                        "comparison": str(getattr(card, "comparison", "") or ""),
-                        "disease": str(getattr(card, "disease", "") or ""),
-                        "tissue": str(getattr(card, "tissue", "") or ""),
-                        "perturbation": str(getattr(card, "perturbation", "") or ""),
-                    },
-                },
+                "decision": decision,
+                "survival": survival_val,
                 "evidence_refs": evidence,
+                "reason_codes": reason_codes,
+                "context_keys": context_keys,
+                # structured claim (for Fig1/demo; still typed-ish)
+                "claim": {
+                    "entity_type": str(row.get("entity_type", "pathway")),
+                    "entity_id": entity_id,
+                    "entity_name": str(
+                        _get_first_present(row, ["entity_name", "entity", "term_name"]) or ""
+                    ),
+                    "direction": direction,
+                    "context": ctx,
+                },
+                # extra stable fields (optional but very useful)
                 "metrics": {
                     "survival": survival_val,
                     "context_score": context_val,
                     "stat": stat_val,
                 },
                 "audit_flags": _audit_flags_from_row(row),
-                "reason_codes": _reason_codes_from_row(row),
-                "context_keys_used": _as_list(row.get("context_keys_used")),
+                # disentangle disease vs cancer_type
+                "disease": str(getattr(card, "disease", "") or "").strip(),
+                "tissue": str(getattr(card, "tissue", "") or "").strip(),
+                "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
+                # evidence key
+                "gene_set_hash": gene_set_hash,
+                # details for debugging schema drift / unknown reasons
+                "details": reason_details,
             }
+
+            # consistency guard (avoid silent drift)
+            if rec["metrics"]["survival"] != rec["survival"]:
+                raise AssertionError("inconsistent survival fields in report.jsonl record")
 
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
