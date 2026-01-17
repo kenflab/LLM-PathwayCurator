@@ -1,18 +1,14 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/adapters/fgsea.py
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
-# -----------------------------
-# Column normalization / aliases
-# -----------------------------
-# Keys are normalized: strip, remove BOM, remove spaces/underscores, lower.
 ALIASES: dict[str, str] = {
-    # pathway / term name
     "pathway": "pathway",
     "term": "pathway",
     "termname": "pathway",
@@ -21,16 +17,13 @@ ALIASES: dict[str, str] = {
     "geneset": "pathway",
     "set": "pathway",
     "id": "pathway",
-    # statistics
     "nes": "NES",
     "es": "ES",
-    # q-values
     "padj": "padj",
     "fdr": "padj",
     "qval": "padj",
     "pval": "pval",
     "pvalue": "pval",
-    # leading edge genes
     "leadingedge": "leadingEdge",
     "leading_edge": "leadingEdge",
     "leadingedgegenes": "leadingEdge",
@@ -38,9 +31,8 @@ ALIASES: dict[str, str] = {
     "le": "leadingEdge",
 }
 
-REQUIRED_CORE = ["pathway", "leadingEdge"]  # must exist
-PREFERRED_STAT = ["NES", "ES"]  # choose first available
-PREFERRED_Q = ["padj", "pval"]  # choose first available
+REQUIRED_CORE = ["pathway", "leadingEdge"]
+PREFERRED_STAT = ["NES", "ES"]
 
 
 def _norm_colname(c: Any) -> str:
@@ -77,29 +69,27 @@ def _to_float(x: Any) -> float | None:
     return v
 
 
+def _clean_gene_symbol(g: str) -> str:
+    s = g.strip().strip('"').strip("'")
+    s = " ".join(s.split())
+    s = s.strip(",;|")
+    return s
+
+
 def _split_genes(x: Any) -> list[str]:
-    """
-    fgsea leadingEdge can be:
-      - list-like (already list)
-      - "A,B,C" / "A;B;C" / "A|B|C"
-      - R-style c("A","B")
-      - whitespace separated
-    Return stable sorted unique symbols.
-    """
     if _is_na(x):
         return []
     if isinstance(x, (list, tuple, set)):
-        genes = [str(g).strip() for g in x if str(g).strip()]
-        return sorted(set(genes))
+        parts = [_clean_gene_symbol(str(g)) for g in x]
+        parts = [p for p in parts if p]
+        return sorted(set(parts))
 
     s = str(x).strip()
     if not s or s.lower() in {"na", "nan", "none"}:
         return []
 
-    # tolerate R c("A","B") style
     s = s.replace("c(", "").replace(")", "").replace('"', "").replace("'", "")
 
-    # separators: comma/semicolon/pipe/tab
     for sep in [";", "|", "\t"]:
         s = s.replace(sep, ",")
 
@@ -108,51 +98,66 @@ def _split_genes(x: Any) -> list[str]:
     else:
         parts = [p.strip() for p in s.split() if p.strip()]
 
+    parts = [_clean_gene_symbol(p) for p in parts]
+    parts = [p for p in parts if p]
     return sorted(set(parts))
+
+
+def _term_slug(s: str) -> str:
+    # minimal slug: keep alnum + _-. replace others with _
+    out = []
+    for ch in s.strip():
+        if ch.isalnum() or ch in {"_", "-", "."}:
+            out.append(ch)
+        else:
+            out.append("_")
+    slug = "".join(out)
+    # collapse multiple underscores
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug.strip("_")[:80] or "term"
+
+
+def _term_hash(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:10]
 
 
 @dataclass(frozen=True)
 class FgseaAdapterConfig:
     source_name: str = "fgsea"
-    require_genes: bool = True  # recommended for your pipeline
+    require_genes: bool = True
+    keep_pval: bool = True  # store pval separately (does not replace qval)
 
 
 def read_fgsea_table(path: str) -> pd.DataFrame:
-    """
-    Read fgsea output table flexibly (TSV/CSV/auto/whitespace).
-    """
-    # Try TSV first
     df = pd.read_csv(path, sep="\t")
     if df.shape[1] > 1:
         return df
-
-    # auto-sep
     df2 = pd.read_csv(path, sep=None, engine="python")
     if df2.shape[1] > 1:
         return df2
-
-    # whitespace
     return pd.read_csv(path, sep=r"\s+", engine="python")
 
 
 def _rename_with_aliases(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Rename columns using ALIASES with a safe deterministic mapping.
-    - Multiple original columns may map to the same standardized name.
-      In that case, we keep the first occurrence and ignore later ones.
-    """
     used: set[str] = set()
     rename: dict[str, str] = {}
+    conflicts: dict[str, list[str]] = {}
     for orig in df.columns:
         key = _norm_colname(orig)
         std = ALIASES.get(key)
         if std is None:
             continue
         if std in used:
+            conflicts.setdefault(std, []).append(str(orig))
             continue
         rename[orig] = std
         used.add(std)
-    return df.rename(columns=rename)
+
+    out = df.rename(columns=rename)
+    if conflicts:
+        out.attrs["alias_conflicts"] = conflicts
+    return out
 
 
 def fgsea_to_evidence_table(
@@ -160,56 +165,35 @@ def fgsea_to_evidence_table(
     *,
     config: FgseaAdapterConfig | None = None,
 ) -> pd.DataFrame:
-    """
-    Convert fgsea results into EvidenceTable-like dataframe with columns:
-      - term_id
-      - term_name
-      - source
-      - stat          (NES preferred, else ES)
-      - qval          (padj preferred, else pval; may be NA)
-      - direction     (from NES sign if available)
-      - evidence_genes (from leadingEdge; list[str])
-    """
     if config is None:
         config = FgseaAdapterConfig()
 
     df = _rename_with_aliases(fgsea_df.copy())
 
-    # required columns
     missing = [c for c in REQUIRED_CORE if c not in df.columns]
     if missing:
-        found = list(df.columns)
         raise ValueError(
-            f"fgsea_to_evidence_table: missing required columns: {missing}. Found={found}"
+            f"fgsea_to_evidence_table: missing required columns: "
+            f"{missing}. Found={list(df.columns)}"
         )
 
-    # choose stat column
     stat_col: str | None = None
     for c in PREFERRED_STAT:
         if c in df.columns:
             stat_col = c
             break
     if stat_col is None:
-        found = list(df.columns)
         raise ValueError(
-            f"fgsea_to_evidence_table: need one of {PREFERRED_STAT} for stat. Found={found}"
+            f"fgsea_to_evidence_table: need one of {PREFERRED_STAT} for stat. "
+            f"Found={list(df.columns)}"
         )
 
-    # choose q column (optional)
-    q_col: str | None = None
-    for c in PREFERRED_Q:
-        if c in df.columns:
-            q_col = c
-            break
-
-    # pathway name
     df["__pathway"] = df["pathway"].map(_clean_str)
     empty_pw = df["__pathway"].eq("")
     if empty_pw.any():
         i = int(df.index[empty_pw][0])
         raise ValueError(f"fgsea_to_evidence_table: empty pathway at row index={i}")
 
-    # evidence genes
     df["evidence_genes"] = df["leadingEdge"].map(_split_genes)
     if config.require_genes:
         empty = df["evidence_genes"].map(len).eq(0)
@@ -221,19 +205,16 @@ def fgsea_to_evidence_table(
                 f"index={i} (pathway={pw})"
             )
 
-    # stat numeric
     df["__stat"] = df[stat_col].map(_to_float)
     if df["__stat"].isna().any():
         i = int(df.index[df["__stat"].isna()][0])
         raise ValueError(f"fgsea_to_evidence_table: non-numeric {stat_col} at row index={i}")
 
-    # qval numeric (allowed NA)
-    if q_col is not None:
-        df["__qval"] = df[q_col].map(_to_float)
-    else:
-        df["__qval"] = pd.NA
+    # qval: ONLY padj maps to qval (FDR). pval stored separately if present.
+    df["__qval"] = df["padj"].map(_to_float) if "padj" in df.columns else pd.NA
+    pval = df["pval"].map(_to_float) if ("pval" in df.columns and config.keep_pval) else pd.NA
 
-    # direction: prefer NES sign if NES exists + numeric
+    # direction: prefer NES sign if NES exists
     if "NES" in df.columns:
         nes = df["NES"].map(_to_float)
 
@@ -251,15 +232,23 @@ def fgsea_to_evidence_table(
     else:
         df["direction"] = "na"
 
+    # stable term_id: FGSEA:<slug>|<hash>
+    term_hash = df["__pathway"].map(_term_hash)
+    term_slug = df["__pathway"].map(_term_slug)
+
     out = pd.DataFrame(
         {
-            "term_id": df["__pathway"].map(lambda s: f"FGSEA:{s}"),
+            "term_id": term_slug.combine(term_hash, lambda a, b: f"FGSEA:{a}|{b}"),
             "term_name": df["__pathway"],
             "source": config.source_name,
             "stat": df["__stat"].astype(float),
             "qval": df["__qval"],
             "direction": df["direction"],
             "evidence_genes": df["evidence_genes"],
+            # optional provenance fields
+            "q_kind": "padj" if "padj" in df.columns else "na",
+            "pval": pval,
+            "term_id_h": term_hash,
         }
     ).reset_index(drop=True)
 
@@ -272,10 +261,6 @@ def convert_fgsea_table_to_evidence_tsv(
     *,
     config: FgseaAdapterConfig | None = None,
 ) -> pd.DataFrame:
-    """
-    Convenience: file -> Evidence TSV.
-    Writes evidence_genes as comma-joined string for EvidenceTable.read_tsv().
-    """
     raw = read_fgsea_table(in_path)
     ev = fgsea_to_evidence_table(raw, config=config)
 

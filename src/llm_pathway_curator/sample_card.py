@@ -8,19 +8,27 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 
+# Single canonical missing token across the pipeline (contract)
+NA_TOKEN = "NA"
+NA_LIKE = {"", "na", "nan", "none", NA_TOKEN.lower(), NA_TOKEN}
+
+# Optional: stable keys (used for "templated counterfactuals" contract)
+CORE_KEYS = ("disease", "tissue", "perturbation", "comparison")
+KNOWN_KEYS = set(CORE_KEYS) | {"notes", "extra"}
+
 
 def _norm_str(x: Any) -> str:
     """
     Normalize context strings:
-      - NA/None/NaN/empty/"na"/"nan"/"none" -> "NA"
+      - NA/None/NaN/empty/"na"/"nan"/"none" -> "NA" (canonical)
       - strip whitespace + BOM
     """
     if x is None:
-        return "NA"
+        return NA_TOKEN
     # pandas NA safety for scalars
     try:
         if not isinstance(x, (list, tuple, set, dict)) and bool(pd.isna(x)):
-            return "NA"
+            return NA_TOKEN
     except Exception:
         pass
 
@@ -29,18 +37,23 @@ def _norm_str(x: Any) -> str:
 
     x = x.strip().lstrip("\ufeff")
     if not x:
-        return "NA"
+        return NA_TOKEN
     if x.lower() in {"na", "nan", "none"}:
-        return "NA"
+        return NA_TOKEN
     return x
 
 
 class SampleCard(BaseModel):
-    disease: str = Field(default="NA")
-    tissue: str = Field(default="NA")
-    perturbation: str = Field(default="NA")
-    comparison: str = Field(default="NA")
+    # Core context (must be stable strings)
+    disease: str = Field(default=NA_TOKEN)
+    tissue: str = Field(default=NA_TOKEN)
+    perturbation: str = Field(default=NA_TOKEN)
+    comparison: str = Field(default=NA_TOKEN)
+
+    # Optional free-form human notes (not used for mechanical decisions)
     notes: str | None = None
+
+    # All other fields (audit knobs, dataset metadata, etc.)
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("disease", "tissue", "perturbation", "comparison", mode="before")
@@ -52,6 +65,42 @@ class SampleCard(BaseModel):
         """Stable key for caching / claim IDs."""
         return "|".join([self.disease, self.tissue, self.perturbation, self.comparison])
 
+    def context_dict(self) -> dict[str, str]:
+        """Stable dict of core context (useful for report/audit templates)."""
+        return {k: getattr(self, k) for k in CORE_KEYS}
+
+    # ---- audit knobs (centralize the contract here) ----
+    def audit_tau(self, default: float = 0.8) -> float:
+        """
+        Stability threshold tau.
+        Source of truth:
+          - extra["audit_tau"] if present and numeric
+          - else default
+        """
+        try:
+            v = (self.extra or {}).get("audit_tau", None)
+            if v is None:
+                return float(default)
+            return float(v)
+        except Exception:
+            return float(default)
+
+    def audit_min_gene_overlap(self, default: int = 1) -> int:
+        """
+        Minimum overlap between claim gene_ids and evidence genes (drift guard).
+        Source of truth:
+          - extra["audit_min_gene_overlap"] if present and int-like
+          - else default
+        """
+        try:
+            v = (self.extra or {}).get("audit_min_gene_overlap", None)
+            if v is None:
+                return int(default)
+            return int(v)
+        except Exception:
+            return int(default)
+
+    # ---- IO ----
     @classmethod
     def from_json(cls, path: str | Path) -> SampleCard:
         p = Path(path)
@@ -78,11 +127,12 @@ class SampleCard(BaseModel):
             json.dumps(payload, ensure_ascii=False, indent=indent) + "\n", encoding="utf-8"
         )
 
+    # ---- counterfactual (templated patch only) ----
     def apply_patch(self, patch: dict[str, Any]) -> SampleCard:
         """
         Create a counterfactual SampleCard by overwriting a subset of fields.
-        - Allowed: disease/tissue/perturbation/comparison/notes/extra
-        - Unknown keys go into extra (shallow merge).
+        - Allowed keys: disease/tissue/perturbation/comparison/notes/extra
+        - Unknown keys go into extra (shallow merge)
         """
         base = self.model_dump()
         for k, v in patch.items():
@@ -119,3 +169,21 @@ class SampleCard(BaseModel):
         if extra is not None:
             patch["extra"] = extra
         return self.apply_patch(patch)
+
+    # Optional: define a minimal, explicit "templated counterfactual" vocabulary (contract)
+    def templated_counterfactual(self, template: str) -> SampleCard:
+        """
+        Contract hook: apply one of a small set of predefined counterfactual templates.
+        v0: define the API (used by audit later), keep implementation minimal.
+        """
+        t = (template or "").strip().lower()
+        if not t:
+            raise ValueError("templated_counterfactual: template must be non-empty")
+
+        # v0 minimal examples; you can expand later without breaking API
+        if t == "disease_to_healthy":
+            return self.counterfactual(disease="healthy")
+        if t == "perturbation_to_control":
+            return self.counterfactual(perturbation="control")
+
+        raise ValueError(f"templated_counterfactual: unknown template={template}")

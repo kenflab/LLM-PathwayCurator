@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import pandas as pd
 
@@ -28,6 +29,14 @@ ALIASES = {
     "genes": "evidence_genes",
 }
 
+ReadMode = Literal["tsv", "sniff", "whitespace"]
+
+
+@dataclass(frozen=True)
+class EvidenceReadResult:
+    df: pd.DataFrame
+    read_mode: ReadMode
+
 
 @dataclass(frozen=True)
 class EvidenceTable:
@@ -44,7 +53,6 @@ class EvidenceTable:
         """pd.isna is unsafe for list-like; only treat scalars here."""
         if x is None:
             return True
-        # pandas considers strings as scalars; lists/tuples/sets are not
         if isinstance(x, (list, tuple, set, dict)):
             return False
         try:
@@ -95,18 +103,29 @@ class EvidenceTable:
         return "na"
 
     @staticmethod
-    def _parse_genes(x: object) -> list[str]:
-        # IMPORTANT: avoid pd.isna(x) on list-like (can raise)
-        if EvidenceTable._is_na_scalar(x):
+    def _clean_gene_symbol(g: str) -> str:
+        # minimal, conservative cleaning
+        s = g.strip().strip('"').strip("'")
+        # collapse internal whitespace
+        s = " ".join(s.split())
+        # common artifacts: trailing commas or semicolons already split, but be safe
+        s = s.strip(",;|")
+        return s
+
+    @classmethod
+    def _parse_genes(cls, x: object) -> list[str]:
+        if cls._is_na_scalar(x):
             return []
         if isinstance(x, (list, tuple, set)):
-            genes = [str(g).strip() for g in x if str(g).strip()]
+            genes = [cls._clean_gene_symbol(str(g)) for g in x]
+            genes = [g for g in genes if g]
         else:
             s = str(x).strip()
             if not s or s.lower() in {"na", "nan", "none"}:
                 return []
             s = s.replace(";", ",").replace("|", ",")
-            genes = [g.strip() for g in s.split(",") if g.strip()]
+            genes = [cls._clean_gene_symbol(g) for g in s.split(",")]
+            genes = [g for g in genes if g]
 
         seen: set[str] = set()
         out: list[str] = []
@@ -117,18 +136,25 @@ class EvidenceTable:
         return out
 
     @classmethod
-    def _read_flexible(cls, path: str) -> pd.DataFrame:
+    def _read_flexible(cls, path: str) -> EvidenceReadResult:
+        # 1) TSV first (expected)
         df = pd.read_csv(path, sep="\t")
         if df.shape[1] > 1:
-            return df
+            return EvidenceReadResult(df=df, read_mode="tsv")
+
+        # 2) sniff delimiter (csv/tsv/others)
         df2 = pd.read_csv(path, sep=None, engine="python")
         if df2.shape[1] > 1:
-            return df2
-        return pd.read_csv(path, sep=r"\s+", engine="python")
+            return EvidenceReadResult(df=df2, read_mode="sniff")
+
+        # 3) whitespace fallback
+        df3 = pd.read_csv(path, sep=r"\s+", engine="python")
+        return EvidenceReadResult(df=df3, read_mode="whitespace")
 
     @classmethod
     def read_tsv(cls, path: str) -> EvidenceTable:
-        df_raw = cls._read_flexible(path)
+        rr = cls._read_flexible(path)
+        df_raw = rr.df
 
         cols_norm = [cls._normalize_col(c) for c in df_raw.columns]
         cols_mapped = [ALIASES.get(c, c) for c in cols_norm]
@@ -136,7 +162,6 @@ class EvidenceTable:
         df = df_raw.copy()
         df.columns = cols_mapped
 
-        # NEW: detect duplicate columns after aliasing (v0 safest)
         dup = df.columns[df.columns.duplicated()].tolist()
         if dup:
             raise ValueError(
@@ -155,10 +180,7 @@ class EvidenceTable:
         df["source"] = df["source"].map(cls._clean_required_str)
 
         df["direction"] = df["direction"].map(cls._normalize_direction)
-
         df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
-
-        # NEW: always regenerate to keep consistent with parsed genes
         df["evidence_genes_str"] = df["evidence_genes"].map(lambda xs: ",".join(xs))
 
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
@@ -167,25 +189,45 @@ class EvidenceTable:
         bad_required = df["term_id"].eq("") | df["term_name"].eq("") | df["source"].eq("")
         if bad_required.any():
             i = int(df.index[bad_required][0])
-            raise ValueError(f"EvidenceTable has empty required fields at row index={i}")
+            raise ValueError(
+                f"EvidenceTable has empty required fields at row index={i}. "
+                f"Fix: ensure term_id/term_name/source are non-empty."
+            )
 
         if df["stat"].isna().any():
             i = int(df.index[df["stat"].isna()][0])
-            raise ValueError(f"EvidenceTable has non-numeric stat at row index={i}")
+            bad = df.loc[i, ["term_id", "term_name", "source"]].to_dict()
+            raise ValueError(
+                f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
+                f"Fix: provide a numeric stat (e.g., NES, -log10(q), LogP)."
+            )
 
         empty_ev = df["evidence_genes"].map(len).eq(0)
         if empty_ev.any():
             i = int(df.index[empty_ev][0])
             raise ValueError(
                 f"EvidenceTable has empty evidence_genes at row index={i} "
-                f"(term_id={df.loc[i, 'term_id']})"
+                f"(term_id={df.loc[i, 'term_id']}). "
+                f"Fix: provide overlap genes (ORA) or leadingEdge (GSEA/fgsea)."
             )
 
-        # Optional (recommended): qval sanity (do not hard-fail; just clip or warn later)
-        # if ((df["qval"].notna()) & ((df["qval"] < 0) | (df["qval"] > 1))).any():
-        #     ...
+        # Attach read_mode for provenance (non-breaking: stored as attribute on df)
+        df.attrs["read_mode"] = rr.read_mode
 
         return cls(df=df)
+
+    def summarize(self) -> dict[str, object]:
+        df = self.df
+        genes_n = df["evidence_genes"].map(len)
+        return {
+            "n_terms": int(df.shape[0]),
+            "n_sources": int(df["source"].nunique()),
+            "sources": sorted(df["source"].astype(str).unique().tolist()),
+            "direction_counts": df["direction"].value_counts(dropna=False).to_dict(),
+            "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
+            "genes_per_term_p90": float(genes_n.quantile(0.9)) if len(genes_n) else 0.0,
+            "read_mode": df.attrs.get("read_mode", "unknown"),
+        }
 
     def write_tsv(self, path: str) -> None:
         out = self.df.copy()

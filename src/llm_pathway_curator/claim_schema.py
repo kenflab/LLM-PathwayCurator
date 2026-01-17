@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-# Canonical direction for auditable claims
 Direction = Literal["up", "down", "na"]
 Status = Literal["PASS", "ABSTAIN", "FAIL"]
 
@@ -26,10 +25,6 @@ def _dedup_preserve_order(xs: list[str]) -> list[str]:
 
 
 def _split_listlike(v: Any) -> list[str]:
-    """
-    Accept list/tuple/set OR comma/semicolon-separated strings.
-    Normalize to list[str]. None/NA -> [].
-    """
     if v is None:
         return []
     if isinstance(v, (list, tuple, set)):
@@ -55,6 +50,9 @@ class EvidenceRef(BaseModel):
     gene_ids: list[str] = Field(default_factory=list)
     term_ids: list[str] = Field(default_factory=list)
 
+    # NEW: stable key for full evidence gene set (optional but strongly recommended)
+    gene_set_hash: str = ""  # e.g., sha256[:12] hex; empty allowed
+
     @field_validator("module_id", mode="before")
     @classmethod
     def _strip_module_id(cls, v: Any) -> str:
@@ -66,6 +64,27 @@ class EvidenceRef(BaseModel):
     @classmethod
     def _ensure_list(cls, v: Any) -> list[str]:
         return _dedup_preserve_order(_split_listlike(v))
+
+    @field_validator("gene_set_hash", mode="before")
+    @classmethod
+    def _strip_hash(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip().lower()
+        if s in {"", "na", "nan", "none"}:
+            return ""
+        # light validation: hex-ish, length >= 8
+        ok = all(ch in "0123456789abcdef" for ch in s) and len(s) >= 8
+        if not ok:
+            raise ValueError("gene_set_hash must be hex string (len>=8) or empty")
+        return s
+
+    @model_validator(mode="after")
+    def _must_reference_something(self) -> EvidenceRef:
+        # Evidence-linked constraint: must point to at least term_ids or gene_ids
+        if len(self.term_ids) == 0 and len(self.gene_ids) == 0:
+            raise ValueError("EvidenceRef must include term_ids or gene_ids (non-empty)")
+        return self
 
 
 class Claim(BaseModel):
@@ -89,15 +108,11 @@ class Claim(BaseModel):
         return _norm_direction(v)
 
 
-# ---- audited outputs ----
-# IMPORTANT: keep reason codes aligned with audit_reasons.py (snake_case).
 ReasonCode = Literal[
     "ok",
-    # FAIL reasons
     "evidence_drift",
     "schema_violation",
     "contradiction",
-    # ABSTAIN reasons
     "unstable",
     "missing_survival",
     "context_nonspecific",

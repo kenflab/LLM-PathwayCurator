@@ -36,6 +36,9 @@ def _dedup_preserve_order(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for x in items:
+        x = str(x).strip()
+        if not x:
+            continue
         if x not in seen:
             seen.add(x)
             out.append(x)
@@ -59,6 +62,17 @@ def _as_gene_list(x: Any) -> list[str]:
         genes = [g.strip() for g in s.split(",") if g.strip()]
 
     return _dedup_preserve_order(genes)
+
+
+def _hash_gene_set(genes: list[str]) -> str:
+    """
+    Stable short hash for evidence genes (v0).
+    IMPORTANT:
+      - hash full evidence gene list (not top10)
+      - keep order produced by _dedup_preserve_order for determinism
+    """
+    payload = ",".join([str(g).strip() for g in genes if str(g).strip()])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _norm_direction(x: Any) -> str:
@@ -130,13 +144,13 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
     Deterministic v0 selection:
       - context proxy score (string match) desc
       - then stat desc
-      - then term_id asc
+      - then term_uid asc
 
     Output: flat table for downstream audit/report + embedded claim_json
 
     NOTE:
-      - v0 chooses one term_id per claim (term_ids=[term_id]).
-      - Later LLM-min can expand to module-level typed claims, but must remain schema-bound.
+      - v0 chooses one term_uid per claim (term_ids=[term_uid]).
+      - gene_ids are representative (top10) but gene_set_hash fingerprints full evidence genes.
     """
     required = {"term_id", "term_name", "source", "stat", "direction", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
@@ -144,7 +158,6 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
         raise ValueError(f"select_claims: missing columns in distilled: {missing}")
 
     has_term_uid = "term_uid" in distilled.columns
-
     toks = _context_tokens(card)
 
     df = distilled.copy()
@@ -157,7 +170,7 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
 
     df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
 
-    # tie-break key
+    # tie-break key (stable join key)
     df["term_uid"] = (
         df["term_uid"].astype(str).str.strip()
         if has_term_uid
@@ -206,7 +219,7 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
             context_keys=ctx_keys,  # exclude NA
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                gene_ids=genes[:10],
+                gene_ids=genes[:10],  # representative only
                 term_ids=[term_uid],
             ),
         )
@@ -223,6 +236,7 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
                 "module_id": claim.evidence_ref.module_id,
                 "gene_ids": ",".join(claim.evidence_ref.gene_ids),
                 "term_ids": ",".join(claim.evidence_ref.term_ids),
+                "gene_set_hash": _hash_gene_set(genes),  # NEW: audit-grade fingerprint
                 "context_score": int(r.get("context_score", 0)),
                 "claim_json": claim.model_dump_json(),
             }

@@ -1,11 +1,19 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/audit.py
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import pandas as pd
 
-from .audit_reasons import ABSTAIN_MISSING_SURVIVAL, ABSTAIN_UNSTABLE, FAIL_EVIDENCE_DRIFT
+from .audit_reasons import (
+    ABSTAIN_INCONCLUSIVE_STRESS,
+    ABSTAIN_MISSING_SURVIVAL,
+    ABSTAIN_UNSTABLE,
+    FAIL_EVIDENCE_DRIFT,
+    FAIL_SCHEMA_VIOLATION,
+)
+from .claim_schema import Claim
 from .sample_card import SampleCard
 
 
@@ -51,26 +59,27 @@ def _parse_ids(x: Any) -> list[str]:
     return uniq
 
 
-def _default_min_gene_overlap(card: SampleCard) -> int:
-    v = None
-    try:
-        extra = getattr(card, "extra", {}) or {}
-        if isinstance(extra, dict) and "audit_min_gene_overlap" in extra:
-            v = extra["audit_min_gene_overlap"]
-    except Exception:
-        v = None
-    try:
-        return int(v) if v is not None else 1
-    except Exception:
-        return 1
+def _hash_gene_set(genes: list[str]) -> str:
+    """
+    Stable short hash for an ordered gene list (v0).
+    NOTE: we keep order as produced by our union builder (deterministic).
+    """
+    payload = ",".join([str(g).strip() for g in genes if str(g).strip()])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def _default_tau(card: SampleCard) -> float:
+def _get_tau_default(card: SampleCard) -> float:
     """
-    v0: allow SampleCard.extra["audit_tau"] or attribute card.audit_tau (optional).
-    If not present, fall back to conservative default.
+    Source of truth:
+      - SampleCard.audit_tau() if present
+      - else: legacy extra/attribute fallback
     """
-    # Prefer explicit attribute if user added one
+    if hasattr(card, "audit_tau") and callable(card.audit_tau):
+        try:
+            return float(card.audit_tau())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     v = getattr(card, "audit_tau", None)
     if v is not None:
         try:
@@ -78,7 +87,6 @@ def _default_tau(card: SampleCard) -> float:
         except Exception:
             pass
 
-    # Also allow extra["audit_tau"]
     try:
         extra = getattr(card, "extra", {}) or {}
         if isinstance(extra, dict) and "audit_tau" in extra:
@@ -89,16 +97,45 @@ def _default_tau(card: SampleCard) -> float:
     return 0.8
 
 
+def _get_min_overlap_default(card: SampleCard) -> int:
+    """
+    Source of truth:
+      - SampleCard.audit_min_gene_overlap() if present
+      - else: legacy extra fallback
+    """
+    if hasattr(card, "audit_min_gene_overlap") and callable(card.audit_min_gene_overlap):
+        try:
+            return int(card.audit_min_gene_overlap())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict) and "audit_min_gene_overlap" in extra:
+            return int(extra["audit_min_gene_overlap"])
+    except Exception:
+        pass
+
+    return 1
+
+
 def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
     """
     Mechanical audit (v0, spec-aligned):
+      0) Schema validation: claim_json must validate against Claim schema
+         - missing/invalid claim_json => FAIL (schema_violation)
       1) Evidence-link integrity: term_ids must exist in distilled EvidenceTable
          - empty or unknown term_ids => FAIL (evidence_drift)
+         - if gene_set_hash is provided: hash(union evidence genes) must match
+           => FAIL (evidence_drift)
+         - else: overlap(gene_ids, union evidence genes) >= min_overlap => FAIL (evidence_drift)
       2) Stability gate: aggregate(term_survival over referenced term_ids) >= tau
          - aggregate = min(term_survival)  (conservative)
          - if term_survival column missing => ABSTAIN (missing_survival)
          - if referenced terms have missing survival => ABSTAIN (missing_survival)
          - if agg < tau => ABSTAIN (unstable)
+      3) v0 guardrail: if advanced audits (stress/contradiction) are not implemented,
+         do NOT return PASS; ABSTAIN instead (inconclusive_stress)
 
     Status priority: FAIL > ABSTAIN > PASS
     """
@@ -136,9 +173,10 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
     else:
         surv = None
 
-    tau_default = _default_tau(card)
+    tau_default = _get_tau_default(card)
+    min_overlap_default = _get_min_overlap_default(card)
 
-    # Precompute evidence genes per term_key for drift check
+    # Precompute evidence genes per term_key for drift check (robust to list OR string)
     term_to_gene_set: dict[str, set[str]] = {}
     if "evidence_genes" in distilled.columns:
         for tk, xs in zip(
@@ -149,14 +187,14 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
                 continue
             if isinstance(xs, (list, tuple, set)):
-                gs = {str(g).strip() for g in xs if str(g).strip()}
+                genes = [str(g).strip() for g in xs if str(g).strip()]
             else:
-                gs = set()
+                genes = _parse_ids(xs)
+            gs = set(genes)
             if not gs:
                 continue
-            if tk not in term_to_gene_set:
-                term_to_gene_set[tk] = set()
-            term_to_gene_set[tk].update(gs)
+            term_to_gene_set.setdefault(tk, set()).update(gs)
+
     elif "evidence_genes_str" in distilled.columns:
         for tk, s in zip(
             distilled[key_col].astype(str).str.strip(),
@@ -165,13 +203,30 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
         ):
             if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
                 continue
-            parts = [g.strip() for g in s.replace(";", ",").split(",") if g.strip()]
-            gs = set(parts)
+            genes = _parse_ids(s)
+            gs = set(genes)
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
 
     for i, row in out.iterrows():
+        # 0) schema validation (claim_json -> Claim)
+        cj = row.get("claim_json", None)
+        if cj is None or _is_na_scalar(cj) or (not str(cj).strip()):
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "link_ok"] = False
+            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+            out.at[i, "audit_notes"] = "missing claim_json"
+            continue
+        try:
+            Claim.model_validate_json(str(cj))
+        except Exception as e:
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "link_ok"] = False
+            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+            out.at[i, "audit_notes"] = f"claim_json schema violation: {type(e).__name__}"
+            continue
+
         # Per-claim tau override (optional)
         tau = tau_default
         if "tau" in out.columns and not _is_na_scalar(row.get("tau")):
@@ -179,6 +234,14 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                 tau = float(row.get("tau"))
             except Exception:
                 tau = tau_default
+
+        # Per-claim min_overlap override (optional)
+        min_overlap = min_overlap_default
+        if "min_overlap" in out.columns and not _is_na_scalar(row.get("min_overlap")):
+            try:
+                min_overlap = int(row.get("min_overlap"))
+            except Exception:
+                min_overlap = min_overlap_default
 
         term_ids = _parse_ids(row.get("term_ids", ""))
 
@@ -200,28 +263,43 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
 
         gene_ids = _parse_ids(row.get("gene_ids", ""))
 
-        min_overlap = _default_min_gene_overlap(card)
+        # union evidence genes across referenced terms (deterministic order)
+        ev_union: list[str] = []
+        ev_seen: set[str] = set()
+        for t in term_ids:
+            for g in sorted(term_to_gene_set.get(t, set())):
+                if g not in ev_seen:
+                    ev_seen.add(g)
+                    ev_union.append(g)
 
-        gene_ids = _parse_ids(row.get("gene_ids", ""))
-        if gene_ids:
-            ev_set: set[str] = set()
-            for t in term_ids:
-                ev_set |= term_to_gene_set.get(t, set())
-
-            if ev_set:
-                n_hit = sum(1 for g in gene_ids if g in ev_set)
-                if n_hit < min_overlap:
+        # 1b) stronger drift check if gene_set_hash is provided
+        gsh = row.get("gene_set_hash", None)
+        if gsh is not None and (not _is_na_scalar(gsh)) and str(gsh).strip():
+            if ev_union:
+                computed = _hash_gene_set(ev_union)
+                gsh_norm = str(gsh).strip().lower()
+                if computed != gsh_norm:
                     out.at[i, "status"] = "FAIL"
                     out.at[i, "link_ok"] = False
                     out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
-                    out.at[i, "audit_notes"] = (
-                        f"gene_ids drift: hits={n_hit} < min_overlap={min_overlap}"
-                    )
+                    out.at[i, "audit_notes"] = f"gene_set_hash mismatch: {computed} != {gsh_norm}"
                     continue
+            # if we cannot compute union, fall back to overlap
+
+        # 1c) fallback overlap check (representative genes)
+        if gene_ids and ev_seen:
+            n_hit = sum(1 for g in gene_ids if g in ev_seen)
+            if n_hit < int(min_overlap):
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "link_ok"] = False
+                out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
+                out.at[i, "audit_notes"] = (
+                    f"gene_ids drift: hits={n_hit} < min_overlap={min_overlap}"
+                )
+                continue
 
         # 2) stability gate
-        if not has_survival or surv is None:
-            # Spec: do not "learn" stability implicitly; abstain if unavailable
+        if (not has_survival) or (surv is None):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_MISSING_SURVIVAL
@@ -247,11 +325,19 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "audit_notes"] = "term_survival missing for referenced terms"
             continue
 
-        if agg < tau:
+        if agg < float(tau):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
-            out.at[i, "audit_notes"] = f"term_survival_agg={agg:.3f} < tau={tau:.2f}"
+            out.at[i, "audit_notes"] = f"term_survival_agg={agg:.3f} < tau={float(tau):.2f}"
             continue
+
+        # 3) v0 guardrail: if advanced audits are not implemented, do NOT return PASS
+        # This keeps the paper's claim honest: "mechanical audits decide PASS/ABSTAIN/FAIL".
+        if out.at[i, "status"] == "PASS":
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "stress_ok"] = False
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+            out.at[i, "audit_notes"] = "v0: stress/contradiction audits not implemented"
 
     return out

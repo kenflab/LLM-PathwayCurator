@@ -29,6 +29,21 @@ def _subset_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return df[keep].copy() if keep else df.copy()
 
 
+def _prefer_str_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """
+    For each requested column c, if c_str exists use it (but keep the display name as c).
+    This stabilizes markdown output for list-like columns.
+    """
+    out = pd.DataFrame()
+    for c in cols:
+        c_str = f"{c}_str"
+        if c_str in df.columns:
+            out[c] = df[c_str]
+        elif c in df.columns:
+            out[c] = df[c]
+    return out if not out.empty else df.copy()
+
+
 def _is_na_scalar(x: Any) -> bool:
     if x is None:
         return True
@@ -65,10 +80,8 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
                     else ("" if _is_na_scalar(x) else str(x))
                 )
             else:
-                # still normalize scalar NA for stability (optional but nice)
                 out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
         else:
-            # non-object columns: keep, but normalize pandas NA in Float64, etc.
             out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
     return out
 
@@ -104,7 +117,6 @@ def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
-    # Prefer stability-derived score if present, else context proxy, else stat
     for c in ["term_survival_agg", "context_score", "stat"]:
         if c in audit_log.columns:
             return c
@@ -155,7 +167,6 @@ def write_report(
         except Exception:
             rc_curve_path = None
 
-    # Stable “top” ordering
     def _top(df: pd.DataFrame) -> pd.DataFrame:
         cols = df.columns
         if "term_survival_agg" in cols:
@@ -179,9 +190,12 @@ def write_report(
         lines.append(f"- notes: {notes}")
     lines.append("")
     lines.append(f"## Decisions (PASS/ABSTAIN/FAIL): {n_pass}/{n_abs}/{n_fail}")
+    lines.append(
+        "PASS requires evidence-link integrity and stability; otherwise the system "
+        "ABSTAINS or FAILS."
+    )
     lines.append("")
 
-    # one-line risk/coverage summary (decision-grade)
     if rc_summary is not None:
         lines.append("## Risk–Coverage summary")
         lines.append("")
@@ -190,7 +204,6 @@ def write_report(
         )
         risk_decided = rc_summary.get("risk_fail_given_decided", float("nan"))
         lines.append(f"- risk_fail_given_decided: {risk_decided:.3f}")
-
         risk_total = rc_summary.get("risk_fail_total", float("nan"))
         lines.append(f"- risk_fail_total: {risk_total:.3f}")
         if score_col:
@@ -216,7 +229,7 @@ def write_report(
     pass_df = _top(pass_df)
     lines.append(
         _safe_table_md(
-            _subset_cols(
+            _prefer_str_cols(
                 pass_df,
                 [
                     "claim_id",
@@ -225,6 +238,7 @@ def write_report(
                     "module_id",
                     "term_ids",
                     "gene_ids",
+                    "gene_set_hash",
                     "term_survival_agg",
                     "context_score",
                     "stat",
@@ -243,7 +257,7 @@ def write_report(
     abs_df = _top(abs_df)
     lines.append(
         _safe_table_md(
-            _subset_cols(
+            _prefer_str_cols(
                 abs_df,
                 [
                     "claim_id",
@@ -251,6 +265,7 @@ def write_report(
                     "direction",
                     "module_id",
                     "abstain_reason",
+                    "gene_set_hash",
                     "term_survival_agg",
                     "context_score",
                     "audit_notes",
@@ -268,9 +283,17 @@ def write_report(
     fail_df = _top(fail_df)
     lines.append(
         _safe_table_md(
-            _subset_cols(
+            _prefer_str_cols(
                 fail_df,
-                ["claim_id", "entity", "direction", "module_id", "fail_reason", "audit_notes"],
+                [
+                    "claim_id",
+                    "entity",
+                    "direction",
+                    "module_id",
+                    "fail_reason",
+                    "gene_set_hash",
+                    "audit_notes",
+                ],
             ),
             n=5,
         )
