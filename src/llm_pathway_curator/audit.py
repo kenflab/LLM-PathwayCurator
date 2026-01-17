@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 import pandas as pd
@@ -9,9 +10,11 @@ import pandas as pd
 from .audit_reasons import (
     ABSTAIN_INCONCLUSIVE_STRESS,
     ABSTAIN_MISSING_SURVIVAL,
+    ABSTAIN_REASONS,
     ABSTAIN_UNSTABLE,
     FAIL_CONTRADICTION,
     FAIL_EVIDENCE_DRIFT,
+    FAIL_REASONS,
     FAIL_SCHEMA_VIOLATION,
 )
 from .claim_schema import Claim
@@ -60,21 +63,37 @@ def _parse_ids(x: Any) -> list[str]:
     return uniq
 
 
+def _norm_gene_id(g: str) -> str:
+    """
+    Minimal normalization to reduce spurious drift:
+    - strip
+    - uppercase (HGNC-like). If you use Ensembl IDs, this keeps them stable too.
+    """
+    return str(g).strip().upper()
+
+
 def _hash_gene_set(genes: list[str]) -> str:
     """
     Stable short hash for an ordered gene list (v0).
+    We normalize IDs to avoid casing drift.
     NOTE: we keep order as produced by our union builder (deterministic).
     """
-    payload = ",".join([str(g).strip() for g in genes if str(g).strip()])
+    payload = ",".join([_norm_gene_id(g) for g in genes if str(g).strip()])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _looks_like_hex_hash(x: Any) -> bool:
+    if _is_na_scalar(x):
+        return False
+    s = str(x).strip().lower()
+    if not s:
+        return False
+    if len(s) < 8:
+        return False
+    return all(ch in "0123456789abcdef" for ch in s)
+
+
 def _get_tau_default(card: SampleCard) -> float:
-    """
-    Source of truth:
-      - SampleCard.audit_tau() if present
-      - else: legacy extra/attribute fallback
-    """
     if hasattr(card, "audit_tau") and callable(card.audit_tau):
         try:
             return float(card.audit_tau())  # type: ignore[attr-defined]
@@ -99,11 +118,6 @@ def _get_tau_default(card: SampleCard) -> float:
 
 
 def _get_min_overlap_default(card: SampleCard) -> int:
-    """
-    Source of truth:
-      - SampleCard.audit_min_gene_overlap() if present
-      - else: legacy extra fallback
-    """
     if hasattr(card, "audit_min_gene_overlap") and callable(card.audit_min_gene_overlap):
         try:
             return int(card.audit_min_gene_overlap())  # type: ignore[attr-defined]
@@ -131,19 +145,58 @@ def _append_note(old: str, msg: str) -> str:
     return msg if not old else f"{old} | {msg}"
 
 
+def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
+    for k in keys:
+        if k in row.index:
+            v = row.get(k)
+            if v is None or _is_na_scalar(v):
+                continue
+            if isinstance(v, str) and (v.strip() == "" or v.strip().lower() in _NA_TOKENS):
+                continue
+            return v
+    return None
+
+
+def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any]:
+    """
+    Source of truth: claim_json (Claim schema).
+    Returns: (term_ids, gene_ids, gene_set_hash)
+    Note: claim_schema v1 may evolve; keep robust parsing here.
+    """
+    try:
+        obj = json.loads(cj)
+    except Exception:
+        return ([], [], None)
+
+    # Try new bundle style: claim.evidence_refs.{term_ids,gene_ids,gene_set_hash}
+    ev = None
+    if isinstance(obj, dict):
+        ev = (
+            obj.get("evidence_refs")
+            or obj.get("evidence_ref")
+            or (obj.get("claim", {}) if isinstance(obj.get("claim"), dict) else {}).get(
+                "evidence_refs"
+            )
+            or (obj.get("claim", {}) if isinstance(obj.get("claim"), dict) else {}).get(
+                "evidence_ref"
+            )
+        )
+
+    if not isinstance(ev, dict):
+        return ([], [], None)
+
+    term_ids = _parse_ids(ev.get("term_ids") or ev.get("term_id") or "")
+    gene_ids = _parse_ids(ev.get("gene_ids") or ev.get("gene_id") or "")
+    gsh = ev.get("gene_set_hash")
+    return (term_ids, gene_ids, gsh)
+
+
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
-    """
-    Optional contradiction audit: uses precomputed columns, if present.
-    - contradiction_status: PASS/FAIL
-    - contradiction_reason: e.g., "contradiction"
-    - contradiction_notes: free text
-    """
     if "contradiction_status" not in out.columns:
         return
 
     st = _norm_status(row.get("contradiction_status"))
     if not st:
-        # column exists but missing per-row -> inconclusive, but do not force ABSTAIN.
         out.at[i, "contradiction_ok"] = False
         out.at[i, "audit_notes"] = _append_note(
             out.at[i, "audit_notes"], "contradiction_status missing"
@@ -168,25 +221,16 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
-    # unknown token
+    # unknown token => schema violation (do not ABSTAIN)
+    out.at[i, "status"] = "FAIL"
     out.at[i, "contradiction_ok"] = False
+    out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
     out.at[i, "audit_notes"] = _append_note(
         out.at[i, "audit_notes"], f"contradiction_status unknown={st}"
     )
 
 
 def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
-    """
-    Optional stress audit: uses precomputed columns, if present.
-    Preferred:
-      - stress_status: PASS/ABSTAIN/FAIL
-      - stress_reason: one of audit_reasons (e.g., context_nonspecific, inconclusive_stress)
-      - stress_notes: free text
-
-    Minimal alternative:
-      - stress_ok: bool
-    """
-    # No stress columns -> mark inconclusive and (optionally) ABSTAIN
     has_any = any(c in out.columns for c in ["stress_status", "stress_ok", "stress_reason"])
     if not has_any:
         # v1 policy: do NOT auto-ABSTAIN just because stress is absent.
@@ -194,7 +238,6 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
         return
 
-    # stress_ok boolean shortcut
     if "stress_ok" in out.columns and "stress_status" not in out.columns:
         v = row.get("stress_ok")
         if _is_na_scalar(v):
@@ -204,19 +247,16 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
         ok = bool(v)
         out.at[i, "stress_ok"] = ok
         if not ok:
-            # When stress is explicitly false but without status/reason, ABSTAIN (inconclusive)
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
         return
 
-    # Full stress_status path
     st = _norm_status(row.get("stress_status"))
-    rs = str(row.get("stress_reason", "")).strip()
+    rs_raw = str(row.get("stress_reason", "")).strip()
     nt = str(row.get("stress_notes", "")).strip()
 
     if not st:
-        # Column exists but missing per-row -> ABSTAIN (inconclusive)
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
         out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
@@ -230,64 +270,85 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     if st == "ABSTAIN":
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
-        # Use provided reason if it looks valid; else default
-        out.at[i, "abstain_reason"] = rs if rs else ABSTAIN_INCONCLUSIVE_STRESS
+        # Only accept vocab-stable reasons; otherwise fall back to inconclusive_stress.
+        rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
+        out.at[i, "abstain_reason"] = rs
         note = "stress=ABSTAIN"
-        if rs:
-            note += f": {rs}"
+        if rs_raw:
+            note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
     if st == "FAIL":
-        # In v1, stress FAIL is still auditable only if you choose to promote it.
-        # map stress FAIL -> ABSTAIN (conservative) unless you later add a FAIL_* code.
+        # v1: conservative mapping: stress FAIL -> ABSTAIN unless you add FAIL_* code
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
-        out.at[i, "abstain_reason"] = rs if rs else ABSTAIN_INCONCLUSIVE_STRESS
+        rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
+        out.at[i, "abstain_reason"] = rs
         note = "stress=FAIL"
-        if rs:
-            note += f": {rs}"
+        if rs_raw:
+            note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
-    # unknown token
-    out.at[i, "status"] = "ABSTAIN"
+    # unknown token => schema violation
+    out.at[i, "status"] = "FAIL"
     out.at[i, "stress_ok"] = False
-    out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+    out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
     out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], f"stress_status unknown={st}")
+
+
+def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
+    """
+    Paper contract enforcement:
+    - If status=FAIL, fail_reason must be one of FAIL_REASONS
+    - If status=ABSTAIN, abstain_reason must be one of ABSTAIN_REASONS
+    Any violation => FAIL_SCHEMA_VIOLATION (do not silently coerce).
+    """
+    st = str(out.at[i, "status"]).strip().upper()
+
+    if st == "FAIL":
+        fr = (
+            "" if _is_na_scalar(out.at[i, "fail_reason"]) else str(out.at[i, "fail_reason"]).strip()
+        )
+        if fr not in FAIL_REASONS:
+            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], f"invalid fail_reason={fr}"
+            )
+
+    if st == "ABSTAIN":
+        ar = (
+            ""
+            if _is_na_scalar(out.at[i, "abstain_reason"])
+            else str(out.at[i, "abstain_reason"]).strip()
+        )
+        if ar not in ABSTAIN_REASONS:
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+            out.at[i, "abstain_reason"] = ""
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], f"invalid abstain_reason={ar}"
+            )
 
 
 def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
     """
-    Mechanical audit (v1, tool-facing; stress/contradiction are optional inputs):
-
-      0) Schema validation: claim_json must validate against Claim schema
-         - missing/invalid claim_json => FAIL (schema_violation)
-
-      1) Evidence-link integrity: term_ids must exist in distilled EvidenceTable
-         - empty or unknown term_ids => FAIL (evidence_drift)
-         - if gene_set_hash is provided:
-           hash(union evidence genes) must match => FAIL (evidence_drift)
-         - else: overlap(gene_ids, union evidence genes) >= min_overlap => FAIL (evidence_drift)
-
-      2) Stability gate: aggregate(term_survival over referenced term_ids) >= tau
-         - aggregate = min(term_survival) (conservative)
-         - if term_survival missing => ABSTAIN (missing_survival)
-         - if agg < tau => ABSTAIN (unstable)
-
-      3) Optional advanced audits (if provided as columns in claims):
-         - stress: stress_status/stress_reason/stress_notes OR stress_ok
-         - contradiction: contradiction_status/contradiction_reason/contradiction_notes
+    Mechanical audit (v1, tool-facing; stress/contradiction are optional inputs).
 
     Status priority: FAIL > ABSTAIN > PASS
+
+    Source of truth for evidence references:
+      1) claim_json (Claim schema)
+      2) DataFrame columns as fallback (for backward compatibility)
     """
     out = claims.copy()
 
-    # Explicit audit fields (stable columns)
+    # Stable audit fields
     out["status"] = "PASS"
     out["link_ok"] = True
     out["stability_ok"] = True
@@ -297,7 +358,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
     out["fail_reason"] = ""
     out["audit_notes"] = ""
 
-    # Optional numeric feature for calibration/reporting
+    # Optional numeric feature for reporting/calibration
     if "term_survival_agg" not in out.columns:
         out["term_survival_agg"] = pd.NA
 
@@ -310,7 +371,6 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
     known_terms = set(term_key.tolist())
 
     has_survival = "term_survival" in distilled.columns
-    surv = None
     if has_survival:
         tmp = distilled.copy()
         tmp["term_key"] = tmp[key_col].astype(str).str.strip()
@@ -322,7 +382,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
     tau_default = _get_tau_default(card)
     min_overlap_default = _get_min_overlap_default(card)
 
-    # Precompute evidence genes per term_key for drift check (robust to list OR string)
+    # Precompute evidence genes per term_key
     term_to_gene_set: dict[str, set[str]] = {}
     if "evidence_genes" in distilled.columns:
         for tk, xs in zip(
@@ -333,10 +393,10 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
                 continue
             if isinstance(xs, (list, tuple, set)):
-                genes = [str(g).strip() for g in xs if str(g).strip()]
+                genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
             else:
-                genes = _parse_ids(xs)
-            gs = set(genes)
+                genes = [_norm_gene_id(g) for g in _parse_ids(xs)]
+            gs = set([g for g in genes if g])
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
@@ -349,8 +409,8 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
         ):
             if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
                 continue
-            genes = _parse_ids(s)
-            gs = set(genes)
+            genes = [_norm_gene_id(g) for g in _parse_ids(s)]
+            gs = set([g for g in genes if g])
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
@@ -363,17 +423,21 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
             out.at[i, "audit_notes"] = "missing claim_json"
+            _enforce_reason_vocab(out, i)
             continue
+
+        cj_str = str(cj)
         try:
-            Claim.model_validate_json(str(cj))
+            Claim.model_validate_json(cj_str)
         except Exception as e:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
             out.at[i, "audit_notes"] = f"claim_json schema violation: {type(e).__name__}"
+            _enforce_reason_vocab(out, i)
             continue
 
-        # Per-claim tau override (optional)
+        # Per-claim tau override
         tau = tau_default
         if "tau" in out.columns and not _is_na_scalar(row.get("tau")):
             try:
@@ -381,7 +445,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             except Exception:
                 tau = tau_default
 
-        # Per-claim min_overlap override (optional)
+        # Per-claim min_overlap override
         min_overlap = min_overlap_default
         if "min_overlap" in out.columns and not _is_na_scalar(row.get("min_overlap")):
             try:
@@ -389,14 +453,37 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             except Exception:
                 min_overlap = min_overlap_default
 
-        term_ids = _parse_ids(row.get("term_ids", ""))
+        # 1) evidence refs (prefer claim_json)
+        term_ids_cj, gene_ids_cj, gsh_cj = _extract_evidence_from_claim_json(cj_str)
 
-        # 1) evidence-link integrity
+        term_ids = term_ids_cj or _parse_ids(
+            _get_first_present(
+                row, ["term_ids", "evidence_refs.term_ids", "evidence_refs.term_id", "term_id"]
+            )
+            or ""
+        )
+        gene_ids = gene_ids_cj or _parse_ids(
+            _get_first_present(
+                row, ["gene_ids", "evidence_refs.gene_ids", "evidence_refs.gene_id", "gene_id"]
+            )
+            or ""
+        )
+        # gene_set_hash can be None/empty
+        gsh = (
+            gsh_cj
+            if (gsh_cj is not None and not _is_na_scalar(gsh_cj) and str(gsh_cj).strip())
+            else _get_first_present(row, ["gene_set_hash", "evidence_refs.gene_set_hash"])
+        )
+
+        gene_ids = [_norm_gene_id(g) for g in gene_ids]
+
+        # 1) evidence-link integrity: term_ids must exist
         if not term_ids:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
             out.at[i, "audit_notes"] = "empty term_ids"
+            _enforce_reason_vocab(out, i)
             continue
 
         missing = [t for t in term_ids if t not in known_terms]
@@ -405,9 +492,8 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
             out.at[i, "audit_notes"] = f"unknown term_ids={missing}"
+            _enforce_reason_vocab(out, i)
             continue
-
-        gene_ids = _parse_ids(row.get("gene_ids", ""))
 
         # union evidence genes across referenced terms (deterministic order)
         ev_union: list[str] = []
@@ -418,21 +504,34 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                     ev_seen.add(g)
                     ev_union.append(g)
 
-        # 1b) stronger drift check if gene_set_hash is provided
-        gsh = row.get("gene_set_hash", None)
-        if gsh is not None and (not _is_na_scalar(gsh)) and str(gsh).strip():
-            if ev_union:
-                computed = _hash_gene_set(ev_union)
-                gsh_norm = str(gsh).strip().lower()
-                if computed != gsh_norm:
-                    out.at[i, "status"] = "FAIL"
-                    out.at[i, "link_ok"] = False
-                    out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
-                    out.at[i, "audit_notes"] = f"gene_set_hash mismatch: {computed} != {gsh_norm}"
-                    continue
+        # If user provided gene_set_hash, EvidenceTable MUST allow us to compute it
+        if _looks_like_hex_hash(gsh):
+            if not ev_union:
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "link_ok"] = False
+                out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+                out.at[i, "audit_notes"] = "gene_set_hash provided but evidence_genes unavailable"
+                _enforce_reason_vocab(out, i)
+                continue
+            computed = _hash_gene_set(ev_union)
+            gsh_norm = str(gsh).strip().lower()
+            if computed != gsh_norm:
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "link_ok"] = False
+                out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
+                out.at[i, "audit_notes"] = f"gene_set_hash mismatch: {computed} != {gsh_norm}"
+                _enforce_reason_vocab(out, i)
+                continue
 
-        # 1c) fallback overlap check (representative genes)
-        if gene_ids and ev_seen:
+        # Fallback: overlap check if gene_ids available
+        if gene_ids:
+            if not ev_seen:
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "link_ok"] = False
+                out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+                out.at[i, "audit_notes"] = "gene_ids provided but evidence_genes unavailable"
+                _enforce_reason_vocab(out, i)
+                continue
             n_hit = sum(1 for g in gene_ids if g in ev_seen)
             if n_hit < int(min_overlap):
                 out.at[i, "status"] = "FAIL"
@@ -441,6 +540,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                 out.at[i, "audit_notes"] = (
                     f"gene_ids drift: hits={n_hit} < min_overlap={min_overlap}"
                 )
+                _enforce_reason_vocab(out, i)
                 continue
 
         # 2) stability gate
@@ -451,6 +551,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"], "term_survival column missing"
             )
+            _enforce_reason_vocab(out, i)
             continue
 
         vals: list[float] = []
@@ -461,7 +562,6 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             except Exception:
                 vals.append(float("nan"))
 
-        # Conservative aggregation: min across referenced terms
         agg = float(pd.Series(vals).min(skipna=True)) if vals else float("nan")
         out.at[i, "term_survival_agg"] = agg
 
@@ -472,6 +572,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"], "term_survival missing for referenced terms"
             )
+            _enforce_reason_vocab(out, i)
             continue
 
         if agg < float(tau):
@@ -481,21 +582,21 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"], f"term_survival_agg={agg:.3f} < tau={float(tau):.2f}"
             )
+            _enforce_reason_vocab(out, i)
             continue
 
-        # 3) optional advanced audits (external columns)
-        # Apply contradiction first (can FAIL)
+        # 3) optional advanced audits
         _apply_external_contradiction(out, i, row)
         if out.at[i, "status"] == "FAIL":
+            _enforce_reason_vocab(out, i)
             continue
 
-        # Then stress (can ABSTAIN)
         _apply_external_stress(out, i, row)
-        if out.at[i, "status"] == "ABSTAIN":
+        if out.at[i, "status"] in {"FAIL", "ABSTAIN"}:
+            _enforce_reason_vocab(out, i)
             continue
 
-        # If we reached here and status is still PASS, it stays PASS.
-        # (advanced audits may be absent; in that case stress_ok/contradiction_ok
-        # are marked False via notes)
+        # Enforce reason vocabulary contract (must be last)
+        _enforce_reason_vocab(out, i)
 
     return out
