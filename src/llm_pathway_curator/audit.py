@@ -10,6 +10,7 @@ from .audit_reasons import (
     ABSTAIN_INCONCLUSIVE_STRESS,
     ABSTAIN_MISSING_SURVIVAL,
     ABSTAIN_UNSTABLE,
+    FAIL_CONTRADICTION,
     FAIL_EVIDENCE_DRIFT,
     FAIL_SCHEMA_VIOLATION,
 )
@@ -119,23 +120,168 @@ def _get_min_overlap_default(card: SampleCard) -> int:
     return 1
 
 
+def _norm_status(x: Any) -> str:
+    if _is_na_scalar(x):
+        return ""
+    return str(x).strip().upper()
+
+
+def _append_note(old: str, msg: str) -> str:
+    old = "" if _is_na_scalar(old) else str(old)
+    return msg if not old else f"{old} | {msg}"
+
+
+def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
+    """
+    Optional contradiction audit: uses precomputed columns, if present.
+    - contradiction_status: PASS/FAIL
+    - contradiction_reason: e.g., "contradiction"
+    - contradiction_notes: free text
+    """
+    if "contradiction_status" not in out.columns:
+        return
+
+    st = _norm_status(row.get("contradiction_status"))
+    if not st:
+        # column exists but missing per-row -> inconclusive, but do not force ABSTAIN.
+        out.at[i, "contradiction_ok"] = False
+        out.at[i, "audit_notes"] = _append_note(
+            out.at[i, "audit_notes"], "contradiction_status missing"
+        )
+        return
+
+    if st == "PASS":
+        out.at[i, "contradiction_ok"] = True
+        return
+
+    if st == "FAIL":
+        out.at[i, "status"] = "FAIL"
+        out.at[i, "contradiction_ok"] = False
+        out.at[i, "fail_reason"] = FAIL_CONTRADICTION
+        rn = str(row.get("contradiction_reason", "")).strip()
+        nt = str(row.get("contradiction_notes", "")).strip()
+        note = "contradiction"
+        if rn:
+            note += f": {rn}"
+        if nt:
+            note += f" ({nt})"
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+        return
+
+    # unknown token
+    out.at[i, "contradiction_ok"] = False
+    out.at[i, "audit_notes"] = _append_note(
+        out.at[i, "audit_notes"], f"contradiction_status unknown={st}"
+    )
+
+
+def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
+    """
+    Optional stress audit: uses precomputed columns, if present.
+    Preferred:
+      - stress_status: PASS/ABSTAIN/FAIL
+      - stress_reason: one of audit_reasons (e.g., context_nonspecific, inconclusive_stress)
+      - stress_notes: free text
+
+    Minimal alternative:
+      - stress_ok: bool
+    """
+    # No stress columns -> mark inconclusive and (optionally) ABSTAIN
+    has_any = any(c in out.columns for c in ["stress_status", "stress_ok", "stress_reason"])
+    if not has_any:
+        # v1 policy: do NOT auto-ABSTAIN just because stress is absent.
+        out.at[i, "stress_ok"] = False
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
+        return
+
+    # stress_ok boolean shortcut
+    if "stress_ok" in out.columns and "stress_status" not in out.columns:
+        v = row.get("stress_ok")
+        if _is_na_scalar(v):
+            out.at[i, "stress_ok"] = False
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok missing")
+            return
+        ok = bool(v)
+        out.at[i, "stress_ok"] = ok
+        if not ok:
+            # When stress is explicitly false but without status/reason, ABSTAIN (inconclusive)
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
+        return
+
+    # Full stress_status path
+    st = _norm_status(row.get("stress_status"))
+    rs = str(row.get("stress_reason", "")).strip()
+    nt = str(row.get("stress_notes", "")).strip()
+
+    if not st:
+        # Column exists but missing per-row -> ABSTAIN (inconclusive)
+        out.at[i, "status"] = "ABSTAIN"
+        out.at[i, "stress_ok"] = False
+        out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_status missing")
+        return
+
+    if st == "PASS":
+        out.at[i, "stress_ok"] = True
+        return
+
+    if st == "ABSTAIN":
+        out.at[i, "status"] = "ABSTAIN"
+        out.at[i, "stress_ok"] = False
+        # Use provided reason if it looks valid; else default
+        out.at[i, "abstain_reason"] = rs if rs else ABSTAIN_INCONCLUSIVE_STRESS
+        note = "stress=ABSTAIN"
+        if rs:
+            note += f": {rs}"
+        if nt:
+            note += f" ({nt})"
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+        return
+
+    if st == "FAIL":
+        # In v1, stress FAIL is still auditable only if you choose to promote it.
+        # map stress FAIL -> ABSTAIN (conservative) unless you later add a FAIL_* code.
+        out.at[i, "status"] = "ABSTAIN"
+        out.at[i, "stress_ok"] = False
+        out.at[i, "abstain_reason"] = rs if rs else ABSTAIN_INCONCLUSIVE_STRESS
+        note = "stress=FAIL"
+        if rs:
+            note += f": {rs}"
+        if nt:
+            note += f" ({nt})"
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+        return
+
+    # unknown token
+    out.at[i, "status"] = "ABSTAIN"
+    out.at[i, "stress_ok"] = False
+    out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+    out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], f"stress_status unknown={st}")
+
+
 def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
     """
-    Mechanical audit (v0, spec-aligned):
+    Mechanical audit (v1, tool-facing; stress/contradiction are optional inputs):
+
       0) Schema validation: claim_json must validate against Claim schema
          - missing/invalid claim_json => FAIL (schema_violation)
+
       1) Evidence-link integrity: term_ids must exist in distilled EvidenceTable
          - empty or unknown term_ids => FAIL (evidence_drift)
-         - if gene_set_hash is provided: hash(union evidence genes) must match
-           => FAIL (evidence_drift)
+         - if gene_set_hash is provided:
+           hash(union evidence genes) must match => FAIL (evidence_drift)
          - else: overlap(gene_ids, union evidence genes) >= min_overlap => FAIL (evidence_drift)
+
       2) Stability gate: aggregate(term_survival over referenced term_ids) >= tau
-         - aggregate = min(term_survival)  (conservative)
-         - if term_survival column missing => ABSTAIN (missing_survival)
-         - if referenced terms have missing survival => ABSTAIN (missing_survival)
+         - aggregate = min(term_survival) (conservative)
+         - if term_survival missing => ABSTAIN (missing_survival)
          - if agg < tau => ABSTAIN (unstable)
-      3) v0 guardrail: if advanced audits (stress/contradiction) are not implemented,
-         do NOT return PASS; ABSTAIN instead (inconclusive_stress)
+
+      3) Optional advanced audits (if provided as columns in claims):
+         - stress: stress_status/stress_reason/stress_notes OR stress_ok
+         - contradiction: contradiction_status/contradiction_reason/contradiction_notes
 
     Status priority: FAIL > ABSTAIN > PASS
     """
@@ -284,7 +430,6 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                     out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
                     out.at[i, "audit_notes"] = f"gene_set_hash mismatch: {computed} != {gsh_norm}"
                     continue
-            # if we cannot compute union, fall back to overlap
 
         # 1c) fallback overlap check (representative genes)
         if gene_ids and ev_seen:
@@ -303,7 +448,9 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_MISSING_SURVIVAL
-            out.at[i, "audit_notes"] = "term_survival column missing"
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "term_survival column missing"
+            )
             continue
 
         vals: list[float] = []
@@ -322,22 +469,33 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_MISSING_SURVIVAL
-            out.at[i, "audit_notes"] = "term_survival missing for referenced terms"
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "term_survival missing for referenced terms"
+            )
             continue
 
         if agg < float(tau):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
-            out.at[i, "audit_notes"] = f"term_survival_agg={agg:.3f} < tau={float(tau):.2f}"
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], f"term_survival_agg={agg:.3f} < tau={float(tau):.2f}"
+            )
             continue
 
-        # 3) v0 guardrail: if advanced audits are not implemented, do NOT return PASS
-        # This keeps the paper's claim honest: "mechanical audits decide PASS/ABSTAIN/FAIL".
-        if out.at[i, "status"] == "PASS":
-            out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "stress_ok"] = False
-            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-            out.at[i, "audit_notes"] = "v0: stress/contradiction audits not implemented"
+        # 3) optional advanced audits (external columns)
+        # Apply contradiction first (can FAIL)
+        _apply_external_contradiction(out, i, row)
+        if out.at[i, "status"] == "FAIL":
+            continue
+
+        # Then stress (can ABSTAIN)
+        _apply_external_stress(out, i, row)
+        if out.at[i, "status"] == "ABSTAIN":
+            continue
+
+        # If we reached here and status is still PASS, it stays PASS.
+        # (advanced audits may be absent; in that case stress_ok/contradiction_ok
+        # are marked False via notes)
 
     return out

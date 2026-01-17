@@ -1,0 +1,5 @@
+benchmark_id: PANCAN_TP53_v1
+label_policy: R1_only
+rater_id: R1
+taus: "0:1:0.05"
+main_cancer: HNSC
