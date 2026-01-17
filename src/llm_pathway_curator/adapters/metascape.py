@@ -48,22 +48,32 @@ def _to_float(x: Any) -> float | None:
         return None
 
 
+def _clean_gene_symbol(g: str) -> str:
+    s = g.strip().strip('"').strip("'")
+    s = " ".join(s.split())
+    s = s.strip(",;|")
+    return s
+
+
 def _split_genes(x: Any) -> list[str]:
     if _is_na(x):
         return []
     if isinstance(x, (list, tuple, set)):
-        genes = [str(g).strip() for g in x if str(g).strip()]
-        return sorted(set(genes))
-    s = str(x).strip()
-    if not s or s.lower() in {"na", "nan", "none"}:
-        return []
-    s = s.replace(";", ",").replace("|", ",")
-    parts = [p.strip() for p in s.split(",") if p.strip()]
+        parts = [_clean_gene_symbol(str(g)) for g in x]
+        parts = [p for p in parts if p]
+    else:
+        s = str(x).strip()
+        if not s or s.lower() in {"na", "nan", "none"}:
+            return []
+        s = s.replace(";", ",").replace("|", ",")
+        parts = [_clean_gene_symbol(p) for p in s.split(",")]
+        parts = [p for p in parts if p]
+
+    # deterministic + unique
     return sorted(set(parts))
 
 
 def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
-    # "123/456" -> (123,456)
     s = _clean_str(x)
     if not s or "/" not in s:
         return (None, None)
@@ -75,7 +85,6 @@ def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
 
 
 def _is_summary_groupid(gid: str) -> bool:
-    # examples: "1_Summary", "2_Member"
     s = (gid or "").strip()
     return s.endswith("_Summary")
 
@@ -85,10 +94,10 @@ class MetascapeAdapterConfig:
     source_name: str = "metascape"
     include_summary: bool = False  # IMPORTANT default
     prefer_symbols: bool = True  # Symbols preferred over Genes
+    strict_qval: bool = False  # if True: error on invalid qval, else set NA
 
 
 def read_metascape_table(path: str) -> pd.DataFrame:
-    # Try TSV first
     df = pd.read_csv(path, sep="\t")
     if df.shape[1] > 1:
         return df
@@ -103,10 +112,8 @@ def _normalize_term_id(term: Any) -> str:
     if not s:
         return ""
     u = s.upper()
-    # Already canonical
     if u.startswith("GO:"):
         return s
-    # GO without colon (rare, but defensive)
     if u.startswith("GO") and len(u) > 2 and u[2:].isdigit():
         return "GO:" + s[2:]
     return s
@@ -145,7 +152,10 @@ def metascape_to_evidence_table(
     # stat: prefer Log(q-value) if numeric else LogP
     logq = df["Log(q-value)"].map(_to_float)
     logp = df["LogP"].map(_to_float)
+
     stat = logq.where(logq.notna(), logp)
+    stat_kind = pd.Series(["logq" if pd.notna(v) else "logp" for v in logq], index=df.index)
+    stat_kind = stat_kind.where(logq.notna(), "logp")
 
     if stat.isna().any():
         i = int(df.index[stat.isna()][0])
@@ -158,10 +168,19 @@ def metascape_to_evidence_table(
         vv = _to_float(v)
         if vv is None:
             return None
-        # Metascape typically uses log10(q-value)
-        return float(10 ** (-vv))
+        q = float(10 ** (-vv))
+        # sanity: q should be (0,1]
+        if not (q > 0.0 and q <= 1.0):
+            return None
+        return q
 
     qval = df["Log(q-value)"].map(_q_from_logq)
+    if config.strict_qval and qval.isna().all() and logq.notna().any():
+        # logq existed but all qval became invalid -> likely wrong semantics
+        raise ValueError(
+            "metascape_to_evidence_table: could not derive valid qval from Log(q-value). "
+            "Check whether the column is -log10(q) as expected."
+        )
 
     # evidence genes: prefer Symbols
     if config.prefer_symbols:
@@ -174,7 +193,6 @@ def metascape_to_evidence_table(
     genes = genes_src.map(_split_genes)
     empty = genes.map(len).eq(0)
     if empty.any():
-        # fallback to the other column
         genes2 = fallback.map(_split_genes)
         genes = genes.where(~empty, genes2)
 
@@ -186,7 +204,13 @@ def metascape_to_evidence_table(
             f"metascape_to_evidence_table: empty Symbols/Genes at row index={i} (Term={tid})"
         )
 
-    n_in_term, n_in_list = zip(*df["InTerm_InList"].map(_parse_interm_inlist), strict=False)
+    # parse InTerm/InList without zip(strict=...) for compatibility
+    n_in_term: list[int | None] = []
+    n_in_list: list[int | None] = []
+    for x in df["InTerm_InList"].tolist():
+        a, b = _parse_interm_inlist(x)
+        n_in_term.append(a)
+        n_in_list.append(b)
 
     out = pd.DataFrame(
         {
@@ -197,10 +221,12 @@ def metascape_to_evidence_table(
             "qval": qval,
             "direction": "na",
             "evidence_genes": genes,
+            # optional provenance fields
+            "stat_kind": stat_kind.astype(str),
             "group_id": df["group_id"],
             "is_summary": df["is_summary"].astype(bool),
-            "n_in_term": list(n_in_term),
-            "n_in_list": list(n_in_list),
+            "n_in_term": n_in_term,
+            "n_in_list": n_in_list,
             "category": df["Category"].map(_clean_str),
         }
     ).reset_index(drop=True)

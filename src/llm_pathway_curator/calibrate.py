@@ -108,17 +108,19 @@ def risk_coverage_curve(
     for thr in decision_thresholds:
         s = base_status.copy()
 
-        # SAFETY: never upgrade ABSTAIN -> PASS; never change FAIL
-        pass_now = s == "PASS"
+        # SAFETY: never change FAIL
+        is_fail = s == "FAIL"
+        not_fail = ~is_fail
 
         if pass_if_score_ge:
-            keep_pass = pass_now & (scores >= float(thr))
+            pass_mask = not_fail & (scores >= float(thr))
         else:
-            keep_pass = pass_now & (scores <= float(thr))
+            pass_mask = not_fail & (scores <= float(thr))
 
-        # demote PASS -> ABSTAIN, then re-promote only those that keep_pass
-        s = s.where(~pass_now, other="ABSTAIN")
-        s = s.where(~keep_pass, other="PASS")
+        # For non-FAIL items: PASS if threshold satisfied else ABSTAIN
+        s = s.where(~not_fail, other="ABSTAIN")
+        s = s.where(~pass_mask, other="PASS")
+        # FAIL remains FAIL automatically because we never overwrite is_fail rows
 
         m = risk_coverage_from_status(s)
         m["threshold"] = float(thr)
