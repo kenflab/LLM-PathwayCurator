@@ -1,0 +1,4 @@
+term_id	term_name	source	stat	qval	direction	evidence_genes	evidence_genes_str	n_evidence_genes	masked_genes_count	term_row_id	term_uid	term_survival	gene_survival	module_survival	keep_term	keep_reason	module_id
+HALLMARK_P53_PATHWAY	p53 pathway	fgsea	2.1	0.01	up	['BAX', 'CDKN1A', 'MDM2', 'TP53']	BAX,CDKN1A,MDM2,TP53	4	0	0	fgsea:HALLMARK_P53_PATHWAY				True	ok	M0001__5dccc39b
+HALLMARK_G2M_CHECKPOINT	G2M checkpoint	fgsea	1.8	0.03	up	['CCNB1', 'CDK1', 'MKI67', 'TOP2A']	CCNB1,CDK1,MKI67,TOP2A	4	0	1	fgsea:HALLMARK_G2M_CHECKPOINT				True	ok	M0002__ea9cd2d8
+GO:0006977	DNA damage response	metascape	15.0	1e-06	na	['ATM', 'ATR', 'BRCA1', 'TP53']	ATM,ATR,BRCA1,TP53	4	0	2	metascape:GO:0006977				True	ok	M0001__5dccc39b

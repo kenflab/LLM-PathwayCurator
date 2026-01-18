@@ -1,0 +1,4 @@
+term_id	term_name	source	stat	qval	direction	evidence_genes
+HALLMARK_P53_PATHWAY	p53 pathway	fgsea	2.1	0.01	up	TP53,CDKN1A,MDM2,BAX
+HALLMARK_G2M_CHECKPOINT	G2M checkpoint	fgsea	1.8	0.03	up	MKI67,TOP2A,CCNB1,CDK1
+GO:0006977	DNA damage response	metascape	15.0	1e-06	na	ATM,ATR,TP53,BRCA1

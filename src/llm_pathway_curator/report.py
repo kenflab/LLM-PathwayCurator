@@ -331,7 +331,7 @@ def write_report_jsonl(
     if not run_id:
         run_id = datetime.now(timezone.utc).isoformat()
 
-    _require_columns(audit_log, ["status", "term_survival_agg", "gene_set_hash"], "audit_log")
+    _require_columns(audit_log, ["claim_id", "status", "gene_set_hash"], "audit_log")
 
     # stringify list columns for robust I/O (do not use for numerics)
     df = _stringify_list_columns(audit_log)
@@ -349,7 +349,7 @@ def write_report_jsonl(
     )
 
     # method/tau: do not require user input (Less is more)
-    method_val = "" if method is None else str(method).strip()
+    method_val = "llm-pathway-curator" if method is None else str(method).strip()
     tau_val = _get_tau_default(card, default=0.8) if tau is None else float(tau)
 
     # grouping keys (prefer explicit args)
@@ -382,7 +382,7 @@ def write_report_jsonl(
             # no inference: if missing, keep empty (audit layer should decide)
 
             # evidence refs (column-name tolerant)
-            module_ids = _sorted_list(_get_first_present(row, ["module_ids", "module_id"]) or [])
+            module_id = str(_get_first_present(row, ["module_id"]) or "").strip()
             term_ids = _sorted_list(
                 _get_first_present(row, ["term_ids", "term_id", "term_id(s)"]) or []
             )
@@ -391,25 +391,24 @@ def write_report_jsonl(
             )
 
             evidence = {
-                "module_ids": module_ids,
-                "term_ids": term_ids,
+                "module_id": module_id,
                 "gene_ids": gene_ids,
+                "term_ids": term_ids,
+                "gene_set_hash": gene_set_hash,
             }
 
             gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
 
-            claim_id = _claim_id_v1(
-                entity_id=entity_id,
-                direction=direction,
-                context=ctx,
-                context_keys=context_keys,
-                gene_set_hash=gene_set_hash,
-                module_ids=module_ids,
-                term_ids=term_ids,
-            )
+            claim_id = str(row.get("claim_id", "")).strip()
+            if not claim_id:
+                raise ValueError("audit_log missing claim_id value")
 
             # numeric metrics
-            survival_val = None if pd.isna(surv_s.loc[i]) else float(surv_s.loc[i])
+            if "term_survival_agg" in audit_log.columns:
+                v = pd.to_numeric(audit_log.loc[i, "term_survival_agg"], errors="coerce")
+                survival_val = 0.0 if pd.isna(v) else float(v)
+            else:
+                survival_val = 0.0
 
             context_val = None
             if ctx_s is not None:
@@ -431,7 +430,7 @@ def write_report_jsonl(
 
             rec = {
                 # provenance
-                "schema_version": "report_jsonl_v1",
+                "schema_version": "v1",
                 "created_at": created_at,
                 "run_id": str(run_id),
                 # fig2 group keys

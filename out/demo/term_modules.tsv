@@ -1,0 +1,4 @@
+term_uid	module_id
+fgsea:HALLMARK_P53_PATHWAY	M0001__5dccc39b
+metascape:GO:0006977	M0001__5dccc39b
+fgsea:HALLMARK_G2M_CHECKPOINT	M0002__ea9cd2d8
