@@ -1,3 +1,4 @@
+(.venv) MDACM0CL9004207:LLM-PathwayCurator kfurudate$ cat .gitignore
 __pycache__/
 *.pyc
 *.pyo
@@ -17,3 +18,15 @@ ruff_cache/
 
 # artifacts
 out/
+
+# paper run logs (keep notebooks, ignore logs)
+paper/source_data/out/logs/
+
+# paper data (do not commit large/raw artifacts)
+paper/source_data/**/raw/
+paper/source_data/**/out/
+paper/source_data/**/derived/**/.ipynb_checkpoints/
+
+# (optional) ignore notebook checkpoints anywhere
+**/.ipynb_checkpoints/
+

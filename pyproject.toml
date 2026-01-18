@@ -56,6 +56,9 @@ llm-pathway-curator = "llm_pathway_curator.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = [
+  "paper/notebooks/*.ipynb",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

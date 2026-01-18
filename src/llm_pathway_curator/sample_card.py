@@ -116,7 +116,23 @@ class SampleCard(BaseModel):
 
         core_keys = ["disease", "tissue", "perturbation", "comparison", "notes"]
         known = {k: obj.get(k) for k in core_keys}
-        extra = {k: v for k, v in obj.items() if k not in core_keys}
+
+        # Start from explicit top-level "extra" if present
+        extra: dict[str, Any] = {}
+        top_extra = obj.get("extra", {})
+        if isinstance(top_extra, dict):
+            extra.update(top_extra)
+
+        # Add any other unknown top-level keys into extra (excluding "extra" itself)
+        for k, v in obj.items():
+            if k in core_keys or k == "extra":
+                continue
+            extra[k] = v
+
+        # Backward-compat: flatten nested extra={"extra": {...}} once if present
+        if "extra" in extra and isinstance(extra["extra"], dict) and "audit_tau" in extra["extra"]:
+            extra.update(extra.pop("extra"))
+
         known["extra"] = extra
         return cls(**known)
 

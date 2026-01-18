@@ -12,9 +12,6 @@ from typing import Any
 
 from llm_pathway_curator.pipeline import RunConfig, run_pipeline
 
-# =========================
-# Fixed paths (v1)
-# =========================
 PAPER = Path(__file__).resolve().parents[1]  # paper/
 SD = PAPER / "source_data" / "PANCAN_TP53_v1"
 
@@ -41,6 +38,18 @@ def _write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _write_card_with_tau(src_card_path: Path, dst_card_path: Path, *, tau: float) -> None:
+    if src_card_path.resolve() == dst_card_path.resolve():
+        _die(f"[run_fig2] _write_card_with_tau src==dst: {src_card_path}")
+    card = _read_json(src_card_path)
+    extra = card.get("extra", {})
+    if not isinstance(extra, dict):
+        extra = {}
+    extra["audit_tau"] = float(tau)
+    card["extra"] = extra
+    _write_json(dst_card_path, card)
+
+
 def _ensure_file(path: Path, label: str) -> None:
     if not path.exists():
         _die(f"[run_fig2] {label} not found: {path}")
@@ -62,7 +71,6 @@ def _iter_cancers() -> list[str]:
 
 
 def _make_shuffled_mapping(cancers: list[str]) -> dict[str, str]:
-    # rotate list: HNSC->LUAD->...->HNSC
     if len(cancers) < 2:
         _die("[run_fig2] shuffled_context requires >=2 cancers")
     rot = cancers[1:] + cancers[:1]
@@ -70,16 +78,8 @@ def _make_shuffled_mapping(cancers: list[str]) -> dict[str, str]:
 
 
 def _patch_report_jsonl(
-    report_path: Path,
-    *,
-    benchmark_id: str,
-    cancer: str,
-    method: str,
+    report_path: Path, *, benchmark_id: str, cancer: str, method: str, tau: float
 ) -> None:
-    """
-    Enforce Fig2 input contract: benchmark_id/cancer/method must exist.
-    Also keep any existing fields; only fill/overwrite these meta keys.
-    """
     if not report_path.exists():
         _die(f"[run_fig2] report.jsonl not found for patch: {report_path}")
 
@@ -97,6 +97,7 @@ def _patch_report_jsonl(
             rec["benchmark_id"] = benchmark_id
             rec["cancer"] = cancer
             rec["method"] = method
+            rec["tau"] = float(tau)
 
             out_lines.append(json.dumps(rec, ensure_ascii=False))
 
@@ -111,6 +112,7 @@ def _run_one(
     benchmark_id: str,
     cancer: str,
     variant: str,
+    tau: float,
     evidence_table: Path,
     sample_card: Path,
     outdir: Path,
@@ -118,11 +120,11 @@ def _run_one(
 ) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # run_meta: minimal provenance
     run_meta = {
         "benchmark_id": benchmark_id,
         "cancer": cancer,
         "variant": variant,
+        "tau": tau,
         "evidence_table": str(evidence_table),
         "sample_card": str(sample_card),
         "time_unix": int(time.time()),
@@ -137,56 +139,50 @@ def _run_one(
     }
     _write_json(outdir / "run_meta.json", run_meta)
 
-    # Try passing method into RunConfig (if supported).
-    # If not supported, we still run, then patch report.jsonl to satisfy Fig2 contract.
-    method = variant  # Fig2 method field
-    cfg_kwargs: dict[str, Any] = dict(
+    method = variant  # Fig2 "method" field
+    cfg_kwargs = dict(
         evidence_table=str(evidence_table),
         sample_card=str(sample_card),
         outdir=str(outdir),
-        force=True,  # paper scripts are allowed to overwrite
+        force=True,
         seed=seed,
         run_meta_name="run_meta.json",
     )
-
-    cfg = None
-    try:
-        cfg = RunConfig(**cfg_kwargs, method=method)  # type: ignore[arg-type]
-    except TypeError:
-        cfg = RunConfig(**cfg_kwargs)
-
+    cfg = RunConfig(**cfg_kwargs)
     run_pipeline(cfg)
 
     report_path = outdir / "report.jsonl"
     _ensure_file(report_path, "report.jsonl")
-    _patch_report_jsonl(report_path, benchmark_id=benchmark_id, cancer=cancer, method=method)
+    _patch_report_jsonl(
+        report_path,
+        benchmark_id=benchmark_id,
+        cancer=cancer,
+        method=method,
+        tau=tau,
+    )
+
+
+def _parse_taus(s: str) -> list[float]:
+    vals: list[float] = []
+    for x in s.split(","):
+        x = x.strip()
+        if not x:
+            continue
+        vals.append(float(x))
+    if not vals:
+        _die("[run_fig2] --taus must be non-empty")
+    return vals
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Fig2 v1: run pipeline to produce report.jsonl for each cancer and variant."
-    )
+    ap = argparse.ArgumentParser(description="Fig2 v1: run pipeline for each cancer/variant/tau.")
+    ap.add_argument("--benchmark-id", default="PANCAN_TP53_v1")
+    ap.add_argument("--cancers", default="ALL", help="Comma list like HNSC,LUAD or ALL")
     ap.add_argument(
-        "--benchmark-id",
-        default="PANCAN_TP53_v1",
-        help="benchmark_id to stamp into report.jsonl",
+        "--variants", default="ours,shuffled_context", help="Comma list: ours,shuffled_context"
     )
-    ap.add_argument(
-        "--cancers",
-        default="ALL",
-        help="Comma list like HNSC,LUAD or ALL (default: ALL from evidence_tables/)",
-    )
-    ap.add_argument(
-        "--variants",
-        default="ours,shuffled_context",
-        help="Comma list (v1 supports: ours,shuffled_context)",
-    )
-    ap.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Optional seed plumbing",
-    )
+    ap.add_argument("--taus", default="0.2,0.4,0.6,0.8,0.9", help="Comma list of tau thresholds")
+    ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
 
     benchmark_id = str(args.benchmark_id).strip()
@@ -210,59 +206,72 @@ def main() -> None:
     if bad:
         _die(f"[run_fig2] unsupported variants in v1: {bad} (allowed={sorted(allowed)})")
 
+    taus = _parse_taus(str(args.taus))
+
     shuffle_map = _make_shuffled_mapping(cancers) if "shuffled_context" in variants else {}
 
-    # Fail-fast on required inputs
+    # fail-fast inputs
     for cancer in cancers:
-        ev = EVID_DIR / f"{cancer}.evidence_table.tsv"
-        sc = CARD_DIR / f"{cancer}.sample_card.json"
-        _ensure_file(ev, f"evidence_table ({cancer})")
-        _ensure_file(sc, f"sample_card ({cancer})")
+        _ensure_file(EVID_DIR / f"{cancer}.evidence_table.tsv", f"evidence_table ({cancer})")
+        _ensure_file(CARD_DIR / f"{cancer}.sample_card.json", f"sample_card ({cancer})")
 
-    # Run
     for cancer in cancers:
-        for variant in variants:
-            ev = EVID_DIR / f"{cancer}.evidence_table.tsv"
+        for tau in taus:
+            for variant in variants:
+                ev = EVID_DIR / f"{cancer}.evidence_table.tsv"
 
-            if variant == "ours":
-                sc = CARD_DIR / f"{cancer}.sample_card.json"
-                outdir = OUT_DIR / cancer / "ours"
-                _run_one(
-                    benchmark_id=benchmark_id,
-                    cancer=cancer,
-                    variant="ours",
-                    evidence_table=ev,
-                    sample_card=sc,
-                    outdir=outdir,
-                    seed=args.seed,
-                )
+                if variant == "ours":
+                    src_sc = CARD_DIR / f"{cancer}.sample_card.json"
+                    outdir = OUT_DIR / cancer / "ours" / f"tau_{tau:.2f}"
+                    outdir.mkdir(parents=True, exist_ok=True)
 
-            elif variant == "shuffled_context":
-                # Temporary shuffled card: swap disease only (minimal stress test)
-                src_card = _read_json(CARD_DIR / f"{cancer}.sample_card.json")
-                dst_cancer = shuffle_map.get(cancer, "")
-                if not dst_cancer:
-                    _die("[run_fig2] internal error: shuffle_map missing cancer")
+                    tau_card = outdir / "sample_card.tau.json"
+                    _write_card_with_tau(src_sc, tau_card, tau=tau)
 
-                src_card["disease"] = dst_cancer  # key stress
-                tmp_dir = OUT_DIR / cancer / "shuffled_context"
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                tmp_card = tmp_dir / "sample_card.shuffled.json"
-                _write_json(tmp_card, src_card)
+                    _run_one(
+                        benchmark_id=benchmark_id,
+                        cancer=cancer,
+                        variant="ours",
+                        tau=tau,
+                        evidence_table=ev,
+                        sample_card=tau_card,
+                        outdir=outdir,
+                        seed=args.seed,
+                    )
 
-                outdir = OUT_DIR / cancer / "shuffled_context"
-                _run_one(
-                    benchmark_id=benchmark_id,
-                    cancer=cancer,
-                    variant="shuffled_context",
-                    evidence_table=ev,
-                    sample_card=tmp_card,
-                    outdir=outdir,
-                    seed=args.seed,
-                )
+                elif variant == "shuffled_context":
+                    src = _read_json(CARD_DIR / f"{cancer}.sample_card.json")
+                    dst_cancer = shuffle_map.get(cancer, "")
+                    if not dst_cancer:
+                        _die("[run_fig2] internal error: shuffle_map missing cancer")
 
-            else:
-                _die(f"[run_fig2] unreachable variant: {variant}")
+                    extra = src.get("extra", {})
+                    if not isinstance(extra, dict):
+                        extra = {}
+                    extra["context_shuffle_from"] = src.get("disease", "")
+                    extra["context_shuffle_to"] = dst_cancer
+                    extra["audit_tau"] = float(tau)
+                    src["extra"] = extra
+
+                    # stress test: swap disease field
+                    src["disease"] = dst_cancer
+
+                    outdir = OUT_DIR / cancer / "shuffled_context" / f"tau_{tau:.2f}"
+                    outdir.mkdir(parents=True, exist_ok=True)
+
+                    tmp_card = outdir / "sample_card.json"
+                    _write_json(tmp_card, src)
+
+                    _run_one(
+                        benchmark_id=benchmark_id,
+                        cancer=cancer,
+                        variant="shuffled_context",
+                        tau=tau,
+                        evidence_table=ev,
+                        sample_card=tmp_card,
+                        outdir=outdir,
+                        seed=args.seed,
+                    )
 
     print("[run_fig2] OK")
     print(f"  out: {OUT_DIR}")

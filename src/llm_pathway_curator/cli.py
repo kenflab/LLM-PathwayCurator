@@ -53,7 +53,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         force=bool(args.force),
         seed=args.seed,
         run_meta_name=str(args.run_meta),
+        tau=args.tau,
     )
+
     run_pipeline(cfg)
 
 
@@ -111,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filename for run metadata JSON inside outdir",
     )
     p_run.set_defaults(func=cmd_run)
+
+    p_run.add_argument(
+        "--tau",
+        type=float,
+        default=None,
+        help="Audit stability threshold tau (overrides sample_card extra.audit_tau if set)",
+    )
 
     p_adapt = sub.add_parser(
         "adapt", help="Convert external enrichment outputs to EvidenceTable TSV"

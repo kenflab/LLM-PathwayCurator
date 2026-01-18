@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import platform
 import sys
@@ -29,6 +30,7 @@ class RunConfig:
     force: bool = False
     seed: int | None = None
     run_meta_name: str = "run_meta.json"
+    tau: float | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,20 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["step"] = step
         _write_json(meta_path, meta)
 
+    def _call_compat(fn, /, *args, **kwargs):
+        """
+        Call fn(*args, **kwargs) but drop kwargs not accepted by fn signature.
+        This keeps backward compatibility when optional params (e.g., tau) are added.
+        """
+        try:
+            sig = inspect.signature(fn)
+            allowed = set(sig.parameters.keys())
+            filt = {k: v for k, v in kwargs.items() if k in allowed}
+            return fn(*args, **filt)
+        except Exception:
+            # If signature introspection fails, fall back to no extra kwargs.
+            return fn(*args)
+
     try:
         # 0) normalize inputs under internal contract
         _mark_step("normalize_inputs")
@@ -210,7 +226,11 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         # 4) mechanical audit (decider)
         _mark_step("audit")
-        audited = audit_claims(proposed, distilled2, card)
+        audited = _call_compat(audit_claims, proposed, distilled2, card, tau=cfg.tau)
+        for c in ["abstain_reason", "fail_reason", "audit_notes"]:
+            if c in audited.columns:
+                audited[c] = audited[c].fillna("")
+
         audit_path = outdir / "audit_log.tsv"
         _write_tsv(audited, audit_path)
         meta["artifacts"]["audit_log_tsv"] = str(audit_path)
@@ -222,12 +242,15 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         # 6) report.jsonl (stable contract)
         _mark_step("report_jsonl")
-        jsonl_path = write_report_jsonl(
+        jsonl_path = _call_compat(
+            write_report_jsonl,
             audit_log=audited,
             card=card,
             outdir=str(outdir),
             run_id=rid,
+            tau=cfg.tau,
         )
+
         meta["artifacts"]["report_jsonl"] = str(jsonl_path)
 
         meta["status"] = "ok"

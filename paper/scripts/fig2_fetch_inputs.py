@@ -2,12 +2,9 @@
 # paper/scripts/fig2_fetch_inputs.py
 from __future__ import annotations
 
-import gzip
 import shutil
 import urllib.request
 from pathlib import Path
-
-import synapseclient  # type: ignore
 
 # =========================
 # Fixed paths (v1)
@@ -17,16 +14,18 @@ SD = ROOT / "source_data" / "PANCAN_TP53_v1"
 RAW = SD / "raw"
 
 # =========================
-# Inputs (edit if needed)
+# Public URLs (no auth)
 # =========================
-SYN_EXPR = "syn4976369.3"  # PANCAN batch-normalized expression (Synapse entity)
-SYN_MC3 = (
-    "syn7824274"  # MC3 public MAF (Synapse entity; may be folder or file depending on permissions)
+# Expression (EB++ adjusted; the one you pasted)
+EXPR_URL = "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/EB%2B%2BAdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.xena.gz"
+
+# MC3 mutation (Xena format; the one you pasted)
+MC3_URL = (
+    "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/mc3.v0.2.8.PUBLIC.xena.gz"
 )
 
-# Phenotype mapping (needed to assign TCGA barcode -> cancer type)
-# If this URL ever changes, update it here.
-XENA_PHENO_URL = "https://gdc.xenahubs.net/download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz"
+# Phenotype mapping (barcode -> cancer type)
+XENA_PHENO_URL = "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz"
 
 
 def _die(msg: str) -> None:
@@ -49,81 +48,20 @@ def _download_url(url: str, out_path: Path) -> None:
         _die(f"[fetch_inputs] URL download failed: {url}\n{e}")
 
 
-def _syn_login() -> synapseclient.Synapse:
-    syn = synapseclient.Synapse(skip_checks=True)
-    try:
-        # Works if SYNAPSE_AUTH_TOKEN is set, or ~/.synapseConfig exists
-        syn.login(silent=True)
-    except Exception as e:
-        _die(
-            "[fetch_inputs] Synapse login failed.\n"
-            "Set SYNAPSE_AUTH_TOKEN or configure ~/.synapseConfig.\n"
-            f"{e}"
-        )
-    return syn
-
-
-def _syn_get_to(syn: synapseclient.Synapse, syn_id: str, out_dir: Path) -> Path:
-    """
-    Download a Synapse entity to out_dir.
-    If syn_id is a file, return the downloaded file path.
-    If it is a folder, Synapse will download as a directory; we fail-fast and ask
-    user to point to a file entity.
-    """
-    try:
-        ent = syn.get(syn_id, downloadLocation=str(out_dir))
-    except Exception as e:
-        _die(f"[fetch_inputs] Synapse download failed for {syn_id}\n{e}")
-
-    p = Path(ent.path).resolve()
-    if p.is_dir():
-        _die(
-            f"[fetch_inputs] Synapse ID {syn_id} downloaded as a directory:\n{p}\n"
-            "For v1, please set SYN_EXPR/SYN_MC3 to a FILE entity ID (not a folder)."
-        )
-    if not p.exists():
-        _die(f"[fetch_inputs] Synapse returned non-existent path for {syn_id}: {p}")
-    return p
-
-
-def _maybe_gzip_copy(src: Path, dst: Path) -> None:
-    """
-    If src is already .gz, copy as-is.
-    Else gzip it to dst (which should end with .gz).
-    """
-    _ensure_dir(dst.parent)
-    if src.suffix == ".gz":
-        shutil.copy2(src, dst)
-        return
-
-    if dst.suffix != ".gz":
-        _die(f"[fetch_inputs] dst must end with .gz: {dst}")
-
-    with src.open("rb") as r, gzip.open(dst, "wb") as w:
-        shutil.copyfileobj(r, w)
-
-
 def main() -> None:
     _ensure_dir(RAW)
 
-    syn = _syn_login()
-
-    # --- expression ---
-    expr_src = _syn_get_to(syn, SYN_EXPR, RAW)
-    expr_out = RAW / "expression.tsv.gz"
-    _maybe_gzip_copy(expr_src, expr_out)
-
-    # --- MC3 ---
-    mc3_src = _syn_get_to(syn, SYN_MC3, RAW)
-    mc3_out = RAW / "mc3.v0.2.8.PUBLIC.maf.gz"
-    _maybe_gzip_copy(mc3_src, mc3_out)
-
-    # --- phenotype ---
+    expr_out = RAW / "expression.xena.gz"
+    mc3_out = RAW / "mc3.v0.2.8.PUBLIC.xena.gz"
     pheno_out = RAW / "TCGA_phenotype_dense.tsv.gz"
+
+    if not expr_out.exists():
+        _download_url(EXPR_URL, expr_out)
+    if not mc3_out.exists():
+        _download_url(MC3_URL, mc3_out)
     if not pheno_out.exists():
         _download_url(XENA_PHENO_URL, pheno_out)
 
-    # minimal success signal
     for p in [expr_out, mc3_out, pheno_out]:
         if not p.exists() or p.stat().st_size == 0:
             _die(f"[fetch_inputs] expected non-empty file: {p}")
