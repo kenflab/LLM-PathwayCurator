@@ -16,17 +16,45 @@ REQUIRED_EVIDENCE_COLS = [
     "evidence_genes",
 ]
 
+# Keep aliases conservative but cover common real-world headers.
 ALIASES = {
+    # term id/name
     "term": "term_id",
+    "termid": "term_id",
+    "term_id": "term_id",
     "id": "term_id",
+    "pathway": "term_id",
+    "geneset": "term_id",
+    "gene_set": "term_id",
     "description": "term_name",
     "name": "term_name",
+    "term_name": "term_name",
+    "desc": "term_name",
+    # source/stat/qval
     "nes": "stat",
+    "score": "stat",
+    "logp": "stat",
+    "log_p": "stat",
+    "-log10q": "stat",
+    "-log10_q": "stat",
+    "-log10(q)": "stat",
+    "pval": "qval",
+    "p_value": "qval",
+    "p-value": "qval",
     "padj": "qval",
+    "adj_p": "qval",
     "fdr": "qval",
+    "qval": "qval",
+    "q_value": "qval",
+    "q-value": "qval",
+    "qvalue": "qval",
+    # genes
     "leadingedge": "evidence_genes",
     "leading_edge": "evidence_genes",
+    "leadingedgegenes": "evidence_genes",
     "genes": "evidence_genes",
+    "gene": "evidence_genes",
+    "symbols": "evidence_genes",
 }
 
 ReadMode = Literal["tsv", "sniff", "whitespace"]
@@ -98,17 +126,12 @@ class EvidenceTable:
             "-1",
         }:
             return "down"
-        if s in {"na", "none", "", "nan"}:
-            return "na"
         return "na"
 
     @staticmethod
     def _clean_gene_symbol(g: str) -> str:
-        # minimal, conservative cleaning
         s = g.strip().strip('"').strip("'")
-        # collapse internal whitespace
         s = " ".join(s.split())
-        # common artifacts: trailing commas or semicolons already split, but be safe
         s = s.strip(",;|")
         return s
 
@@ -116,6 +139,8 @@ class EvidenceTable:
     def _parse_genes(cls, x: object) -> list[str]:
         if cls._is_na_scalar(x):
             return []
+
+        # Already list-like
         if isinstance(x, (list, tuple, set)):
             genes = [cls._clean_gene_symbol(str(g)) for g in x]
             genes = [g for g in genes if g]
@@ -123,10 +148,17 @@ class EvidenceTable:
             s = str(x).strip()
             if not s or s.lower() in {"na", "nan", "none"}:
                 return []
+            # normalize common delimiters
             s = s.replace(";", ",").replace("|", ",")
-            genes = [cls._clean_gene_symbol(g) for g in s.split(",")]
+            # sometimes exported as space-separated tokens without commas
+            if "," not in s and " " in s:
+                parts = s.split()
+            else:
+                parts = s.split(",")
+            genes = [cls._clean_gene_symbol(g) for g in parts]
             genes = [g for g in genes if g]
 
+        # de-duplicate while preserving order
         seen: set[str] = set()
         out: list[str] = []
         for g in genes:
@@ -165,14 +197,20 @@ class EvidenceTable:
         dup = df.columns[df.columns.duplicated()].tolist()
         if dup:
             raise ValueError(
-                f"EvidenceTable has duplicate columns after aliasing: {sorted(set(dup))}. "
-                f"Columns={list(df.columns)}"
+                "EvidenceTable has duplicate columns after aliasing: "
+                f"{sorted(set(dup))}. "
+                f"read_mode={rr.read_mode}. "
+                f"raw_columns={list(df_raw.columns)} "
+                f"mapped_columns={list(df.columns)}"
             )
 
         missing = [c for c in REQUIRED_EVIDENCE_COLS if c not in df.columns]
         if missing:
             raise ValueError(
-                f"EvidenceTable missing columns: {missing}. Found columns: {list(df.columns)}"
+                f"EvidenceTable missing columns: {missing}. "
+                f"read_mode={rr.read_mode}. "
+                f"raw_columns={list(df_raw.columns)} "
+                f"mapped_columns={list(df.columns)}"
             )
 
         df["term_id"] = df["term_id"].map(cls._clean_required_str)
@@ -191,7 +229,8 @@ class EvidenceTable:
             i = int(df.index[bad_required][0])
             raise ValueError(
                 f"EvidenceTable has empty required fields at row index={i}. "
-                f"Fix: ensure term_id/term_name/source are non-empty."
+                f"read_mode={rr.read_mode}. "
+                "Fix: ensure term_id/term_name/source are non-empty."
             )
 
         if df["stat"].isna().any():
@@ -199,7 +238,8 @@ class EvidenceTable:
             bad = df.loc[i, ["term_id", "term_name", "source"]].to_dict()
             raise ValueError(
                 f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
-                f"Fix: provide a numeric stat (e.g., NES, -log10(q), LogP)."
+                f"read_mode={rr.read_mode}. "
+                "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP)."
             )
 
         empty_ev = df["evidence_genes"].map(len).eq(0)
@@ -208,12 +248,11 @@ class EvidenceTable:
             raise ValueError(
                 f"EvidenceTable has empty evidence_genes at row index={i} "
                 f"(term_id={df.loc[i, 'term_id']}). "
-                f"Fix: provide overlap genes (ORA) or leadingEdge (GSEA/fgsea)."
+                f"read_mode={rr.read_mode}. "
+                "Fix: provide overlap genes (ORA) or leadingEdge (GSEA/fgsea)."
             )
 
-        # Attach read_mode for provenance (non-breaking: stored as attribute on df)
         df.attrs["read_mode"] = rr.read_mode
-
         return cls(df=df)
 
     def summarize(self) -> dict[str, object]:
@@ -231,8 +270,23 @@ class EvidenceTable:
 
     def write_tsv(self, path: str) -> None:
         out = self.df.copy()
-        if "evidence_genes_str" not in out.columns:
-            out["evidence_genes_str"] = out["evidence_genes"].map(lambda xs: ",".join(xs))
+
+        # robust stringify: handle both list-like and scalar strings
+        if "evidence_genes_str" in out.columns:
+            ev_str = out["evidence_genes_str"]
+        else:
+
+            def _stringify(x: object) -> str:
+                if self._is_na_scalar(x):
+                    return ""
+                if isinstance(x, (list, tuple, set)):
+                    return ",".join([str(g) for g in x])
+                return str(x)
+
+            ev_str = (
+                out["evidence_genes"].map(_stringify) if "evidence_genes" in out.columns else ""
+            )
+
         out = out.drop(columns=["evidence_genes"], errors="ignore")
-        out = out.rename(columns={"evidence_genes_str": "evidence_genes"})
+        out["evidence_genes"] = ev_str
         out.to_csv(path, sep="\t", index=False)

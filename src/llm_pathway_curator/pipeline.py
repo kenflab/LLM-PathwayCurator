@@ -39,6 +39,15 @@ class RunResult:
     meta_path: str
 
 
+def _require_file(path: str, label: str) -> Path:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    if not p.is_file():
+        raise IsADirectoryError(f"{label} is not a file: {path}")
+    return p
+
+
 def _file_fingerprint(path: str) -> dict[str, Any]:
     p = Path(path)
     st = p.stat()
@@ -56,10 +65,14 @@ def _safe_mkdir_outdir(outdir: str, force: bool) -> None:
 
 
 def _write_json(path: str | Path, obj: Any) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    """Atomic-ish JSON write: write temp then replace."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
         f.write("\n")
+    tmp.replace(path)
 
 
 def _write_tsv(df: pd.DataFrame, path: Path) -> None:
@@ -70,6 +83,18 @@ def _write_tsv(df: pd.DataFrame, path: Path) -> None:
 def _sha256_text(s: str) -> str:
     h = hashlib.sha256()
     h.update(s.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _sha256_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Streaming sha256 for large files."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk_size)
+            if not b:
+                break
+            h.update(b)
     return h.hexdigest()
 
 
@@ -94,6 +119,10 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     For reproducibility, it writes run metadata (run_meta.json) and stable artifacts
     into cfg.outdir.
     """
+    # Validate inputs early (API users may bypass CLI)
+    _require_file(cfg.evidence_table, "evidence_table")
+    _require_file(cfg.sample_card, "sample_card")
+
     _safe_mkdir_outdir(cfg.outdir, cfg.force)
 
     outdir = Path(cfg.outdir)
@@ -125,12 +154,13 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         # 0) normalize inputs under internal contract
         _mark_step("normalize_inputs")
         ev_tbl = EvidenceTable.read_tsv(cfg.evidence_table)
+
         ev_norm_path = outdir / "evidence.normalized.tsv"
         ev_tbl.write_tsv(str(ev_norm_path))
         meta["artifacts"]["evidence_normalized_tsv"] = str(ev_norm_path)
 
-        norm_text = ev_norm_path.read_text(encoding="utf-8")
-        meta["inputs"]["evidence_normalized_sha256"] = _sha256_text(norm_text)
+        # Streaming hash (avoid loading the whole TSV into memory)
+        meta["inputs"]["evidence_normalized_sha256"] = _sha256_file(ev_norm_path)
 
         ev = ev_tbl.df.copy()
         card = SampleCard.from_json(cfg.sample_card)
@@ -142,6 +172,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         # 1) distill (evidence hygiene)
         _mark_step("distill")
         distilled = distill_evidence(ev, card, seed=cfg.seed)
+
         dist_path = outdir / "distilled.tsv"
         _write_tsv(distilled, dist_path)
         meta["artifacts"]["distilled_tsv"] = str(dist_path)

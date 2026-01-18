@@ -11,14 +11,48 @@ from .pipeline import RunConfig, run_pipeline
 from .schema import EvidenceTable
 
 
+def _p(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def _require_file(path: Path, label: str) -> None:
+    if not path.exists():
+        raise SystemExit(f"[ERROR] {label} not found: {path}")
+    if not path.is_file():
+        raise SystemExit(f"[ERROR] {label} is not a file: {path}")
+
+
+def _ensure_outdir(outdir: Path, force: bool) -> None:
+    if outdir.exists() and not outdir.is_dir():
+        raise SystemExit(f"[ERROR] outdir exists but is not a directory: {outdir}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    # refuse writing into non-empty outdir unless --force
+    if not force:
+        try:
+            next(outdir.iterdir())
+            raise SystemExit(
+                f"[ERROR] outdir is not empty: {outdir} (use --force to allow overwrite)"
+            )
+        except StopIteration:
+            pass  # empty OK
+
+
 def cmd_run(args: argparse.Namespace) -> None:
+    evidence_table = _p(args.evidence_table)
+    sample_card = _p(args.sample_card)
+    outdir = _p(args.outdir)
+
+    _require_file(evidence_table, "--evidence-table")
+    _require_file(sample_card, "--sample-card")
+    _ensure_outdir(outdir, force=bool(args.force))
+
     cfg = RunConfig(
-        evidence_table=args.evidence_table,
-        sample_card=args.sample_card,
-        outdir=args.outdir,
-        force=args.force,
+        evidence_table=str(evidence_table),
+        sample_card=str(sample_card),
+        outdir=str(outdir),
+        force=bool(args.force),
         seed=args.seed,
-        run_meta_name=args.run_meta,
+        run_meta_name=str(args.run_meta),
     )
     run_pipeline(cfg)
 
@@ -28,23 +62,32 @@ AdaptFormat = Literal["metascape", "fgsea"]
 
 def cmd_adapt(args: argparse.Namespace) -> None:
     fmt: AdaptFormat = args.format
-    in_path = args.input
-    out_path = args.output
+    in_path = _p(args.input)
+    out_path = _p(args.output)
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _require_file(in_path, "--input")
+    if out_path.exists() and out_path.is_dir():
+        raise SystemExit(f"[ERROR] --output is a directory: {out_path}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "metascape":
         cfg = MetascapeAdapterConfig(
             include_summary=bool(args.include_summary),
             source_name=str(args.source_name or "metascape"),
         )
-        convert_metascape_table_to_evidence_tsv(in_path, out_path, config=cfg)
+        convert_metascape_table_to_evidence_tsv(str(in_path), str(out_path), config=cfg)
     elif fmt == "fgsea":
-        convert_fgsea_table_to_evidence_tsv(in_path, out_path)
+        convert_fgsea_table_to_evidence_tsv(str(in_path), str(out_path))
     else:
-        raise ValueError(f"Unknown format: {fmt}")
+        raise SystemExit(f"[ERROR] Unknown format: {fmt}")
 
-    EvidenceTable.read_tsv(out_path)
+    # validate EvidenceTable TSV (contract gate)
+    try:
+        EvidenceTable.read_tsv(str(out_path))
+    except Exception as e:
+        raise SystemExit(f"[ERROR] Invalid EvidenceTable TSV written: {out_path}\n{e}") from e
+
     print(f"[OK] wrote EvidenceTable TSV: {out_path}")
 
 
@@ -83,7 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="(metascape) include *_Summary rows (default: exclude)",
     )
     p_adapt.add_argument(
-        "--source-name", default=None, help="(metascape) override source field (default: metascape)"
+        "--source-name",
+        default=None,
+        help="(metascape) override source field (default: metascape)",
     )
     p_adapt.set_defaults(func=cmd_adapt)
 

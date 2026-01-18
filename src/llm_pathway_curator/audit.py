@@ -20,6 +20,8 @@ from .audit_reasons import (
 from .claim_schema import Claim
 from .sample_card import SampleCard
 
+_NA_TOKENS = {"", "na", "nan", "none", "NA"}
+
 
 def _is_na_scalar(x: Any) -> bool:
     """pd.isna is unsafe for list-like; only treat scalars here."""
@@ -33,9 +35,6 @@ def _is_na_scalar(x: Any) -> bool:
         return False
 
 
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
-
-
 def _parse_ids(x: Any) -> list[str]:
     """
     Parse comma/semicolon separated ids into list[str].
@@ -47,7 +46,7 @@ def _parse_ids(x: Any) -> list[str]:
         items = [str(t).strip() for t in x if str(t).strip()]
     else:
         s = str(x).strip()
-        if not s or s in _NA_TOKENS or s.lower() in _NA_TOKENS:
+        if not s or s in _NA_TOKENS or s.lower() in {t.lower() for t in _NA_TOKENS}:
             return []
         s = s.replace(";", ",")
         items = [t.strip() for t in s.split(",") if t.strip()]
@@ -55,7 +54,7 @@ def _parse_ids(x: Any) -> list[str]:
     seen: set[str] = set()
     uniq: list[str] = []
     for t in items:
-        if t in _NA_TOKENS or t.lower() in _NA_TOKENS:
+        if t in _NA_TOKENS or t.lower() in {x.lower() for x in _NA_TOKENS}:
             continue
         if t not in seen:
             seen.add(t)
@@ -64,31 +63,36 @@ def _parse_ids(x: Any) -> list[str]:
 
 
 def _norm_gene_id(g: str) -> str:
-    """
-    Minimal normalization to reduce spurious drift:
-    - strip
-    - uppercase (HGNC-like). If you use Ensembl IDs, this keeps them stable too.
-    """
+    """Minimal normalization to reduce spurious drift (HGNC-like)."""
     return str(g).strip().upper()
 
 
 def _hash_gene_set(genes: list[str]) -> str:
     """
-    Stable short hash for an ordered gene list (v0).
-    We normalize IDs to avoid casing drift.
-    NOTE: we keep order as produced by our union builder (deterministic).
+    Audit-grade gene_set_hash should be SET-stable:
+      - same gene set -> same hash, regardless of order
+      - normalize IDs to reduce casing drift
     """
-    payload = ",".join([_norm_gene_id(g) for g in genes if str(g).strip()])
+    uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _hash_term_ids(term_ids: list[str]) -> str:
+    """Set-stable hash for referenced term IDs (fallback contradiction key)."""
+    uniq = sorted({str(t).strip() for t in term_ids if str(t).strip()})
+    payload = ",".join(uniq)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _looks_like_hex_hash(x: Any) -> bool:
+    """
+    v1 contract uses 12-hex short hash.
+    """
     if _is_na_scalar(x):
         return False
     s = str(x).strip().lower()
-    if not s:
-        return False
-    if len(s) < 8:
+    if len(s) != 12:
         return False
     return all(ch in "0123456789abcdef" for ch in s)
 
@@ -114,6 +118,7 @@ def _get_tau_default(card: SampleCard) -> float:
     except Exception:
         pass
 
+    # v1 default (conservative)
     return 0.8
 
 
@@ -151,7 +156,9 @@ def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
             v = row.get(k)
             if v is None or _is_na_scalar(v):
                 continue
-            if isinstance(v, str) and (v.strip() == "" or v.strip().lower() in _NA_TOKENS):
+            if isinstance(v, str) and (
+                v.strip() == "" or v.strip().lower() in {t.lower() for t in _NA_TOKENS}
+            ):
                 continue
             return v
     return None
@@ -161,14 +168,12 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
     """
     Source of truth: claim_json (Claim schema).
     Returns: (term_ids, gene_ids, gene_set_hash)
-    Note: claim_schema v1 may evolve; keep robust parsing here.
     """
     try:
         obj = json.loads(cj)
     except Exception:
         return ([], [], None)
 
-    # Try new bundle style: claim.evidence_refs.{term_ids,gene_ids,gene_set_hash}
     ev = None
     if isinstance(obj, dict):
         ev = (
@@ -189,6 +194,29 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
     gene_ids = _parse_ids(ev.get("gene_ids") or ev.get("gene_id") or "")
     gsh = ev.get("gene_set_hash")
     return (term_ids, gene_ids, gsh)
+
+
+def _extract_direction_from_claim_json(cj: str) -> str:
+    """
+    Robust direction extraction (fallback).
+    Returns lower-case direction in {up,down,na}.
+    """
+    try:
+        obj = json.loads(cj)
+    except Exception:
+        return "na"
+
+    d = None
+    if isinstance(obj, dict):
+        # Claim schema in select.py puts direction at top-level
+        d = obj.get("direction")
+        if d is None and isinstance(obj.get("claim"), dict):
+            d = obj["claim"].get("direction")
+
+    s = "" if d is None else str(d).strip().lower()
+    if s in {"up", "down"}:
+        return s
+    return "na"
 
 
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
@@ -221,7 +249,6 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
-    # unknown token => schema violation (do not ABSTAIN)
     out.at[i, "status"] = "FAIL"
     out.at[i, "contradiction_ok"] = False
     out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
@@ -234,7 +261,7 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     has_any = any(c in out.columns for c in ["stress_status", "stress_ok", "stress_reason"])
     if not has_any:
         # v1 policy: do NOT auto-ABSTAIN just because stress is absent.
-        out.at[i, "stress_ok"] = False
+        out.at[i, "stress_ok"] = pd.NA
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
         return
 
@@ -270,7 +297,6 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     if st == "ABSTAIN":
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
-        # Only accept vocab-stable reasons; otherwise fall back to inconclusive_stress.
         rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "abstain_reason"] = rs
         note = "stress=ABSTAIN"
@@ -295,7 +321,6 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
-    # unknown token => schema violation
     out.at[i, "status"] = "FAIL"
     out.at[i, "stress_ok"] = False
     out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
@@ -336,6 +361,47 @@ def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
             )
 
 
+def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
+    """
+    Intra-run contradiction check (v1):
+      - Among PASS claims only
+      - If same evidence key has both direction=up and direction=down =>
+        FAIL_CONTRADICTION for all involved
+
+    Evidence key priority:
+      1) gene_set_hash_effective (computed from EvidenceTable OR validated provided hash)
+      2) term_ids_set_hash (fallback)
+    """
+    if "evidence_key" not in out.columns:
+        return
+    if "direction_norm" not in out.columns:
+        return
+
+    df = out.copy()
+    df["status_u"] = df["status"].astype(str).str.strip().str.upper()
+    df = df[df["status_u"] == "PASS"].copy()
+
+    if df.empty:
+        return
+
+    # group PASS claims by evidence_key
+    grouped = df.groupby("evidence_key", dropna=False)
+
+    for key, g in grouped:
+        if _is_na_scalar(key) or str(key).strip() == "":
+            continue
+        dirs = set(g["direction_norm"].astype(str).tolist())
+        if ("up" in dirs) and ("down" in dirs):
+            idxs = g.index.tolist()
+            note = f"intra-run contradiction: evidence_key={key} has both up and down"
+            for i in idxs:
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "fail_reason"] = FAIL_CONTRADICTION
+                out.at[i, "contradiction_ok"] = False
+                out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+                _enforce_reason_vocab(out, i)
+
+
 def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
     """
     Mechanical audit (v1, tool-facing; stress/contradiction are optional inputs).
@@ -362,12 +428,22 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
     if "term_survival_agg" not in out.columns:
         out["term_survival_agg"] = pd.NA
 
+    # For intra-run contradiction
+    if "gene_set_hash_effective" not in out.columns:
+        out["gene_set_hash_effective"] = ""
+    if "term_ids_set_hash" not in out.columns:
+        out["term_ids_set_hash"] = ""
+    if "evidence_key" not in out.columns:
+        out["evidence_key"] = ""
+    if "direction_norm" not in out.columns:
+        out["direction_norm"] = "na"
+
     # Prepare distilled lookup
     key_col = "term_uid" if "term_uid" in distilled.columns else "term_id"
 
     term_key = distilled[key_col].astype(str).str.strip()
     term_key = term_key[~term_key.isin(_NA_TOKENS)]
-    term_key = term_key[~term_key.str.lower().isin(_NA_TOKENS)]
+    term_key = term_key[~term_key.str.lower().isin({t.lower() for t in _NA_TOKENS})]
     known_terms = set(term_key.tolist())
 
     has_survival = "term_survival" in distilled.columns
@@ -390,7 +466,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             distilled["evidence_genes"],
             strict=True,
         ):
-            if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
+            if tk in _NA_TOKENS or tk.lower() in {t.lower() for t in _NA_TOKENS}:
                 continue
             if isinstance(xs, (list, tuple, set)):
                 genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
@@ -407,7 +483,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             distilled["evidence_genes_str"].astype(str),
             strict=True,
         ):
-            if tk in _NA_TOKENS or tk.lower() in _NA_TOKENS:
+            if tk in _NA_TOKENS or tk.lower() in {t.lower() for t in _NA_TOKENS}:
                 continue
             genes = [_norm_gene_id(g) for g in _parse_ids(s)]
             gs = set([g for g in genes if g])
@@ -436,6 +512,12 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             out.at[i, "audit_notes"] = f"claim_json schema violation: {type(e).__name__}"
             _enforce_reason_vocab(out, i)
             continue
+
+        # direction (for contradiction check)
+        d = str(row.get("direction", "")).strip().lower()
+        if d not in {"up", "down", "na"}:
+            d = _extract_direction_from_claim_json(cj_str)
+        out.at[i, "direction_norm"] = d if d in {"up", "down"} else "na"
 
         # Per-claim tau override
         tau = tau_default
@@ -468,7 +550,6 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             )
             or ""
         )
-        # gene_set_hash can be None/empty
         gsh = (
             gsh_cj
             if (gsh_cj is not None and not _is_na_scalar(gsh_cj) and str(gsh_cj).strip())
@@ -495,7 +576,7 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             _enforce_reason_vocab(out, i)
             continue
 
-        # union evidence genes across referenced terms (deterministic order)
+        # union evidence genes across referenced terms
         ev_union: list[str] = []
         ev_seen: set[str] = set()
         for t in term_ids:
@@ -504,7 +585,15 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                     ev_seen.add(g)
                     ev_union.append(g)
 
-        # If user provided gene_set_hash, EvidenceTable MUST allow us to compute it
+        # compute set-stable gene_set_hash from EvidenceTable if possible
+        computed_gsh = ""
+        if ev_union:
+            computed_gsh = _hash_gene_set(ev_union)
+
+        # store term_ids_set_hash (fallback contradiction key)
+        out.at[i, "term_ids_set_hash"] = _hash_term_ids(term_ids)
+
+        # If user provided gene_set_hash, EvidenceTable MUST allow us to compute/verify it
         if _looks_like_hex_hash(gsh):
             if not ev_union:
                 out.at[i, "status"] = "FAIL"
@@ -513,15 +602,23 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                 out.at[i, "audit_notes"] = "gene_set_hash provided but evidence_genes unavailable"
                 _enforce_reason_vocab(out, i)
                 continue
-            computed = _hash_gene_set(ev_union)
+
             gsh_norm = str(gsh).strip().lower()
-            if computed != gsh_norm:
+            if computed_gsh.lower() != gsh_norm:
                 out.at[i, "status"] = "FAIL"
                 out.at[i, "link_ok"] = False
                 out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
-                out.at[i, "audit_notes"] = f"gene_set_hash mismatch: {computed} != {gsh_norm}"
+                out.at[i, "audit_notes"] = (
+                    f"gene_set_hash mismatch: {computed_gsh.lower()} != {gsh_norm}"
+                )
                 _enforce_reason_vocab(out, i)
                 continue
+
+            # verified provided hash becomes effective key
+            out.at[i, "gene_set_hash_effective"] = gsh_norm
+        else:
+            # no provided hash; use computed if available
+            out.at[i, "gene_set_hash_effective"] = computed_gsh
 
         # Fallback: overlap check if gene_ids available
         if gene_ids:
@@ -542,6 +639,13 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
                 )
                 _enforce_reason_vocab(out, i)
                 continue
+
+        # set evidence_key for intra-run contradiction
+        # (priority: gene_set_hash_effective else term_ids_set_hash)
+        evk = str(out.at[i, "gene_set_hash_effective"]).strip()
+        if not evk:
+            evk = str(out.at[i, "term_ids_set_hash"]).strip()
+        out.at[i, "evidence_key"] = evk
 
         # 2) stability gate
         if (not has_survival) or (surv is None):
@@ -592,11 +696,14 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
             continue
 
         _apply_external_stress(out, i, row)
-        if out.at[i, "status"] in {"FAIL", "ABSTAIN"}:
+        if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
             _enforce_reason_vocab(out, i)
             continue
 
-        # Enforce reason vocabulary contract (must be last)
+        # Enforce reason vocabulary contract (must be last per-row)
         _enforce_reason_vocab(out, i)
+
+    # ---- Intra-run contradiction check (internal) ----
+    _apply_intra_run_contradiction(out)
 
     return out
