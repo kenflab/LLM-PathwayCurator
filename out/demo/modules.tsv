@@ -1,3 +1,0 @@
-module_id	n_terms	n_genes	rep_gene_ids	term_ids	rep_gene_ids_str	term_ids_str
-M0001__5dccc39b	2	7	['ATM', 'ATR', 'BAX', 'BRCA1', 'CDKN1A', 'MDM2', 'TP53']	['fgsea:HALLMARK_P53_PATHWAY', 'metascape:GO:0006977']	ATM,ATR,BAX,BRCA1,CDKN1A,MDM2,TP53	fgsea:HALLMARK_P53_PATHWAY,metascape:GO:0006977
-M0002__ea9cd2d8	1	4	['CCNB1', 'CDK1', 'MKI67', 'TOP2A']	['fgsea:HALLMARK_G2M_CHECKPOINT']	CCNB1,CDK1,MKI67,TOP2A	fgsea:HALLMARK_G2M_CHECKPOINT

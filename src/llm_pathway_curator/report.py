@@ -381,8 +381,11 @@ def write_report_jsonl(
             context_keys = _sorted_list(row.get("context_keys_used"))
             # no inference: if missing, keep empty (audit layer should decide)
 
+            # evidence key (MUST be defined before evidence_refs uses it)
+            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
+
             # evidence refs (column-name tolerant)
-            module_id = str(_get_first_present(row, ["module_id"]) or "").strip()
+            module_ids = _sorted_list(_get_first_present(row, ["module_ids", "module_id"]) or [])
             term_ids = _sorted_list(
                 _get_first_present(row, ["term_ids", "term_id", "term_id(s)"]) or []
             )
@@ -391,24 +394,19 @@ def write_report_jsonl(
             )
 
             evidence = {
-                "module_id": module_id,
-                "gene_ids": gene_ids,
+                "module_ids": module_ids,
                 "term_ids": term_ids,
+                "gene_ids": gene_ids,
                 "gene_set_hash": gene_set_hash,
             }
-
-            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
 
             claim_id = str(row.get("claim_id", "")).strip()
             if not claim_id:
                 raise ValueError("audit_log missing claim_id value")
 
-            # numeric metrics
-            if "term_survival_agg" in audit_log.columns:
-                v = pd.to_numeric(audit_log.loc[i, "term_survival_agg"], errors="coerce")
-                survival_val = 0.0 if pd.isna(v) else float(v)
-            else:
-                survival_val = 0.0
+            # numeric metrics (use precomputed series; NA -> 0.0 for safety)
+            v = surv_s.loc[i]
+            survival_val = 0.0 if pd.isna(v) else float(v)
 
             context_val = None
             if ctx_s is not None:
