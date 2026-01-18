@@ -1,0 +1,43 @@
+# docker/docker-compose.yml
+services:
+  llm-pathway-curator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: llm-pathway-curator:official
+    ports:
+      - "8888:8888"
+    volumes:
+      - ..:/work
+      - ../paper/msbio_data:/data
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # local LLM
+      LPC_OLLAMA_HOST: http://ollama:11434
+      LPC_OLLAMA_MODEL: llama3.1:8b
+
+      # deterministic-ish runs (recommended)
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      PYTHONHASHSEED: "0"
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama:/root/.ollama
+
+  msbio2:
+    profiles: ["msbio"]
+    image: metadocker8/msbio2:latest
+    volumes:
+      - ../paper/msbio_data:/data
+    # NOTE: MSBio can be memory-hungry. Give Docker Desktop >=8GB if you run large jobs.
+
+volumes:
+  ollama:

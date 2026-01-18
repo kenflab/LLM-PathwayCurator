@@ -1,4 +1,10 @@
 figure_id,panel,script,input_paths,output_paths,notes
-Fig2,prep,paper/scripts/bench_fig2.py,"report.jsonl + labels.tsv",paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,"tau sweep; label_policy=R1_only; FAIL from audit_flags"
-Fig2,A,paper/scripts/fig2_plot.py,paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,paper/source_data/PANCAN_TP53_v1/fig/Fig2_HNSC.pdf,"by_cancer main panel"
-FigS2,all,paper/scripts/fig2_plot_multipanel.py,paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,paper/source_data/PANCAN_TP53_v1/fig/Fig2_Supp_multipanel.pdf,"multipanel across cancers"
+Fig2,fetch,paper/scripts/fig2_fetch_inputs.py,"Synapse:syn4976369.3; Synapse:syn7824274","paper/source_data/PANCAN_TP53_v1/raw/expression.*; paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.maf.gz","downloads raw inputs; requires Synapse auth"
+Fig2,groups,paper/scripts/fig2_make_groups.py,"paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.maf.gz","paper/source_data/PANCAN_TP53_v1/derived/groups/*.groups.tsv","TP53 mut/wt per cancer; FILTER=PASS"
+Fig2,cards,paper/scripts/fig2_make_sample_cards.py,"(none)","paper/source_data/PANCAN_TP53_v1/sample_cards/*.sample_card.json","template sample cards per cancer"
+Fig2,rank,paper/scripts/fig2_deg_rank.R,"paper/source_data/PANCAN_TP53_v1/raw/expression.*; paper/source_data/PANCAN_TP53_v1/derived/groups/<CANCER>.groups.tsv","paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv","DE ranking per cancer (TP53 mut vs wt)"
+Fig2,fgsea,paper/scripts/fig2_fgsea_to_evidence_table.R,"paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv","paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv","EvidenceTable: term_id,stat(NES),qval(padj),direction,evidence_genes(leadingEdge)"
+Fig2,run,paper/scripts/run_fig2_pipeline.py,"paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv; paper/source_data/PANCAN_TP53_v1/sample_cards/<CANCER>.sample_card.json","paper/source_data/PANCAN_TP53_v1/out/<CANCER>/<METHOD>/report.jsonl","METHOD in v1: ours, shuffled_context"
+Fig2,prep,paper/scripts/bench_fig2.py,"paper/source_data/PANCAN_TP53_v1/out/**/report.jsonl; paper/source_data/PANCAN_TP53_v1/labels.tsv","paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","tau sweep; label_policy=R1_only; FAIL from audit_flags"
+Fig2,A,paper/scripts/fig2_plot.py,"paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","paper/source_data/PANCAN_TP53_v1/fig/Fig2_HNSC.pdf","by_cancer main panel"
+FigS2,all,paper/scripts/fig2_plot_multipanel.py,"paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","paper/source_data/PANCAN_TP53_v1/fig/Fig2_Supp_multipanel.pdf","multipanel across cancers"

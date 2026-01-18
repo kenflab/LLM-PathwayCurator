@@ -1,0 +1,15 @@
+# docker/requirements.txt
+# Core runtime (your package already depends on numpy/pandas/pydantic/tabulate via pyproject)
+pyyaml>=6.0
+tqdm>=4.66
+synapseclient>=2.0
+
+# LLM SDKs (optional but handy in Docker)
+openai>=1.0
+google-genai
+google-generativeai
+
+# Safety net (optional; keep if you might use it in modules/validation later)
+networkx>=3.2
+jsonschema>=4.21
+networkx

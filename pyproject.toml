@@ -10,11 +10,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [{name = "Ken Furudate"}]
+
 dependencies = [
   "pandas>=2.0",
   "numpy>=1.24",
   "pydantic>=2.0",
-  "tabulate>=0.9",  # enables DataFrame.to_markdown reliably (report.md)
+  "tabulate>=0.9",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,28 @@ dev = [
 
 bench = [
   "matplotlib>=3.8",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "synapseclient>=2.0",
+]
+
+llm = [
+  "openai>=1.0",
+  "google-genai",
+  "google-generativeai",
+]
+
+# Convenience meta-extra: everything you need for paper+LLM+dev in one shot
+all = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "matplotlib>=3.8",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "synapseclient>=2.0",
+  "openai>=1.0",
+  "google-genai",
+  "google-generativeai",
 ]
 
 [project.scripts]
