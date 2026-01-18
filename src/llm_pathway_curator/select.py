@@ -116,20 +116,13 @@ def _context_keys(card: SampleCard) -> list[str]:
     return keys
 
 
-def _get_card_param(card: SampleCard, key: str, default: Any) -> Any:
-    if hasattr(card, key):
-        v = getattr(card, key)
-        if v is not None:
-            return v
-    if hasattr(card, "model_dump"):
-        try:
-            dd = card.model_dump()
-            if dd.get(key) is not None:
-                return dd[key]
-            if isinstance(dd.get("select", None), dict) and dd["select"].get(key) is not None:
-                return dd["select"][key]
-        except Exception:
-            pass
+def _get_card_extra(card: SampleCard, key: str, default: Any) -> Any:
+    try:
+        ex = getattr(card, "extra", None) or {}
+        if isinstance(ex, dict) and key in ex and ex.get(key) is not None:
+            return ex.get(key)
+    except Exception:
+        pass
     return default
 
 
@@ -176,11 +169,10 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
     else:
         df["keep_term"] = True
 
-    # optional tau gate from card (distill may set keep_term already; this is extra safety)
-    tau = _get_card_param(card, "tau", None)
-    if tau is not None and "term_survival" in df.columns:
+    # optional tau gate from card (v1 contract: SampleCard.extra["audit_tau"])
+    if "term_survival" in df.columns:
         try:
-            tau_f = float(tau)
+            tau_f = float(card.audit_tau())  # <- source of truth
             df["term_survival"] = pd.to_numeric(df["term_survival"], errors="coerce")
             df["eligible_tau"] = df["term_survival"].ge(tau_f)
         except Exception:
@@ -199,7 +191,7 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
         df["term_survival_sort"] = -1.0
 
     # allow overriding k from card (optional)
-    k_card = _get_card_param(card, "k_claims", None)
+    k_card = _get_card_extra(card, "k_claims", None)
     if k_card is not None:
         try:
             k = int(k_card)

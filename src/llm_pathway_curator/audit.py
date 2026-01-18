@@ -402,7 +402,13 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
                 _enforce_reason_vocab(out, i)
 
 
-def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
+def audit_claims(
+    claims: pd.DataFrame,
+    distilled: pd.DataFrame,
+    card: SampleCard,
+    *,
+    tau: float | None = None,
+) -> pd.DataFrame:
     """
     Mechanical audit (v1, tool-facing; stress/contradiction are optional inputs).
 
@@ -456,6 +462,12 @@ def audit_claims(claims: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard
         surv = None
 
     tau_default = _get_tau_default(card)
+    if tau is not None:
+        try:
+            tau_default = float(tau)
+        except Exception:
+            pass
+
     min_overlap_default = _get_min_overlap_default(card)
 
     # Precompute evidence genes per term_key

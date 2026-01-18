@@ -2,6 +2,7 @@
 # paper/scripts/fig2_make_groups.py
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +12,55 @@ SD = ROOT / "source_data" / "PANCAN_TP53_v1"
 RAW = SD / "raw"
 DER = SD / "derived"
 OUT_GROUPS = DER / "groups"
+
+# phenotype _primary_disease (normalized) -> TCGA code
+DISEASE_TO_TCGA = {
+    "adrenocortical cancer": "ACC",
+    "bladder urothelial carcinoma": "BLCA",
+    "brain lower grade glioma": "LGG",
+    "breast invasive carcinoma": "BRCA",
+    "cervical & endocervical cancer": "CESC",
+    "cholangiocarcinoma": "CHOL",
+    "colon adenocarcinoma": "COAD",
+    "diffuse large b-cell lymphoma": "DLBC",
+    "esophageal carcinoma": "ESCA",
+    "glioblastoma multiforme": "GBM",
+    "head & neck squamous cell carcinoma": "HNSC",
+    "kidney chromophobe": "KICH",
+    "kidney clear cell carcinoma": "KIRC",
+    "kidney papillary cell carcinoma": "KIRP",
+    "liver hepatocellular carcinoma": "LIHC",
+    "lung adenocarcinoma": "LUAD",
+    "lung squamous cell carcinoma": "LUSC",
+    "mesothelioma": "MESO",
+    "ovarian serous cystadenocarcinoma": "OV",
+    "pancreatic adenocarcinoma": "PAAD",
+    "pheochromocytoma & paraganglioma": "PCPG",
+    "prostate adenocarcinoma": "PRAD",
+    "rectum adenocarcinoma": "READ",
+    "sarcoma": "SARC",
+    "skin cutaneous melanoma": "SKCM",
+    "stomach adenocarcinoma": "STAD",
+    "testicular germ cell tumor": "TGCT",
+    "thymoma": "THYM",
+    "thyroid carcinoma": "THCA",
+    "uterine carcinosarcoma": "UCS",
+    "uterine corpus endometrioid carcinoma": "UCEC",
+    "uveal melanoma": "UVM",
+    "acute myeloid leukemia": "LAML",
+}
+
+# TP53 mut = protein-altering only
+PROTEIN_ALTERING = {
+    "Missense_Mutation",
+    "Nonsense_Mutation",
+    "Frame_Shift_Del",
+    "Frame_Shift_Ins",
+    "Splice_Site",
+    "In_Frame_Del",
+    "In_Frame_Ins",
+}
+PROTEIN_ALTERING_UP = {x.upper() for x in PROTEIN_ALTERING}
 
 
 def _die(msg: str) -> None:
@@ -33,100 +83,167 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
     for cand in candidates:
         if cand.lower() in cols:
             return cols[cand.lower()]
-    _die(f"[make_groups] none of columns found: {candidates}\navailable={list(df.columns)[:50]}...")
+    _die(
+        f"[make_groups] none of columns found: {candidates}\navailable={list(df.columns)[:120]}..."
+    )
 
 
 def _normalize_barcode(s: str) -> str:
-    # We use first 16 chars (TCGA-XX-YYYY-ZZ...) for sample-level matching (common practice)
+    # Use first 16 chars for sample-level matching (TCGA-XX-YYYY-ZZ)
     s = str(s).strip()
     return s[:16]
 
 
+def _norm_disease(x: str) -> str:
+    x = str(x).strip().lower()
+    x = re.sub(r"\s+", " ", x)
+    return x
+
+
+def _has_col(df: pd.DataFrame, name: str) -> bool:
+    return name.lower() in {c.lower() for c in df.columns}
+
+
 def main() -> None:
-    maf_path = RAW / "mc3.v0.2.8.PUBLIC.maf.gz"
+    mc3_path = RAW / "mc3.v0.2.8.PUBLIC.xena.gz"
     pheno_path = RAW / "TCGA_phenotype_dense.tsv.gz"
 
-    maf = _read_tsv_gz(maf_path)
+    mc3 = _read_tsv_gz(mc3_path)
     pheno = _read_tsv_gz(pheno_path)
 
-    # --- columns ---
-    maf_gene = _pick_col(maf, ["Hugo_Symbol", "HUGO_SYMBOL", "gene"])
-    maf_bar = _pick_col(maf, ["Tumor_Sample_Barcode", "tumor_sample_barcode"])
-    maf_flt = _pick_col(maf, ["FILTER", "filter"])
+    # -------------------------
+    # phenotype -> keep "primary-like" samples only (Fig2 v1)
+    # -------------------------
+    ph_sample_type_id = _pick_col(pheno, ["sample_type_id", "_sample_type_id"])
 
-    # phenotype: try common keys for cancer type / study
-    # Xena phenotype often has "study" or "_study" for TCGA cancer (e.g., TCGA-LUAD)
-    ph_sample = _pick_col(pheno, ["sample", "Sample", "_sample", "sampleID", "sample_id"])
-    # robust cancer type field candidates:
-    ph_cancer = None
-    for cand in ["study", "_study", "cancer type", "_primary_disease", "project_id", "cohort"]:
-        if cand.lower() in {c.lower() for c in pheno.columns}:
-            ph_cancer = _pick_col(pheno, [cand])
-            break
-    if ph_cancer is None:
+    def _norm_type_id(x: str) -> str:
+        # Accept "01", "1", "03", "3", "1.0" -> "1" etc.
+        s = str(x).strip()
+        m = re.match(r"^(\d+)", s)
+        if not m:
+            return ""
+        return str(int(m.group(1)))
+
+    type_id_norm = pheno[ph_sample_type_id].map(_norm_type_id)
+    keep_primary_like = type_id_norm.isin({"1", "3"})
+
+    print(
+        "[make_groups] sample_type_id raw unique (head):",
+        pheno[ph_sample_type_id].astype(str).str.strip().unique()[:10].tolist(),
+    )
+    print(
+        "[make_groups] sample_type_id norm counts:", type_id_norm.value_counts().head(10).to_dict()
+    )
+
+    pheno = pheno[keep_primary_like].copy()
+    print(
+        "[make_groups] filtered to primary-like sample_type_id in {1,3}:",
+        int(keep_primary_like.sum()),
+    )
+
+    # -------------------------
+    # phenotype -> (sample16, cancer)
+    # -------------------------
+    ph_sample = _pick_col(pheno, ["sampleID", "sample", "Sample", "_sample"])
+    ph_disease = _pick_col(pheno, ["_primary_disease", "primary_disease", "disease"])
+
+    ph = pheno[[ph_sample, ph_disease]].copy()
+    ph.columns = ["sample", "primary_disease"]
+    ph["sample"] = ph["sample"].map(_normalize_barcode)
+    ph["primary_disease_norm"] = ph["primary_disease"].map(_norm_disease)
+    ph["cancer"] = ph["primary_disease_norm"].map(DISEASE_TO_TCGA).fillna("")
+
+    ph = ph[ph["cancer"].ne("")].copy()
+    if ph.empty:
+        uniq = sorted({_norm_disease(x) for x in pheno[ph_disease].astype(str).tolist()})
         _die(
-            "[make_groups] could not find a cancer-type column in phenotype file.\n"
-            "Inspect RAW/TCGA_phenotype_dense.tsv.gz and update candidates in fig2_make_groups.py."
+            "[make_groups] no samples mapped to TCGA codes. Check DISEASE_TO_TCGA keys.\n"
+            "Unique primary_disease (normalized) examples:\n" + "\n".join(uniq[:80])
         )
 
-    ph = pheno[[ph_sample, ph_cancer]].copy()
-    ph.columns = ["sample", "cancer_raw"]
-    ph["sample"] = ph["sample"].astype(str).map(_normalize_barcode)
-
-    # normalize cancer label -> like 'LUAD', 'HNSC' etc.
-    def norm_cancer(x: str) -> str:
-        x = str(x).strip()
-        # examples: "TCGA-LUAD" -> "LUAD"
-        if x.upper().startswith("TCGA-") and len(x) >= 9:
-            return x.split("-", 1)[1].upper()
-        return x.upper().replace(" ", "_")
-
-    ph["cancer"] = ph["cancer_raw"].map(norm_cancer)
     ph = ph.drop_duplicates(subset=["sample"], keep="first")
+    print("[make_groups] phenotype mapped samples:", len(ph))
+    print("[make_groups] cancers:", sorted(ph["cancer"].unique().tolist()))
 
-    # --- TP53 mutations (PASS only) ---
-    maf_tp53 = maf[
-        (maf[maf_gene].astype(str).str.upper() == "TP53") & (maf[maf_flt] == "PASS")
-    ].copy()
-    if maf_tp53.empty:
-        _die("[make_groups] no TP53 PASS mutations found in MC3 MAF (check FILTER column?)")
+    # -------------------------
+    # MC3 -> TP53 protein-altering set
+    # -------------------------
+    mc3_sample = _pick_col(mc3, ["sample", "Tumor_Sample_Barcode", "tumor_sample_barcode"])
+    mc3_gene = _pick_col(mc3, ["gene", "Hugo_Symbol", "HUGO_SYMBOL", "symbol", "Gene"])
+    mc3_effect = _pick_col(mc3, ["effect", "Variant_Classification", "variant_classification"])
 
-    maf_tp53["sample"] = maf_tp53[maf_bar].astype(str).map(_normalize_barcode)
-    tp53_mut = set(maf_tp53["sample"].tolist())
+    filter_col = None
+    if _has_col(mc3, "FILTER"):
+        filter_col = _pick_col(mc3, ["FILTER"])
+    elif _has_col(mc3, "filter"):
+        filter_col = _pick_col(mc3, ["filter"])
 
-    # --- map samples to cancer ---
-    # Use only samples that appear in phenotype table
-    # (expression matrix will later subset further)
-    samples = ph["sample"].tolist()
-    if not samples:
-        _die("[make_groups] phenotype mapping produced 0 samples")
+    gene_up = mc3[mc3_gene].astype(str).str.strip().str.upper()
+    eff_up = mc3[mc3_effect].astype(str).str.strip().str.upper()
 
+    tp53_mask = gene_up.eq("TP53")
+    eff_ok = eff_up.isin(PROTEIN_ALTERING_UP)
+
+    tp53_total = int(tp53_mask.sum())
+    tp53_pa_total = int((tp53_mask & eff_ok).sum())
+    print(f"[make_groups] MC3 TP53 rows: {tp53_total}")
+    print(f"[make_groups] MC3 TP53 protein-altering rows (pre-FILTER): {tp53_pa_total}")
+
+    if tp53_total == 0:
+        top_genes = gene_up.value_counts().head(10).to_dict()
+        _die(f"[make_groups] no TP53 rows found in MC3. Top genes: {top_genes}")
+
+    if filter_col is not None:
+        passed = mc3[filter_col].astype(str).str.strip().str.upper().eq("PASS")
+        mc3_tp53 = mc3[tp53_mask & eff_ok & passed].copy()
+        print("[make_groups] using FILTER=PASS")
+    else:
+        mc3_tp53 = mc3[tp53_mask & eff_ok].copy()
+        print("[make_groups] FILTER column not found; not applying FILTER")
+
+    if mc3_tp53.empty:
+        eff_counts = eff_up[tp53_mask].value_counts().head(20).to_dict()
+        _die(
+            "[make_groups] no TP53 protein-altering mutations found after filtering.\n"
+            f"TP53 effect top counts: {eff_counts}\n"
+            f"Expected protein-altering set: {sorted(PROTEIN_ALTERING_UP)}"
+        )
+
+    mc3_tp53["sample16"] = mc3_tp53[mc3_sample].astype(str).map(_normalize_barcode)
+    tp53_mut = set(mc3_tp53["sample16"].tolist())
+    if not tp53_mut:
+        _die("[make_groups] TP53_mut set is empty after barcode normalization")
+
+    # -------------------------
+    # groups table (mapped cancers only)
+    # -------------------------
     df = ph[["sample", "cancer"]].copy()
-    df["group"] = df["sample"].map(lambda s: "TP53_mut" if s in tp53_mut else "TP53_wt")
+    df["group"] = df["sample"].map(lambda x: "TP53_mut" if x in tp53_mut else "TP53_wt")
 
     OUT_GROUPS.mkdir(parents=True, exist_ok=True)
 
-    # per cancer output
     cancers = sorted(df["cancer"].unique().tolist())
-    if not cancers:
-        _die("[make_groups] no cancers found after normalization")
-
     for cancer in cancers:
         g = df[df["cancer"] == cancer].copy()
-        if g.empty:
-            continue
         out_path = OUT_GROUPS / f"{cancer}.groups.tsv"
         g[["sample", "group"]].to_csv(out_path, sep="\t", index=False)
 
-    # master
-    (OUT_GROUPS / "PANCAN.groups.tsv").write_text(
+        n_mut = int((g["group"] == "TP53_mut").sum())
+        n_wt = int((g["group"] == "TP53_wt").sum())
+        if n_mut == 0 or n_wt == 0:
+            print(f"[make_groups] WARNING: {cancer} has n_mut={n_mut}, n_wt={n_wt}")
+
+    master = OUT_GROUPS / "PANCAN.groups.tsv"
+    master.write_text(
         df[["sample", "cancer", "group"]].to_csv(sep="\t", index=False),
         encoding="utf-8",
     )
 
     print("[make_groups] OK")
-    print(f"  wrote: {OUT_GROUPS}/PANCAN.groups.tsv")
+    print(f"  wrote: {master}")
     print(f"  cancers: {len(cancers)}")
+    print(f"  samples (mapped): {len(df)}")
+    print(f"  TP53_mut (mapped): {int((df['group'] == 'TP53_mut').sum())}")
 
 
 if __name__ == "__main__":
