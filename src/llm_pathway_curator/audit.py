@@ -8,9 +8,12 @@ from typing import Any
 import pandas as pd
 
 from .audit_reasons import (
+    ABSTAIN_CONTEXT_NONSPECIFIC,
+    ABSTAIN_HUB_BRIDGE,
     ABSTAIN_INCONCLUSIVE_STRESS,
     ABSTAIN_MISSING_SURVIVAL,
     ABSTAIN_REASONS,
+    ABSTAIN_UNDER_SUPPORTED,
     ABSTAIN_UNSTABLE,
     FAIL_CONTRADICTION,
     FAIL_EVIDENCE_DRIFT,
@@ -257,18 +260,30 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
     )
 
 
-def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
-    has_any = any(c in out.columns for c in ["stress_status", "stress_ok", "stress_reason"])
+def _apply_external_stress(
+    out: pd.DataFrame, i: int, row: pd.Series, *, external_cols: set[str]
+) -> None:
+    """
+    Apply stress results ONLY if they were provided as inputs in the original claims DF.
+    Important: do not treat internally initialized columns (e.g., out['stress_ok']) as evidence
+    that stress was evaluated.
+    """
+    has_any = any(
+        c in external_cols for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+    )
     if not has_any:
         # v1 policy: do NOT auto-ABSTAIN just because stress is absent.
         out.at[i, "stress_ok"] = pd.NA
-        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
+        # out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
         return
 
-    if "stress_ok" in out.columns and "stress_status" not in out.columns:
+    # Accept either a boolean stress_ok input or a categorical stress_status input.
+    if ("stress_ok" in external_cols) and ("stress_status" not in external_cols):
         v = row.get("stress_ok")
         if _is_na_scalar(v):
+            out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stress_ok"] = False
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok missing")
             return
         ok = bool(v)
@@ -292,6 +307,7 @@ def _apply_external_stress(out: pd.DataFrame, i: int, row: pd.Series) -> None:
 
     if st == "PASS":
         out.at[i, "stress_ok"] = True
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress=PASS")
         return
 
     if st == "ABSTAIN":
@@ -360,6 +376,14 @@ def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
                 out.at[i, "audit_notes"], f"invalid abstain_reason={ar}"
             )
 
+    # Always require a minimal explanation when not PASS
+    if st in {"FAIL", "ABSTAIN"}:
+        note = (
+            "" if _is_na_scalar(out.at[i, "audit_notes"]) else str(out.at[i, "audit_notes"]).strip()
+        )
+        if not note:
+            out.at[i, "audit_notes"] = f"{st}: reason recorded"
+
 
 def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
     """
@@ -402,6 +426,30 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
                 _enforce_reason_vocab(out, i)
 
 
+def _context_tokens(card: SampleCard) -> list[str]:
+    toks: list[str] = []
+    for v in [
+        getattr(card, "disease", None),
+        getattr(card, "tissue", None),
+        getattr(card, "perturbation", None),
+        getattr(card, "comparison", None),
+    ]:
+        if v is None:
+            continue
+        s = str(v).strip().lower()
+        if not s or s in {t.lower() for t in _NA_TOKENS}:
+            continue
+        if len(s) < 3:
+            continue
+        toks.append(s)
+    return toks
+
+
+def _context_score(name: str, toks: list[str]) -> int:
+    n = str(name or "").lower()
+    return sum(1 for t in toks if t and t in n)
+
+
 def audit_claims(
     claims: pd.DataFrame,
     distilled: pd.DataFrame,
@@ -418,6 +466,11 @@ def audit_claims(
       1) claim_json (Claim schema)
       2) DataFrame columns as fallback (for backward compatibility)
     """
+
+    # Track which columns were truly provided by the caller (v1 policy).
+    # Do NOT treat internally initialized columns as "external evaluation present".
+    external_cols: set[str] = set(claims.columns)
+
     out = claims.copy()
 
     # Stable audit fields
@@ -502,6 +555,23 @@ def audit_claims(
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
+
+    # ---- Hub gene heuristic (v1): gene -> #terms it appears in (within this run) ----
+    gene_to_term_degree: dict[str, int] = {}
+    for _tk, gs in term_to_gene_set.items():
+        for g in gs:
+            gene_to_term_degree[g] = gene_to_term_degree.get(g, 0) + 1
+
+    # threshold can be overridden by card.extra["hub_term_degree"]
+    hub_thr = 200
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict) and extra.get("hub_term_degree") is not None:
+            hub_thr = int(extra["hub_term_degree"])
+    except Exception:
+        pass
+
+    hub_genes = {g for g, deg in gene_to_term_degree.items() if deg > int(hub_thr)}
 
     for i, row in out.iterrows():
         # 0) schema validation (claim_json -> Claim)
@@ -707,7 +777,73 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        _apply_external_stress(out, i, row)
+        # 4) deterministic abstain rules (v1): under-supported / hub-bridge / context-nonspecific
+        # These are not "FAIL" because they indicate insufficient or non-specific
+        # evidence under audits.
+
+        # 4a) under_supported: union evidence too small
+        min_union = 3
+        try:
+            extra = getattr(card, "extra", {}) or {}
+            if isinstance(extra, dict) and extra.get("min_union_genes") is not None:
+                min_union = int(extra["min_union_genes"])
+        except Exception:
+            pass
+
+        if len(ev_union) < int(min_union):
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = ABSTAIN_UNDER_SUPPORTED
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"],
+                (
+                    f"under_supported: |union_evidence_genes|={len(ev_union)}"
+                    f" < min_union_genes={int(min_union)}"
+                ),
+            )
+            _enforce_reason_vocab(out, i)
+            continue
+
+        # 4b) hub_bridge: evidence dominated by hub genes (high term-degree)
+        hub_frac_thr = 0.5  # default: only abstain if hubs dominate evidence
+        try:
+            extra = getattr(card, "extra", {}) or {}
+            if isinstance(extra, dict) and extra.get("hub_frac_thr") is not None:
+                hub_frac_thr = float(extra["hub_frac_thr"])
+        except Exception:
+            pass
+
+        if ev_union and hub_genes:
+            hub_hits = [g for g in ev_union if g in hub_genes]
+            frac = (len(hub_hits) / len(ev_union)) if ev_union else 0.0
+            if frac >= float(hub_frac_thr):
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "abstain_reason"] = ABSTAIN_HUB_BRIDGE
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    f"hub_bridge: hub_frac={frac:.2f} (n_hub={len(hub_hits)}/{len(ev_union)})",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+        # 4c) context_nonspecific: only if an explicit context_score exists and is 0
+        if "context_score" in out.columns:
+            cs_raw = row.get("context_score")
+            try:
+                cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
+            except Exception:
+                cs = None
+
+            if cs is not None and cs == 0.0:
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    "context_nonspecific: context_score=0",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+        _apply_external_stress(out, i, row, external_cols=external_cols)
         if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
             _enforce_reason_vocab(out, i)
             continue

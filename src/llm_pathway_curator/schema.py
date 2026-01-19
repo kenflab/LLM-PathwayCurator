@@ -6,7 +6,20 @@ from typing import Literal
 
 import pandas as pd
 
-REQUIRED_EVIDENCE_COLS = [
+# v1 contract (tool-facing): we MUST preserve term×gene.
+# Practical reality:
+# - ORA often has no direction
+# - some exports have no qval (or only p-value)
+# We therefore enforce a "core required" set and auto-fill the rest.
+CORE_REQUIRED_EVIDENCE_COLS = [
+    "term_id",
+    "term_name",
+    "stat",
+    "evidence_genes",
+]
+
+# Columns that should exist after normalization (auto-filled if missing).
+NORMALIZED_COLS = [
     "term_id",
     "term_name",
     "source",
@@ -18,7 +31,9 @@ REQUIRED_EVIDENCE_COLS = [
 
 # Keep aliases conservative but cover common real-world headers.
 ALIASES = {
+    # -------------------------
     # term id/name
+    # -------------------------
     "term": "term_id",
     "termid": "term_id",
     "term_id": "term_id",
@@ -26,35 +41,83 @@ ALIASES = {
     "pathway": "term_id",
     "geneset": "term_id",
     "gene_set": "term_id",
+    "set": "term_id",
+    "term_identifier": "term_id",
+    "termid_": "term_id",
+    # names/descriptions
     "description": "term_name",
     "name": "term_name",
     "term_name": "term_name",
     "desc": "term_name",
-    # source/stat/qval
+    "term_description": "term_name",
+    "termname": "term_name",
+    "gene_set_name": "term_name",
+    # -------------------------
+    # source / database
+    # -------------------------
+    "source": "source",
+    "database": "source",
+    "db": "source",
+    "category": "source",
+    "collection": "source",
+    # -------------------------
+    # stat (effect/strength)
+    # -------------------------
     "nes": "stat",
     "score": "stat",
+    "stat": "stat",
     "logp": "stat",
     "log_p": "stat",
+    "log(p)": "stat",
+    "-log10p": "stat",
+    "-log10_p": "stat",
+    "-log10(p)": "stat",
     "-log10q": "stat",
     "-log10_q": "stat",
     "-log10(q)": "stat",
-    "pval": "qval",
-    "p_value": "qval",
-    "p-value": "qval",
-    "padj": "qval",
-    "adj_p": "qval",
-    "fdr": "qval",
+    "logq": "stat",
+    "log(q)": "stat",
+    "log_q": "stat",
+    # -------------------------
+    # qval / pval (allow both; we normalize to qval)
+    # -------------------------
     "qval": "qval",
     "q_value": "qval",
     "q-value": "qval",
     "qvalue": "qval",
-    # genes
+    "fdr": "qval",
+    "fdr_q": "qval",
+    "padj": "qval",
+    "p.adjust": "qval",
+    "adj_p": "qval",
+    "adj_pval": "qval",
+    "adj_p_value": "qval",
+    # some tools only export p-value; we map to qval as "best available"
+    "pval": "pval",
+    "p_value": "pval",
+    "p-value": "pval",
+    "p": "pval",
+    # -------------------------
+    # direction
+    # -------------------------
+    "direction": "direction",
+    "dir": "direction",
+    "sign": "direction",
+    # -------------------------
+    # evidence genes
+    # -------------------------
     "leadingedge": "evidence_genes",
     "leading_edge": "evidence_genes",
+    "leading edge": "evidence_genes",
     "leadingedgegenes": "evidence_genes",
+    "core_enrichment": "evidence_genes",
+    "core enrichment": "evidence_genes",
     "genes": "evidence_genes",
     "gene": "evidence_genes",
     "symbols": "evidence_genes",
+    "overlap": "evidence_genes",
+    "overlap_genes": "evidence_genes",
+    "overlap genes": "evidence_genes",
 }
 
 ReadMode = Literal["tsv", "sniff", "whitespace"]
@@ -74,6 +137,7 @@ class EvidenceTable:
     def _normalize_col(c: str) -> str:
         c = c.strip().lstrip("\ufeff")
         c = c.replace(" ", "_")
+        c = c.replace("-", "_")
         return c.lower()
 
     @staticmethod
@@ -169,18 +233,28 @@ class EvidenceTable:
 
     @classmethod
     def _read_flexible(cls, path: str) -> EvidenceReadResult:
+        # robust defaults: BOM, comments, gzip, do not auto-convert NA tokens
+        common_kwargs = dict(
+            encoding="utf-8-sig",
+            comment="#",
+            compression="infer",
+            keep_default_na=False,
+            na_values=[],
+            low_memory=False,
+        )
+
         # 1) TSV first (expected)
-        df = pd.read_csv(path, sep="\t")
+        df = pd.read_csv(path, sep="\t", **common_kwargs)
         if df.shape[1] > 1:
             return EvidenceReadResult(df=df, read_mode="tsv")
 
         # 2) sniff delimiter (csv/tsv/others)
-        df2 = pd.read_csv(path, sep=None, engine="python")
+        df2 = pd.read_csv(path, sep=None, engine="python", **common_kwargs)
         if df2.shape[1] > 1:
             return EvidenceReadResult(df=df2, read_mode="sniff")
 
         # 3) whitespace fallback
-        df3 = pd.read_csv(path, sep=r"\s+", engine="python")
+        df3 = pd.read_csv(path, sep=r"\s+", engine="python", **common_kwargs)
         return EvidenceReadResult(df=df3, read_mode="whitespace")
 
     @classmethod
@@ -204,38 +278,68 @@ class EvidenceTable:
                 f"mapped_columns={list(df.columns)}"
             )
 
-        missing = [c for c in REQUIRED_EVIDENCE_COLS if c not in df.columns]
-        if missing:
+        # ---- auto-fill optional normalized columns ----
+        # source
+        if "source" not in df.columns:
+            df["source"] = "unknown"
+
+        # qval: accept qval OR pval (best available)
+        if "qval" not in df.columns:
+            if "pval" in df.columns:
+                df["qval"] = df["pval"]
+            else:
+                df["qval"] = pd.NA
+
+        # direction: ORA often lacks it
+        if "direction" not in df.columns:
+            df["direction"] = "na"
+
+        # evidence_genes: must exist
+        # term_id / term_name / stat: must exist
+        missing_core = [c for c in CORE_REQUIRED_EVIDENCE_COLS if c not in df.columns]
+        if missing_core:
             raise ValueError(
-                f"EvidenceTable missing columns: {missing}. "
+                f"EvidenceTable missing core columns: {missing_core}. "
                 f"read_mode={rr.read_mode}. "
                 f"raw_columns={list(df_raw.columns)} "
                 f"mapped_columns={list(df.columns)}"
             )
 
+        # ensure all normalized columns exist (even if not used downstream)
+        for c in NORMALIZED_COLS:
+            if c not in df.columns:
+                df[c] = pd.NA
+
+        # ---- clean required string fields ----
         df["term_id"] = df["term_id"].map(cls._clean_required_str)
         df["term_name"] = df["term_name"].map(cls._clean_required_str)
         df["source"] = df["source"].map(cls._clean_required_str)
+        if (df["source"] == "").any():
+            df.loc[df["source"] == "", "source"] = "unknown"
 
+        # ---- direction normalization ----
         df["direction"] = df["direction"].map(cls._normalize_direction)
+
+        # ---- evidence genes parsing ----
         df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
         df["evidence_genes_str"] = df["evidence_genes"].map(lambda xs: ",".join(xs))
 
+        # ---- numeric normalization ----
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
         df["qval"] = pd.to_numeric(df["qval"], errors="coerce")
 
-        bad_required = df["term_id"].eq("") | df["term_name"].eq("") | df["source"].eq("")
+        bad_required = df["term_id"].eq("") | df["term_name"].eq("")
         if bad_required.any():
             i = int(df.index[bad_required][0])
             raise ValueError(
                 f"EvidenceTable has empty required fields at row index={i}. "
                 f"read_mode={rr.read_mode}. "
-                "Fix: ensure term_id/term_name/source are non-empty."
+                "Fix: ensure term_id/term_name are non-empty."
             )
 
         if df["stat"].isna().any():
             i = int(df.index[df["stat"].isna()][0])
-            bad = df.loc[i, ["term_id", "term_name", "source"]].to_dict()
+            bad = df.loc[i, ["term_id", "term_name"]].to_dict()
             raise ValueError(
                 f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
                 f"read_mode={rr.read_mode}. "
@@ -249,9 +353,10 @@ class EvidenceTable:
                 f"EvidenceTable has empty evidence_genes at row index={i} "
                 f"(term_id={df.loc[i, 'term_id']}). "
                 f"read_mode={rr.read_mode}. "
-                "Fix: provide overlap genes (ORA) or leadingEdge (GSEA/fgsea)."
+                "Fix: provide overlap genes (ORA) or leadingEdge/core_enrichment (GSEA/fgsea)."
             )
 
+        # provenance
         df.attrs["read_mode"] = rr.read_mode
         return cls(df=df)
 
