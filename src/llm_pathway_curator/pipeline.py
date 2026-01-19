@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import platform
 import sys
 import time
@@ -14,6 +15,7 @@ from typing import Any
 import pandas as pd
 
 from .audit import audit_claims
+from .backends import BaseLLMBackend, GeminiBackend, OllamaBackend, OpenAIBackend
 from .distill import distill_evidence
 from .modules import attach_module_ids, factorize_modules_connected_components
 from .report import write_report, write_report_jsonl
@@ -218,8 +220,67 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["artifacts"]["distilled_with_modules_tsv"] = str(dist2_path)
 
         # 3) propose claims (schema-locked)
+
         _mark_step("select_claims")
-        proposed = select_claims(distilled2, card)
+
+        backend: BaseLLMBackend | None = None
+        llm_backend_notes = ""
+
+        # Let select.py decide mode from env/card (Less is more).
+        # Only build backend if LLM mode is requested via env.
+        claim_mode = (os.environ.get("LLMPATH_CLAIM_MODE", "") or "").strip().lower()
+        if claim_mode == "llm":
+            b = (os.environ.get("LLMPATH_BACKEND", "ollama") or "").strip().lower()
+            try:
+                if b == "openai":
+                    api_key = os.environ.get("LLMPATH_OPENAI_API_KEY", "")
+                    if api_key:
+                        backend = OpenAIBackend(
+                            api_key=api_key,
+                            model_name=os.environ.get("LLMPATH_OPENAI_MODEL", "gpt-4o"),
+                            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+                            seed=int(cfg.seed or 42),
+                        )
+                    else:
+                        llm_backend_notes = "missing LLMPATH_OPENAI_API_KEY"
+                elif b == "gemini":
+                    api_key = os.environ.get("LLMPATH_GEMINI_API_KEY", "")
+                    if api_key:
+                        backend = GeminiBackend(
+                            api_key=api_key,
+                            model_name=os.environ.get(
+                                "LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"
+                            ),
+                            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+                        )
+                    else:
+                        llm_backend_notes = "missing LLMPATH_GEMINI_API_KEY"
+                else:
+                    backend = OllamaBackend(
+                        host=os.environ.get("LLMPATH_OLLAMA_HOST", None),
+                        model_name=os.environ.get("LLMPATH_OLLAMA_MODEL", None),
+                        temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+                        timeout=float(os.environ.get("LLMPATH_OLLAMA_TIMEOUT", "120")),
+                    )
+            except Exception as e:
+                backend = None
+                llm_backend_notes = f"backend_init_error:{type(e).__name__}"
+
+        meta["inputs"]["llm"] = {
+            "claim_mode_env": claim_mode,
+            "backend_env": (os.environ.get("LLMPATH_BACKEND", "ollama") or "").strip().lower(),
+            "backend_enabled": bool(backend is not None),
+            "backend_notes": llm_backend_notes,
+        }
+
+        proposed = select_claims(
+            distilled2,
+            card,
+            backend=backend,
+            seed=cfg.seed,
+            outdir=str(outdir),
+        )
+
         proposed_path = outdir / "claims.proposed.tsv"
         _write_tsv(proposed, proposed_path)
         meta["artifacts"]["claims_proposed_tsv"] = str(proposed_path)

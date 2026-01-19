@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Any
 
 import pandas as pd
 
+from .backends import BaseLLMBackend
 from .claim_schema import Claim, EvidenceRef
+from .llm_claims import claims_to_proposed_tsv, propose_claims_llm
 from .sample_card import SampleCard
 
 _ALLOWED_DIRECTIONS = {"up", "down", "na"}
@@ -155,21 +158,9 @@ def _get_tau_from_card(card: SampleCard, default: float = 0.8) -> float:
     return float(default)
 
 
-def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> pd.DataFrame:
-    """
-    Deterministic selection (v1-minimal, audited-input aware):
-
-    Rank key (high -> low):
-      - eligible (keep_term & survival >= tau)
-      - term_survival
-      - context_score (weak proxy)
-      - stat
-      - term_uid (tie-break)
-
-    PLUS v1 improvement: module diversity gate (default max_per_module=1)
-      - prevents selecting k terms all from the same module
-      - keeps the "modules matter" story honest for Fig2
-    """
+def _select_claims_deterministic(
+    distilled: pd.DataFrame, card: SampleCard, *, k: int = 3
+) -> pd.DataFrame:
     required = {"term_id", "term_name", "source", "stat", "direction", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
     if missing:
@@ -248,12 +239,10 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
         if len(picked_idx) >= int(k):
             break
 
-        # module id (fallback is assigned later; for diversity we use observed module_id if present)
         mid = ""
         if has_module and (not _is_na_scalar(r.get("module_id"))):
             mid = str(r.get("module_id")).strip()
         if (not mid) or (mid.lower() in {t.lower() for t in _NA_TOKENS}):
-            # treat missing module as its own bucket to avoid over-penalizing
             mid = f"M_missing::{str(r.get('term_uid'))}"
 
         c = per_module_count.get(mid, 0)
@@ -291,12 +280,9 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
             module_id = f"M_fallback_{_make_id(term_uid)}"
             module_reason = "missing_module_id"
 
-        # stable evidence key (full set)
         gene_set_hash = _hash_gene_set_audit(genes_full)
-
         ctx_key = "|".join([term_uid] + ctx_vals)
 
-        # IMPORTANT: use stable ID as entity (term_id); keep term_name separately in output.
         claim = Claim(
             claim_id=f"c_{_make_id(ctx_key)}",
             entity=term_id,
@@ -306,25 +292,25 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
                 module_id=module_id,
                 gene_ids=genes_full[:10],  # compact reference (top10) for readability
                 term_ids=[term_uid],
-                gene_set_hash=gene_set_hash,  # NEW: contract-strengthening
+                gene_set_hash=gene_set_hash,
             ),
         )
 
         rows.append(
             {
                 "claim_id": claim.claim_id,
-                "entity": claim.entity,  # stable id
+                "entity": claim.entity,
                 "direction": claim.direction,
                 "context_keys": ",".join(claim.context_keys),
                 "term_uid": term_uid,
                 "source": source,
-                "term_id": term_id,  # NEW: explicit
-                "term_name": term_name,  # keep human-readable name
+                "term_id": term_id,
+                "term_name": term_name,
                 "module_id": claim.evidence_ref.module_id,
                 "module_reason": module_reason,
                 "gene_ids": ",".join(claim.evidence_ref.gene_ids),
                 "term_ids": ",".join(claim.evidence_ref.term_ids),
-                "gene_set_hash": gene_set_hash,  # full-set hash
+                "gene_set_hash": gene_set_hash,
                 "context_score": int(r.get("context_score", 0)),
                 "eligible": bool(r.get("eligible", True)),
                 "term_survival": r.get("term_survival", pd.NA),
@@ -335,3 +321,78 @@ def select_claims(distilled: pd.DataFrame, card: SampleCard, *, k: int = 3) -> p
         )
 
     return pd.DataFrame(rows)
+
+
+def select_claims(
+    distilled: pd.DataFrame,
+    card: SampleCard,
+    *,
+    k: int = 3,
+    mode: str | None = None,
+    backend: BaseLLMBackend | None = None,
+    seed: int | None = None,
+    outdir: str | None = None,
+) -> pd.DataFrame:
+    """
+    C1: Claim proposal (schema-locked). The mechanical decider is audit_claims().
+
+    - mode="deterministic": stable ranking + module diversity gate, emits Claim JSON.
+    - mode="llm": LLM selects from top candidates but is post-validated against
+      candidates (term_uid/entity/gene_set_hash) and MUST emit JSON; otherwise
+      we fall back to deterministic output.
+    """
+
+    # Mode resolution (Less is more: env or card.extra; no new CLI required)
+    if mode is None:
+        mode = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower() or None
+    if mode is None:
+        try:
+            ex = getattr(card, "extra", {}) or {}
+            if isinstance(ex, dict) and ex.get("claim_mode"):
+                mode = str(ex.get("claim_mode")).strip().lower()
+        except Exception:
+            mode = None
+    if mode is None:
+        mode = "deterministic"
+
+    # LLM mode
+    if mode == "llm":
+        if backend is None:
+            mode = "deterministic"
+        else:
+            # allow overriding k from card.extra
+            try:
+                ex = getattr(card, "extra", {}) or {}
+                if isinstance(ex, dict) and ex.get("k_claims") is not None:
+                    k = int(ex["k_claims"])
+            except Exception:
+                pass
+
+            res = propose_claims_llm(
+                distilled_with_modules=distilled,
+                card=card,
+                backend=backend,
+                k=int(k),
+                seed=seed,
+                outdir=outdir,
+            )
+
+            if (not res.used_fallback) and res.claims:
+                out_llm = claims_to_proposed_tsv(
+                    claims=res.claims,
+                    distilled_with_modules=distilled,
+                    card=card,
+                )
+                out_llm["claim_mode"] = "llm"
+                out_llm["llm_notes"] = res.notes
+                return out_llm
+
+            out_det = _select_claims_deterministic(distilled, card, k=int(k))
+            out_det["claim_mode"] = "deterministic_fallback"
+            out_det["llm_notes"] = res.notes
+            return out_det
+
+    out_det = _select_claims_deterministic(distilled, card, k=int(k))
+    out_det["claim_mode"] = "deterministic"
+    out_det["llm_notes"] = ""
+    return out_det
