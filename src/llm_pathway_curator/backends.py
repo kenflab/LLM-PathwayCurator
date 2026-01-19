@@ -11,6 +11,17 @@ from abc import ABC, abstractmethod
 from functools import wraps
 
 
+def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
+    backend = os.environ.get("LLMPATH_BACKEND", "ollama").lower()
+    if backend == "openai":
+        return OpenAIBackend(
+            api_key=os.environ["LLMPATH_OPENAI_API_KEY"],
+            model_name=os.environ.get("LLMPATH_OPENAI_MODEL", "gpt-4o"),
+            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+            seed=int(seed or 42),
+        )
+
+
 class BaseLLMBackend(ABC):
     """
     Backend-agnostic LLM interface.
