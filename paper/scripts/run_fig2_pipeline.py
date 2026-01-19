@@ -38,15 +38,20 @@ def _write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _write_card_with_tau(src_card_path: Path, dst_card_path: Path, *, tau: float) -> None:
-    if src_card_path.resolve() == dst_card_path.resolve():
-        _die(f"[run_fig2] _write_card_with_tau src==dst: {src_card_path}")
-    card = _read_json(src_card_path)
+def _set_audit_tau(card: dict[str, Any], tau: float) -> dict[str, Any]:
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
     extra["audit_tau"] = float(tau)
     card["extra"] = extra
+    return card
+
+
+def _write_card_with_tau(src_card_path: Path, dst_card_path: Path, *, tau: float) -> None:
+    if src_card_path.resolve() == dst_card_path.resolve():
+        _die(f"[run_fig2] _write_card_with_tau src==dst: {src_card_path}")
+    card = _read_json(src_card_path)
+    card = _set_audit_tau(card, tau)
     _write_json(dst_card_path, card)
 
 
@@ -250,11 +255,12 @@ def main() -> None:
                         extra = {}
                     extra["context_shuffle_from"] = src.get("disease", "")
                     extra["context_shuffle_to"] = dst_cancer
-                    extra["audit_tau"] = float(tau)
+                    # extra["audit_tau"] = float(tau)
                     src["extra"] = extra
 
                     # stress test: swap disease field
                     src["disease"] = dst_cancer
+                    src = _set_audit_tau(src, tau)
 
                     outdir = OUT_DIR / cancer / "shuffled_context" / f"tau_{tau:.2f}"
                     outdir.mkdir(parents=True, exist_ok=True)

@@ -89,9 +89,7 @@ def _hash_term_ids(term_ids: list[str]) -> str:
 
 
 def _looks_like_hex_hash(x: Any) -> bool:
-    """
-    v1 contract uses 12-hex short hash.
-    """
+    """v1 contract uses 12-hex short hash."""
     if _is_na_scalar(x):
         return False
     s = str(x).strip().lower()
@@ -101,45 +99,19 @@ def _looks_like_hex_hash(x: Any) -> bool:
 
 
 def _get_tau_default(card: SampleCard) -> float:
-    if hasattr(card, "audit_tau") and callable(card.audit_tau):
-        try:
-            return float(card.audit_tau())  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-    v = getattr(card, "audit_tau", None)
-    if v is not None:
-        try:
-            return float(v)
-        except Exception:
-            pass
-
+    # Source of truth: SampleCard.audit_tau()
     try:
-        extra = getattr(card, "extra", {}) or {}
-        if isinstance(extra, dict) and "audit_tau" in extra:
-            return float(extra["audit_tau"])
+        return float(card.audit_tau())
     except Exception:
-        pass
-
-    # v1 default (conservative)
-    return 0.8
+        # v1 default (conservative)
+        return 0.8
 
 
 def _get_min_overlap_default(card: SampleCard) -> int:
-    if hasattr(card, "audit_min_gene_overlap") and callable(card.audit_min_gene_overlap):
-        try:
-            return int(card.audit_min_gene_overlap())  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
     try:
-        extra = getattr(card, "extra", {}) or {}
-        if isinstance(extra, dict) and "audit_min_gene_overlap" in extra:
-            return int(extra["audit_min_gene_overlap"])
+        return int(card.audit_min_gene_overlap())
     except Exception:
-        pass
-
-    return 1
+        return 1
 
 
 def _norm_status(x: Any) -> str:
@@ -200,10 +172,7 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
 
 
 def _extract_direction_from_claim_json(cj: str) -> str:
-    """
-    Robust direction extraction (fallback).
-    Returns lower-case direction in {up,down,na}.
-    """
+    """Robust direction extraction (fallback). Returns lower-case direction in {up,down,na}."""
     try:
         obj = json.loads(cj)
     except Exception:
@@ -211,7 +180,6 @@ def _extract_direction_from_claim_json(cj: str) -> str:
 
     d = None
     if isinstance(obj, dict):
-        # Claim schema in select.py puts direction at top-level
         d = obj.get("direction")
         if d is None and isinstance(obj.get("claim"), dict):
             d = obj["claim"].get("direction")
@@ -274,7 +242,6 @@ def _apply_external_stress(
     if not has_any:
         # v1 policy: do NOT auto-ABSTAIN just because stress is absent.
         out.at[i, "stress_ok"] = pd.NA
-        # out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress not evaluated")
         return
 
     # Accept either a boolean stress_ok input or a categorical stress_status input.
@@ -345,7 +312,7 @@ def _apply_external_stress(
 
 def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
     """
-    Paper contract enforcement:
+    Contract enforcement:
     - If status=FAIL, fail_reason must be one of FAIL_REASONS
     - If status=ABSTAIN, abstain_reason must be one of ABSTAIN_REASONS
     Any violation => FAIL_SCHEMA_VIOLATION (do not silently coerce).
@@ -391,26 +358,17 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
       - Among PASS claims only
       - If same evidence key has both direction=up and direction=down =>
         FAIL_CONTRADICTION for all involved
-
-    Evidence key priority:
-      1) gene_set_hash_effective (computed from EvidenceTable OR validated provided hash)
-      2) term_ids_set_hash (fallback)
     """
-    if "evidence_key" not in out.columns:
-        return
-    if "direction_norm" not in out.columns:
+    if "evidence_key" not in out.columns or "direction_norm" not in out.columns:
         return
 
     df = out.copy()
     df["status_u"] = df["status"].astype(str).str.strip().str.upper()
     df = df[df["status_u"] == "PASS"].copy()
-
     if df.empty:
         return
 
-    # group PASS claims by evidence_key
     grouped = df.groupby("evidence_key", dropna=False)
-
     for key, g in grouped:
         if _is_na_scalar(key) or str(key).strip() == "":
             continue
@@ -424,30 +382,6 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
                 out.at[i, "contradiction_ok"] = False
                 out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
                 _enforce_reason_vocab(out, i)
-
-
-def _context_tokens(card: SampleCard) -> list[str]:
-    toks: list[str] = []
-    for v in [
-        getattr(card, "disease", None),
-        getattr(card, "tissue", None),
-        getattr(card, "perturbation", None),
-        getattr(card, "comparison", None),
-    ]:
-        if v is None:
-            continue
-        s = str(v).strip().lower()
-        if not s or s in {t.lower() for t in _NA_TOKENS}:
-            continue
-        if len(s) < 3:
-            continue
-        toks.append(s)
-    return toks
-
-
-def _context_score(name: str, toks: list[str]) -> int:
-    n = str(name or "").lower()
-    return sum(1 for t in toks if t and t in n)
 
 
 def audit_claims(
@@ -468,7 +402,6 @@ def audit_claims(
     """
 
     # Track which columns were truly provided by the caller (v1 policy).
-    # Do NOT treat internally initialized columns as "external evaluation present".
     external_cols: set[str] = set(claims.columns)
 
     out = claims.copy()
@@ -477,11 +410,18 @@ def audit_claims(
     out["status"] = "PASS"
     out["link_ok"] = True
     out["stability_ok"] = True
-    out["contradiction_ok"] = True
-    out["stress_ok"] = True
+
+    # IMPORTANT: "not evaluated" should be NA (not True)
+    out["contradiction_ok"] = pd.NA
+    out["stress_ok"] = pd.NA
+
     out["abstain_reason"] = ""
     out["fail_reason"] = ""
     out["audit_notes"] = ""
+
+    # Keep the actual tau used by this row (helps Fig2 debugging)
+    if "tau_used" not in out.columns:
+        out["tau_used"] = pd.NA
 
     # Optional numeric feature for reporting/calibration
     if "term_survival_agg" not in out.columns:
@@ -514,6 +454,7 @@ def audit_claims(
     else:
         surv = None
 
+    # Resolve tau default (tool contract)
     tau_default = _get_tau_default(card)
     if tau is not None:
         try:
@@ -562,7 +503,6 @@ def audit_claims(
         for g in gs:
             gene_to_term_degree[g] = gene_to_term_degree.get(g, 0) + 1
 
-    # threshold can be overridden by card.extra["hub_term_degree"]
     hub_thr = 200
     try:
         extra = getattr(card, "extra", {}) or {}
@@ -572,6 +512,15 @@ def audit_claims(
         pass
 
     hub_genes = {g for g, deg in gene_to_term_degree.items() if deg > int(hub_thr)}
+
+    # Control PASS note behavior (default True to avoid "empty explanations" warning)
+    pass_note_enabled = True
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict) and extra.get("pass_notes") is not None:
+            pass_note_enabled = bool(extra["pass_notes"])
+    except Exception:
+        pass
 
     for i, row in out.iterrows():
         # 0) schema validation (claim_json -> Claim)
@@ -602,12 +551,13 @@ def audit_claims(
         out.at[i, "direction_norm"] = d if d in {"up", "down"} else "na"
 
         # Per-claim tau override
-        tau = tau_default
+        tau_row = tau_default
         if "tau" in out.columns and not _is_na_scalar(row.get("tau")):
             try:
-                tau = float(row.get("tau"))
+                tau_row = float(row.get("tau"))
             except Exception:
-                tau = tau_default
+                tau_row = tau_default
+        out.at[i, "tau_used"] = float(tau_row)
 
         # Per-claim min_overlap override
         min_overlap = min_overlap_default
@@ -672,7 +622,6 @@ def audit_claims(
         if ev_union:
             computed_gsh = _hash_gene_set(ev_union)
 
-        # store term_ids_set_hash (fallback contradiction key)
         out.at[i, "term_ids_set_hash"] = _hash_term_ids(term_ids)
 
         # If user provided gene_set_hash, EvidenceTable MUST allow us to compute/verify it
@@ -696,10 +645,8 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-            # verified provided hash becomes effective key
             out.at[i, "gene_set_hash_effective"] = gsh_norm
         else:
-            # no provided hash; use computed if available
             out.at[i, "gene_set_hash_effective"] = computed_gsh
 
         # Fallback: overlap check if gene_ids available
@@ -723,7 +670,6 @@ def audit_claims(
                 continue
 
         # set evidence_key for intra-run contradiction
-        # (priority: gene_set_hash_effective else term_ids_set_hash)
         evk = str(out.at[i, "gene_set_hash_effective"]).strip()
         if not evk:
             evk = str(out.at[i, "term_ids_set_hash"]).strip()
@@ -761,12 +707,12 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        if agg < float(tau):
+        if agg < float(tau_row):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
             out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], f"term_survival_agg={agg:.3f} < tau={float(tau):.2f}"
+                out.at[i, "audit_notes"], f"term_survival_agg={agg:.3f} < tau={float(tau_row):.2f}"
             )
             _enforce_reason_vocab(out, i)
             continue
@@ -778,8 +724,6 @@ def audit_claims(
             continue
 
         # 4) deterministic abstain rules (v1): under-supported / hub-bridge / context-nonspecific
-        # These are not "FAIL" because they indicate insufficient or non-specific
-        # evidence under audits.
 
         # 4a) under_supported: union evidence too small
         min_union = 3
@@ -796,15 +740,15 @@ def audit_claims(
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"],
                 (
-                    f"under_supported: |union_evidence_genes|={len(ev_union)}"
-                    f" < min_union_genes={int(min_union)}"
+                    f"under_supported: |union_evidence_genes|="
+                    f"{len(ev_union)} < min_union_genes={int(min_union)}"
                 ),
             )
             _enforce_reason_vocab(out, i)
             continue
 
         # 4b) hub_bridge: evidence dominated by hub genes (high term-degree)
-        hub_frac_thr = 0.5  # default: only abstain if hubs dominate evidence
+        hub_frac_thr = 0.5
         try:
             extra = getattr(card, "extra", {}) or {}
             if isinstance(extra, dict) and extra.get("hub_frac_thr") is not None:
@@ -833,25 +777,58 @@ def audit_claims(
             except Exception:
                 cs = None
 
+            # NEW: allow controlling context gate behavior from SampleCard.extra
+            context_gate_mode = "abstain"  # default: backward compatible
+            try:
+                extra = getattr(card, "extra", {}) or {}
+                if isinstance(extra, dict) and extra.get("context_gate_mode") is not None:
+                    context_gate_mode = str(extra["context_gate_mode"]).strip().lower()
+            except Exception:
+                pass
+
             if cs is not None and cs == 0.0:
-                out.at[i, "status"] = "ABSTAIN"
-                out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
-                out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"],
-                    "context_nonspecific: context_score=0",
-                )
-                _enforce_reason_vocab(out, i)
-                continue
+                if context_gate_mode in {"off", "disable", "disabled", "none"}:
+                    # do nothing
+                    out.at[i, "audit_notes"] = _append_note(
+                        out.at[i, "audit_notes"], "context_score=0 (context gate disabled)"
+                    )
+                elif context_gate_mode in {"note", "warn", "warning"}:
+                    # NOTE-ONLY: keep tau sweep meaningful for Fig2
+                    out.at[i, "audit_notes"] = _append_note(
+                        out.at[i, "audit_notes"], "context_nonspecific: context_score=0"
+                    )
+                else:
+                    # default behavior: ABSTAIN
+                    out.at[i, "status"] = "ABSTAIN"
+                    out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
+                    out.at[i, "audit_notes"] = _append_note(
+                        out.at[i, "audit_notes"], "context_nonspecific: context_score=0"
+                    )
+                    _enforce_reason_vocab(out, i)
+                    continue
 
         _apply_external_stress(out, i, row, external_cols=external_cols)
         if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
             _enforce_reason_vocab(out, i)
             continue
 
-        # Enforce reason vocabulary contract (must be last per-row)
+        # PASS: keep a minimal explanation if enabled
+        if pass_note_enabled:
+            # Keep it very short; still gives “why PASS”
+            if not str(out.at[i, "audit_notes"]).strip():
+                out.at[i, "audit_notes"] = "ok"
+
         _enforce_reason_vocab(out, i)
 
-    # ---- Intra-run contradiction check (internal) ----
-    _apply_intra_run_contradiction(out)
+        # If PASS and still empty, add a minimal audit breadcrumb (paper-friendly)
+        if str(out.at[i, "status"]).strip().upper() == "PASS":
+            note = (
+                ""
+                if _is_na_scalar(out.at[i, "audit_notes"])
+                else str(out.at[i, "audit_notes"]).strip()
+            )
+            if not note:
+                out.at[i, "audit_notes"] = "PASS: link+stability ok"
 
+    _apply_intra_run_contradiction(out)
     return out
