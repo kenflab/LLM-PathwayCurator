@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.aliases import AliasChoices
+
+from .audit_reasons import ALL_REASONS
 
 Direction = Literal["up", "down", "na"]
 Status = Literal["PASS", "ABSTAIN", "FAIL"]
@@ -46,11 +49,11 @@ def _norm_direction(v: Any) -> str:
 
 
 class EvidenceRef(BaseModel):
-    module_id: str
+    # empty allowed (term-only claims); still must include term_ids or gene_ids
+    module_id: str = ""
     gene_ids: list[str] = Field(default_factory=list)
     term_ids: list[str] = Field(default_factory=list)
 
-    # NEW: stable key for full evidence gene set (optional but strongly recommended)
     gene_set_hash: str = ""  # e.g., sha256[:12] hex; empty allowed
 
     @field_validator("module_id", mode="before")
@@ -58,7 +61,10 @@ class EvidenceRef(BaseModel):
     def _strip_module_id(cls, v: Any) -> str:
         if v is None:
             return ""
-        return str(v).strip()
+        s = str(v).strip()
+        if s.lower() in {"na", "nan", "none"}:
+            return ""
+        return s
 
     @field_validator("gene_ids", "term_ids", mode="before")
     @classmethod
@@ -73,7 +79,6 @@ class EvidenceRef(BaseModel):
         s = str(v).strip().lower()
         if s in {"", "na", "nan", "none"}:
             return ""
-        # light validation: hex-ish, length >= 8
         ok = all(ch in "0123456789abcdef" for ch in s) and len(s) >= 8
         if not ok:
             raise ValueError("gene_set_hash must be hex string (len>=8) or empty")
@@ -81,7 +86,6 @@ class EvidenceRef(BaseModel):
 
     @model_validator(mode="after")
     def _must_reference_something(self) -> EvidenceRef:
-        # Evidence-linked constraint: must point to at least term_ids or gene_ids
         if len(self.term_ids) == 0 and len(self.gene_ids) == 0:
             raise ValueError("EvidenceRef must include term_ids or gene_ids (non-empty)")
         return self
@@ -92,7 +96,13 @@ class Claim(BaseModel):
     entity: str
     direction: Direction
     context_keys: list[ContextKey] = Field(default_factory=list)
-    evidence_ref: EvidenceRef
+
+    # accept both keys from LLM / legacy payloads
+    evidence_ref: EvidenceRef = Field(
+        ...,
+        validation_alias=AliasChoices("evidence_ref", "evidence_refs"),
+        serialization_alias="evidence_ref",
+    )
 
     @field_validator("claim_id", "entity", mode="before")
     @classmethod
@@ -108,24 +118,21 @@ class Claim(BaseModel):
         return _norm_direction(v)
 
 
-ReasonCode = Literal[
-    "ok",
-    "evidence_drift",
-    "schema_violation",
-    "contradiction",
-    "unstable",
-    "missing_survival",
-    "context_nonspecific",
-    "under_supported",
-    "hub_bridge",
-    "inconclusive_stress",
-]
-
-
 class Decision(BaseModel):
     status: Status
-    reason: ReasonCode = "ok"
+    reason: str = "ok"
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _reason_vocab(cls, v: Any) -> str:
+        s = "ok" if v is None else str(v).strip()
+        if not s or s.lower() in {"na", "nan", "none"}:
+            s = "ok"
+        allowed = {"ok"} | set(ALL_REASONS)
+        if s not in allowed:
+            raise ValueError(f"invalid reason={s} (must be 'ok' or one of ALL_REASONS)")
+        return s
 
 
 class AuditedClaim(BaseModel):

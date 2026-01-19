@@ -298,6 +298,58 @@ def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
     return float(default)
 
 
+def _norm_direction_v1(x: Any) -> str:
+    s = str(x or "").strip().lower()
+    if s in {"up", "down"}:
+        return s
+    if s in {"na", "nan", "none", ""}:
+        return "na"
+    if s in {"upregulated", "increase", "increased", "activated", "pos", "positive", "+", "1"}:
+        return "up"
+    if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
+        return "down"
+    return "na"
+
+
+def _context_keys_from_row_or_card(row: pd.Series, card: SampleCard) -> list[str]:
+    # prefer row-level explicit key
+    keys = _as_list(_get_first_present(row, ["context_keys_used", "context_keys"]) or [])
+    keys = [k.strip() for k in keys if k and k.strip()]
+    if keys:
+        return sorted(set(keys))
+
+    # fallback: infer from card values
+    out: list[str] = []
+    for k in ["disease", "tissue", "perturbation", "comparison"]:
+        v = getattr(card, k, None)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in _NA_TOKENS:
+            out.append(k)
+    return sorted(set(out))
+
+
+def _ensure_audit_notes(row: pd.Series, *, decision: str, tau: float) -> str:
+    note = str(row.get("audit_notes", "") or "").strip()
+    if note:
+        return note
+
+    # deterministic minimal explanation (no free text generation)
+    if decision == "FAIL":
+        fr = str(row.get("fail_reason", "") or "").strip() or "(missing fail_reason)"
+        return f"FAIL: {fr}"
+    if decision == "ABSTAIN":
+        ar = str(row.get("abstain_reason", "") or "").strip() or "(missing abstain_reason)"
+        agg = row.get("term_survival_agg", None)
+        try:
+            agg_f = float(agg)
+            return f"ABSTAIN: {ar} (term_survival_agg={agg_f:.3f} < tau={float(tau):.2f})"
+        except Exception:
+            return f"ABSTAIN: {ar}"
+    return "PASS: ok"
+
+
 # -----------------------------
 # v1 JSONL export (Fig2-ready)
 # -----------------------------
@@ -385,7 +437,7 @@ def write_report_jsonl(
             if not entity_id:
                 raise ValueError("audit_log has empty entity_id/term_id for a row (v1 requires it)")
 
-            direction = str(row.get("direction", "") or "").strip()
+            direction = _norm_direction_v1(row.get("direction", ""))
 
             ctx = {
                 "comparison": str(default_comparison or row.get("comparison", "") or "").strip(),
@@ -394,7 +446,7 @@ def write_report_jsonl(
                 "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
             }
 
-            context_keys = _sorted_list(row.get("context_keys_used"))
+            context_keys = _context_keys_from_row_or_card(row, card)
 
             gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
             if not gene_set_hash:
@@ -407,6 +459,16 @@ def write_report_jsonl(
             gene_ids = _sorted_list(
                 _get_first_present(row, ["gene_ids", "gene_id", "gene_id(s)"]) or []
             )
+
+            # harden: if term_ids empty, fall back to term_uid (most common in your pipeline)
+            if not term_ids:
+                tu = str(row.get("term_uid", "") or "").strip()
+                if tu:
+                    term_ids = [tu]
+
+            # also: if still empty, fall back to entity_id (last resort; avoids claim_id collisions)
+            if not term_ids and entity_id:
+                term_ids = [entity_id]
 
             evidence = {
                 "module_ids": module_ids,
@@ -434,6 +496,10 @@ def write_report_jsonl(
                 stat_val = None if pd.isna(v3) else float(v3)
 
             reason_codes, reason_details = _reason_codes_and_details_from_row(row)
+
+            # deterministic explanation fallback (keeps paper artifacts informative)
+            reason_details = dict(reason_details)
+            reason_details["audit_notes"] = _ensure_audit_notes(row, decision=decision, tau=tau_val)
 
             cancer_key = str(
                 _get_first_present(row, ["cancer", "cancer_type"]) or default_cancer
@@ -700,6 +766,24 @@ def write_report(
     if rc_curve_path is not None:
         lines.append(f"- risk_coverage.tsv: {rc_curve_path.name}")
     lines.append("")
+
+    def _with_notes(df: pd.DataFrame, *, tau: float) -> pd.DataFrame:
+        if df.empty:
+            return df
+        if "audit_notes" not in df.columns:
+            df = df.copy()
+            df["audit_notes"] = ""
+        out = df.copy()
+        out["audit_notes"] = out.apply(
+            lambda r: _ensure_audit_notes(r, decision=str(r.get(status_col, "")).strip(), tau=tau),
+            axis=1,
+        )
+        return out
+
+    tau_disp = _get_tau_default(card, default=0.8)
+    pass_df = _with_notes(pass_df, tau=tau_disp)
+    abs_df = _with_notes(abs_df, tau=tau_disp)
+    fail_df = _with_notes(fail_df, tau=tau_disp)
 
     report_path = out_path / "report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
