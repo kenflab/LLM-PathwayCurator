@@ -115,6 +115,22 @@ def _make_run_id(cfg: RunConfig) -> str:
     return f"{int(time.time())}_{_sha256_text(payload)[:10]}"
 
 
+def _resolve_tau(cfg_tau: float | None, card: SampleCard) -> float:
+    """
+    Single source-of-truth for tau used by mechanical audit + report contract.
+    Priority:
+      1) cfg.tau if provided (explicit run override)
+      2) card.audit_tau() (contract boundary)
+    """
+    if cfg_tau is not None:
+        try:
+            return float(cfg_tau)
+        except Exception:
+            # fall back to card if malformed
+            pass
+    return float(card.audit_tau())
+
+
 def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     """
     Run the tool pipeline: distill → modules → claims → audit → report (+report.jsonl).
@@ -183,9 +199,21 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         ev = ev_tbl.df.copy()
         card = SampleCard.from_json(cfg.sample_card)
 
+        # ---- resolve tau ONCE (contract) ----
+        effective_tau = _resolve_tau(cfg.tau, card)
+
         sc_path = outdir / "sample_card.resolved.json"
         _write_json(sc_path, card.model_dump())
         meta["artifacts"]["sample_card_resolved_json"] = str(sc_path)
+
+        # Record resolved knobs (reproducibility)
+        meta["inputs"]["audit"] = {
+            "tau_cfg": cfg.tau,
+            "tau_card": card.audit_tau(),
+            "tau_effective": effective_tau,
+            "min_gene_overlap": card.audit_min_gene_overlap(),
+        }
+        _write_json(meta_path, meta)
 
         # 1) distill (evidence hygiene)
         _mark_step("distill")
@@ -287,10 +315,11 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         # 4) mechanical audit (decider)
         _mark_step("audit")
-        audited = _call_compat(audit_claims, proposed, distilled2, card, tau=cfg.tau)
-        for c in ["abstain_reason", "fail_reason", "audit_notes"]:
+        audited = _call_compat(audit_claims, proposed, distilled2, card, tau=effective_tau)
+
+        for c in ["abstain_reason", "fail_reason", "audit_notes", "module_reason"]:
             if c in audited.columns:
-                audited[c] = audited[c].fillna("")
+                audited[c] = audited[c].astype("string").fillna("")
 
         audit_path = outdir / "audit_log.tsv"
         _write_tsv(audited, audit_path)
@@ -309,7 +338,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             card=card,
             outdir=str(outdir),
             run_id=rid,
-            tau=cfg.tau,
+            tau=effective_tau,
         )
 
         meta["artifacts"]["report_jsonl"] = str(jsonl_path)

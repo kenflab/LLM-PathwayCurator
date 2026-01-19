@@ -1,6 +1,7 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/distill.py
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import numpy as np
@@ -201,7 +202,38 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return float(inter / union) if union else 0.0
 
 
-# --- add near top (helpers) ---
+def _seed_for_term(seed: int | None, term_uid: str) -> int:
+    """
+    Order-invariant deterministic seed derived from (seed, term_uid).
+    Prevents dependence on row order / number of terms.
+    """
+    base = 0 if seed is None else int(seed)
+    h = hashlib.blake2b(digest_size=8)
+    h.update(str(base).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(term_uid).encode("utf-8"))
+    return int.from_bytes(h.digest(), byteorder="little", signed=False)
+
+
+def _get_distill_mode(card: SampleCard) -> str:
+    """
+    Explicit mode switch. Default keeps v1 semantics (evidence perturbation).
+    Allowed:
+      - "evidence_perturb" (default)
+      - "replicates_proxy" (only if replicate_id exists; NOT true LOO enrichment)
+    """
+    m = _get_card_param(card, "distill_mode", None)
+    if m is None:
+        return "evidence_perturb"
+    s = str(m).strip().lower()
+    if s in {"evidence", "perturb", "evidence_perturb"}:
+        return "evidence_perturb"
+    if s in {"replicates_proxy", "patient_loo", "loo"}:
+        # accept legacy user wording, but keep honest name internally
+        return "replicates_proxy"
+    return "evidence_perturb"
+
+
 def _compute_similarity_metrics(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
     """Return (jaccard, recall, precision)."""
     if not orig and not pert:
@@ -434,9 +466,19 @@ def distill_evidence(
     min_genes = max(1, min_genes)
 
     # ===========================
-    # PATIENT-LEVEL LOO/JACKKNIFE (NEW)
+    # Mode switch (explicit)
     # ===========================
-    if "replicate_id" in out.columns:
+    distill_mode = _get_distill_mode(card)
+
+    # ===========================
+    # REPLICATES PROXY (optional)
+    # ===========================
+    # NOTE: This is NOT true patient-level LOO enrichment; it is a proxy that
+    # evaluates stability across stacked replicate evidence tables.
+    if distill_mode == "replicates_proxy":
+        if "replicate_id" not in out.columns:
+            raise ValueError("distill_mode=replicates_proxy requires replicate_id column")
+
         baseline_id = str(_get_card_param(card, "loo_baseline_id", "full")).strip() or "full"
         direction_match = bool(_get_card_param(card, "loo_direction_match", True))
 
@@ -449,115 +491,152 @@ def distill_evidence(
             p_min=p_min,
         )
 
-        # Attach per-term_uid survival to all rows
         out = out.merge(loo_tbl, on="term_uid", how="left")
-
-        # If multiple replicates are stacked, keep the baseline replicate rows
-        # as the canonical output rows.
         out = out[out["replicate_id"].astype(str) == baseline_id].copy()
         out = out.reset_index(drop=True)
 
-        # Patient-level survival becomes primary term_survival
-        out["term_survival"] = pd.to_numeric(out["term_survival_loo"], errors="coerce").astype(
-            "Float64"
+        out["term_survival_input"] = (
+            pd.to_numeric(out.get("term_survival", pd.NA), errors="coerce").astype("Float64")
+            if "term_survival" in out.columns
+            else _ensure_float64_na_series(len(out))
         )
+        out["term_survival_computed"] = pd.to_numeric(
+            out["term_survival_loo"], errors="coerce"
+        ).astype("Float64")
 
-        # v1 compatibility: keep these columns present even in patient_loo mode
-        # gene_survival: proxy == term_survival (same as evidence-perturb branch)
+        # Effective survival: default = computed (proxy)
+        trust_input_survival = bool(_get_card_param(card, "trust_input_survival", False))
+        out["term_survival"] = (
+            out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
+        ).astype("Float64")
+
         out["gene_survival"] = out["term_survival"].astype("Float64")
-
-        # module_survival is computed after modules; keep NA placeholder
         out["module_survival"] = _ensure_float64_na_series(len(out))
 
-        # provenance (minimal, stable keys)
-        out["distill_mode"] = "patient_loo"
+        out["distill_mode"] = "replicates_proxy"
         out["distill_loo_baseline_id"] = baseline_id
         out["distill_loo_direction_match"] = bool(direction_match)
 
-        # reuse the same thresholds as the evidence-perturb branch (so Fig2 metadata is comparable)
+        out["distill_n_perturb"] = pd.NA
+        out["distill_gene_dropout_p"] = pd.NA
+        out["distill_gene_jitter_p"] = pd.NA
+
         out["distill_evidence_jaccard_min"] = j_min
         out["distill_evidence_recall_min"] = r_min
         out["distill_evidence_precision_min"] = p_min
 
-        # also record min genes (even though LOO does not perturb)
-        out["distill_min_evidence_genes"] = min_genes
-
     else:
         # ===========================
-        # EVIDENCE-LEVEL PERTURBATION (existing)
+        # EVIDENCE-LEVEL PERTURBATION (default v1)
         # ===========================
 
-        # Build global gene pool for jitter/add
         all_genes: list[str] = []
         for xs in out["evidence_genes"].tolist():
             all_genes.extend(xs)
         gene_pool = np.array(sorted(set(all_genes)), dtype=object)
 
-        # Deterministic RNG
-        rng = np.random.default_rng(seed if seed is not None else 0)
+        # size-aware minimum kept genes (opt-in)
+        user_min_genes = _get_card_param(card, "min_evidence_genes", None)
+        min_keep_frac = float(
+            _get_card_param(card, "min_keep_frac", 0.0)
+        )  # default OFF for v1-compat
+        min_keep_frac = min(max(min_keep_frac, 0.0), 1.0)
 
         term_surv: list[float] = []
-        for xs in out["evidence_genes"].tolist():
+        mean_j: list[float] = []
+        mean_r: list[float] = []
+        mean_p: list[float] = []
+
+        # IMPORTANT: order-invariant RNG per term_uid
+        for tu, xs in zip(
+            out["term_uid"].astype(str).tolist(), out["evidence_genes"].tolist(), strict=False
+        ):
             orig = set(xs)
+
+            if user_min_genes is None:
+                if min_keep_frac > 0.0:
+                    min_genes_eff = max(1, int(np.ceil(min_keep_frac * max(1, len(xs)))))
+                else:
+                    min_genes_eff = int(min_genes)  # fall back to earlier default (usually 1)
+            else:
+                try:
+                    min_genes_eff = int(user_min_genes)
+                except Exception:
+                    min_genes_eff = 1
+                min_genes_eff = max(1, min_genes_eff)
+
+            rng_term = np.random.default_rng(_seed_for_term(seed, tu))
+
             ok = 0
+            js: list[float] = []
+            rs: list[float] = []
+            ps: list[float] = []
+
             for _ in range(n_reps):
                 pert = _perturb_genes(
                     xs,
                     gene_pool=gene_pool,
-                    rng=rng,
+                    rng=rng_term,
                     p_drop=p_drop,
                     p_add=p_add,
-                    min_genes=min_genes,
+                    min_genes=min_genes_eff,
                 )
-
-                # keep the original jaccard gate
-                j = _jaccard(orig, pert)
-
-                # NEW: also require recall/precision to prevent “too-easy” passes
-                inter = len(orig & pert)
-                recall = (inter / len(orig)) if orig else 1.0
-                precision = (inter / len(pert)) if pert else 0.0
-
+                j, recall, precision = _compute_similarity_metrics(orig, pert)
+                js.append(j)
+                rs.append(recall)
+                ps.append(precision)
                 if (j >= j_min) and (recall >= r_min) and (precision >= p_min):
                     ok += 1
-            term_surv.append(ok / float(n_reps))
 
-        # Attach survival (preserve if already provided)
-        n = len(out)
+            term_surv.append(ok / float(n_reps))
+            mean_j.append(float(np.mean(js)) if js else float("nan"))
+            mean_r.append(float(np.mean(rs)) if rs else float("nan"))
+            mean_p.append(float(np.mean(ps)) if ps else float("nan"))
+
+        trust_input_survival = bool(_get_card_param(card, "trust_input_survival", False))
 
         if "term_survival" in out.columns:
-            out["term_survival"] = pd.to_numeric(out["term_survival"], errors="coerce").astype(
-                "Float64"
-            )
+            out["term_survival_input"] = pd.to_numeric(
+                out["term_survival"], errors="coerce"
+            ).astype("Float64")
         else:
-            out["term_survival"] = pd.Series(term_surv, dtype="Float64")
+            out["term_survival_input"] = _ensure_float64_na_series(len(out))
 
-        # v1: gene_survival is a per-term aggregate of evidence stability
-        # (use term_survival as proxy)
-        # (True gene-level survival needs sample-level LOO or per-gene re-scoring; add later.)
+        out["term_survival_computed"] = pd.Series(term_surv, dtype="Float64")
+
+        out["term_survival"] = (
+            out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
+        ).astype("Float64")
+
         if "gene_survival" in out.columns:
-            out["gene_survival"] = pd.to_numeric(out["gene_survival"], errors="coerce").astype(
-                "Float64"
-            )
+            out["gene_survival_input"] = pd.to_numeric(
+                out["gene_survival"], errors="coerce"
+            ).astype("Float64")
         else:
-            out["gene_survival"] = out["term_survival"].astype("Float64")
+            out["gene_survival_input"] = _ensure_float64_na_series(len(out))
 
-        # module_survival is computed after modules are created; keep placeholder if absent.
+        out["gene_survival"] = (
+            out["gene_survival_input"] if trust_input_survival else out["term_survival"]
+        ).astype("Float64")
+
         if "module_survival" in out.columns:
             out["module_survival"] = pd.to_numeric(out["module_survival"], errors="coerce").astype(
                 "Float64"
             )
         else:
-            out["module_survival"] = _ensure_float64_na_series(n)
+            out["module_survival"] = _ensure_float64_na_series(len(out))
 
-        # Record distill parameters for provenance/debug (minimal)
+        out["distill_mode"] = "evidence_perturb"
         out["distill_n_perturb"] = n_reps
         out["distill_gene_dropout_p"] = p_drop
         out["distill_gene_jitter_p"] = p_add
         out["distill_evidence_jaccard_min"] = j_min
         out["distill_evidence_recall_min"] = r_min
         out["distill_evidence_precision_min"] = p_min
-        out["distill_min_evidence_genes"] = min_genes
+        out["distill_min_keep_frac"] = min_keep_frac
+        out["distill_min_evidence_genes_effective"] = (
+            pd.NA if user_min_genes is None else int(user_min_genes)
+        )
 
     # Gates for downstream (now meaningful): keep_term can be used by select/audit
     if "keep_term" not in out.columns:
