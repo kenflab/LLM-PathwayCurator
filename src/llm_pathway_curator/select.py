@@ -17,12 +17,14 @@ _NA_TOKENS = {"na", "nan", "none", "", "NA"}
 
 
 def _is_na_scalar(x: Any) -> bool:
+    """pd.isna is unsafe for list-like; only treat scalars here."""
     if x is None:
         return True
     if isinstance(x, (list, tuple, set, dict)):
         return False
     try:
-        return bool(pd.isna(x))
+        v = pd.isna(x)
+        return bool(v) if isinstance(v, bool) else False
     except Exception:
         return False
 
@@ -192,14 +194,20 @@ def _select_claims_deterministic(
     else:
         df["keep_term"] = True
 
+    preselect_tau_gate = _get_card_extra(card, "preselect_tau_gate", False)
     tau_f = _get_tau_from_card(card, default=0.8)
+
     if "term_survival" in df.columns:
         df["term_survival"] = pd.to_numeric(df["term_survival"], errors="coerce")
+    else:
+        df["term_survival"] = pd.NA
+
+    if bool(preselect_tau_gate):
         df["eligible_tau"] = df["term_survival"].ge(float(tau_f))
+        df["eligible"] = (df["keep_term"]) & (df["eligible_tau"])
     else:
         df["eligible_tau"] = True
-
-    df["eligible"] = (df["keep_term"]) & (df["eligible_tau"])
+        df["eligible"] = df["keep_term"]
 
     # survival sort key (missing -> -inf)
     if "term_survival" in df.columns:
@@ -225,7 +233,7 @@ def _select_claims_deterministic(
 
     # ---- rank all candidates first ----
     df_ranked = df.sort_values(
-        ["eligible", "term_survival_sort", "context_score", "stat", "term_uid"],
+        ["eligible", "term_survival_sort", "stat", "context_score", "term_uid"],
         ascending=[False, False, False, False, True],
     ).copy()
 
@@ -317,6 +325,7 @@ def _select_claims_deterministic(
                 "keep_term": bool(r.get("keep_term", True)),
                 "keep_reason": str(r.get("keep_reason", "ok")),
                 "claim_json": claim.model_dump_json(),
+                "preselect_tau_gate": bool(preselect_tau_gate),
             }
         )
 
@@ -354,6 +363,14 @@ def select_claims(
             mode = None
     if mode is None:
         mode = "deterministic"
+
+    # Allow overriding k without adding CLI flags (paper scripts friendly)
+    k_env = str(os.environ.get("LLMPATH_K_CLAIMS", "")).strip()
+    if k_env:
+        try:
+            k = int(k_env)
+        except Exception:
+            pass
 
     # LLM mode
     if mode == "llm":

@@ -18,12 +18,14 @@ _NA_TOKENS = {"", "na", "nan", "none", "NA"}
 
 
 def _is_na_scalar(x: Any) -> bool:
+    """pd.isna is unsafe for list-like; only treat scalars here."""
     if x is None:
         return True
     if isinstance(x, (list, tuple, set, dict)):
         return False
     try:
-        return bool(pd.isna(x))
+        v = pd.isna(x)
+        return bool(v) if isinstance(v, bool) else False
     except Exception:
         return False
 
@@ -144,6 +146,21 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
 
     cand_rows: list[dict[str, Any]] = []
     for _, r in candidates.iterrows():
+        # gene_ids_suggest: provide BOTH list and csv string for robustness
+        genes_s = str(r.get("gene_ids_suggest", "") or "").strip()
+        genes_list = [
+            t.strip().upper()
+            for t in genes_s.replace(";", ",").replace("|", ",").split(",")
+            if t.strip()
+        ]
+
+        ts = None
+        try:
+            v = r.get("term_survival")
+            ts = None if _is_na_scalar(v) else float(v)
+        except Exception:
+            ts = None
+
         cand_rows.append(
             {
                 "term_uid": str(r.get("term_uid", "")).strip(),
@@ -151,12 +168,11 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
                 "term_name": str(r.get("term_name", "")).strip(),
                 "source": str(r.get("source", "")).strip(),
                 "direction": str(r.get("direction", "na")).strip(),
-                "term_survival": (
-                    None if _is_na_scalar(r.get("term_survival")) else float(r.get("term_survival"))
-                ),
+                "term_survival": ts,
                 "module_id": str(r.get("module_id", "")).strip(),
                 "gene_set_hash": str(r.get("gene_set_hash", "")).strip().lower(),
-                "gene_ids_suggest": str(r.get("gene_ids_suggest", "")).strip(),
+                "gene_ids_suggest": genes_list,  # <-- canonical
+                "gene_ids_suggest_csv": genes_s,  # <-- back-compat / readability
             }
         )
 
@@ -173,6 +189,8 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
             "Do not invent new identifiers. Do not change term_uid strings.",
             "direction must be one of: up, down, na.",
             "entity must be term_id (not term_name).",
+            "If you include evidence_ref.gene_ids, pick from gene_ids_suggest only "
+            "(case-insensitive).",
         ],
         "output_schema": {
             "claims": [
@@ -225,7 +243,7 @@ def _post_validate_against_candidates(
     cand: pd.DataFrame,
     require_gene_set_hash: bool,
     ctx_keys_resolved: list[str],
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[Claim]]:
     """
     Extra guardrail beyond Claim schema:
       - term_ids must have exactly one term_uid
@@ -233,45 +251,52 @@ def _post_validate_against_candidates(
       - entity must match candidate term_id
       - gene_set_hash must match candidate gene_set_hash (and be 12-hex if required)
       - gene_ids (if provided) must be subset of candidate gene_ids_suggest
-      - term_uid must be unique across returned claims (representative selection)
+      - term_uid must be unique across returned claims
       - context_keys are projected onto resolved keys (does not fail the claim)
+    Returns (ok, message, normalized_claims).
     """
     cand2 = cand.copy()
-    cand2["term_uid"] = cand2["term_uid"].astype(str).str.strip()
-    cand2["term_id"] = cand2["term_id"].astype(str).str.strip()
-    cand2["gene_set_hash"] = cand2.get("gene_set_hash", "").astype(str).str.strip().str.lower()
-    cand2["gene_ids_suggest"] = cand2.get("gene_ids_suggest", "").astype(str)
+    cand2["term_uid"] = cand2.get("term_uid", pd.Series([""] * len(cand2))).astype(str).str.strip()
+    cand2["term_id"] = cand2.get("term_id", pd.Series([""] * len(cand2))).astype(str).str.strip()
+
+    if "gene_set_hash" not in cand2.columns:
+        cand2["gene_set_hash"] = ""
+    cand2["gene_set_hash"] = cand2["gene_set_hash"].astype(str).str.strip().str.lower()
+
+    if "gene_ids_suggest" not in cand2.columns:
+        cand2["gene_ids_suggest"] = ""
+    cand2["gene_ids_suggest"] = cand2["gene_ids_suggest"].astype(str)
 
     by_uid = cand2.set_index("term_uid", drop=False)
 
     seen_uid: set[str] = set()
+    normalized: list[Claim] = []
+
+    ctx_allowed = set(ctx_keys_resolved or [])
 
     for c in claims:
-        # Project context_keys onto resolved keys (avoid LLM inventing keys)
-        try:
-            c.context_keys = [k for k in list(c.context_keys or []) if k in set(ctx_keys_resolved)]
-            if len(c.context_keys) == 0:
-                c.context_keys = list(ctx_keys_resolved)
-        except Exception:
-            pass
+        # --- project context keys without mutating input object ---
+        ck_in = list(c.context_keys or [])
+        ck_proj = [k for k in ck_in if (k in ctx_allowed)]
+        if not ck_proj:
+            ck_proj = list(ctx_keys_resolved or [])
 
-        # Require exactly one term_uid
         term_ids = list(c.evidence_ref.term_ids or [])
         if len(term_ids) != 1:
-            return (False, "term_ids must have exactly one term_uid")
+            return (False, "term_ids must have exactly one term_uid", [])
 
         term_uid = str(term_ids[0]).strip()
         if not term_uid or term_uid not in by_uid.index:
-            return (False, f"term_uid not in candidates: {term_uid}")
+            return (False, f"term_uid not in candidates: {term_uid}", [])
 
         if term_uid in seen_uid:
-            return (False, f"duplicate term_uid selected: {term_uid}")
+            return (False, f"duplicate term_uid selected: {term_uid}", [])
         seen_uid.add(term_uid)
 
         row = by_uid.loc[term_uid]
         term_id_expected = str(row.get("term_id", "")).strip()
         if term_id_expected and str(c.entity).strip() != term_id_expected:
-            return (False, f"entity != term_id for term_uid={term_uid}")
+            return (False, f"entity != term_id for term_uid={term_uid}", [])
 
         gsh_expected = str(row.get("gene_set_hash", "")).strip().lower()
         gsh = str(c.evidence_ref.gene_set_hash or "").strip().lower()
@@ -281,17 +306,20 @@ def _post_validate_against_candidates(
                 return (
                     False,
                     f"gene_set_hash required but missing/invalid for term_uid={term_uid}",
+                    [],
                 )
             if gsh != gsh_expected:
                 return (
                     False,
                     f"gene_set_hash mismatch for term_uid={term_uid}: {gsh} != {gsh_expected}",
+                    [],
                 )
         else:
             if gsh and gsh_expected and gsh != gsh_expected:
                 return (
                     False,
                     f"gene_set_hash mismatch for term_uid={term_uid}: {gsh} != {gsh_expected}",
+                    [],
                 )
 
         # gene_ids subset check (if present)
@@ -308,9 +336,21 @@ def _post_validate_against_candidates(
                 return (
                     False,
                     f"gene_ids not in gene_ids_suggest for term_uid={term_uid}: {bad[:3]}",
+                    [],
                 )
 
-    return (True, "ok")
+        # Create normalized claim (pydantic v2 safe path)
+        try:
+            c2 = c.model_copy(update={"context_keys": ck_proj})
+        except Exception:
+            # fallback: rebuild via dict
+            d = c.model_dump()
+            d["context_keys"] = ck_proj
+            c2 = Claim.model_validate(d)
+
+        normalized.append(c2)
+
+    return (True, "ok", normalized)
 
 
 def propose_claims_llm(
@@ -390,7 +430,11 @@ def propose_claims_llm(
         df.get("stat", pd.Series([0] * len(df))), errors="coerce"
     ).fillna(0.0)
 
-    top_n = int(os.environ.get("LLMPATH_LLM_TOPN", "30"))
+    try:
+        top_n = int(str(os.environ.get("LLMPATH_LLM_TOPN", "30")).strip())
+    except Exception:
+        top_n = 30
+
     top_n = max(5, min(top_n, 200))
 
     # Deterministic ranking for candidates
@@ -447,7 +491,7 @@ def propose_claims_llm(
 
     # Post-validate against candidate set (critical for paper/tool quality)
     ctx_keys_resolved = _context_keys(card)
-    ok, why = _post_validate_against_candidates(
+    ok, why, claims_norm = _post_validate_against_candidates(
         claims=claims,
         cand=df_rank,
         require_gene_set_hash=bool(require_gsh),
@@ -460,6 +504,8 @@ def propose_claims_llm(
         return LLMClaimResult(
             claims=[], raw_text=raw_text, used_fallback=True, notes=meta["notes"], meta=meta
         )
+
+    claims = claims_norm
 
     meta["notes"] = "ok"
     if outdir:

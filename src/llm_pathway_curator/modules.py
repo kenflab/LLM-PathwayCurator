@@ -268,15 +268,15 @@ ModuleMethod = Literal["bipartite_cc", "term_jaccard_cc"]
 def factorize_modules_connected_components(
     evidence_df: pd.DataFrame,
     *,
-    method: ModuleMethod = "bipartite_cc",
+    method: ModuleMethod = "term_jaccard_cc",  # <-- was "bipartite_cc"
     module_prefix: str = "M",
     # hub filter (gene term-degree)
     max_gene_term_degree: int | None = 200,
     # backward compat alias
     max_term_degree: int | None = None,
-    # term-term method knobs
-    min_shared_genes: int = 2,
-    jaccard_min: float = 0.05,
+    # term-term method knobs (tighter defaults to avoid giant components)
+    min_shared_genes: int = 3,
+    jaccard_min: float = 0.10,
     term_id_col: str = "term_uid",
     genes_col: str = "evidence_genes",
 ) -> ModuleOutputs:
@@ -341,32 +341,72 @@ def factorize_modules_connected_components(
 
     elif method == "term_jaccard_cc":
         term_to_genes = _build_term_gene_sets(edges_f)
-        comp_map = _term_term_components_shared_genes(
-            term_to_genes,
-            min_shared_genes=min_shared_genes,
-            jaccard_min=jaccard_min,
-        )
 
-        # stable base ids
-        comp_ids = sorted(set(comp_map.values()))
-        comp_to_mid_base = {c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)}
+        # Guardrail: term-term CC is O(T^2). If too large, fall back deterministically.
+        max_terms_for_pairwise = 2500
+        try:
+            max_terms_for_pairwise = int(evidence_df.attrs.get("max_terms_for_pairwise", 2500))  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
-        # build lists directly
-        term_lists = {}
-        gene_lists = {}
-        for t, cid in comp_map.items():
-            base = comp_to_mid_base[cid]
-            term_lists.setdefault(base, []).append(t)
-        for base in list(term_lists.keys()):
-            terms = sorted(term_lists[base])
-            term_lists[base] = terms
-            genes_union: set[str] = set()
-            for t in terms:
-                genes_union |= set(term_to_genes.get(t, set()))
-            gene_lists[base] = sorted([g for g in genes_union if g])
+        if len(term_to_genes) > max_terms_for_pairwise:
+            # Deterministic fallback: bipartite_cc (legacy) to avoid quadratic blowup.
+            nodes = _connected_components_from_bipartite_edges(edges_f)
 
-        gene_lists = pd.Series(gene_lists)
-        term_lists = pd.Series(term_lists)
+            comp_ids = sorted(nodes["component"].unique().tolist())
+            comp_to_mid_base = {
+                c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)
+            }
+            nodes = nodes.copy()
+            nodes["module_id_base"] = nodes["component"].map(comp_to_mid_base)
+
+            gene_lists = (
+                nodes[nodes["kind"].eq("gene")]
+                .groupby("module_id_base")["gene_id"]
+                .apply(lambda s: sorted([g for g in s.dropna().astype(str).tolist() if g]))
+            )
+            term_lists = (
+                nodes[nodes["kind"].eq("term")]
+                .groupby("module_id_base")["term_uid"]
+                .apply(lambda s: sorted([t for t in s.dropna().astype(str).tolist() if t]))
+            )
+
+            # record fallback provenance (in-memory)
+            edges_f.attrs["modules"] = {
+                "method": "term_jaccard_cc_fallback_bipartite_cc",
+                "reason": f"n_terms>{max_terms_for_pairwise}",
+                "min_shared_genes": int(min_shared_genes),
+                "jaccard_min": float(jaccard_min),
+            }
+        else:
+            comp_map = _term_term_components_shared_genes(
+                term_to_genes,
+                min_shared_genes=min_shared_genes,
+                jaccard_min=jaccard_min,
+            )
+
+            # stable base ids
+            comp_ids = sorted(set(comp_map.values()))
+            comp_to_mid_base = {
+                c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)
+            }
+
+            # build lists directly
+            term_lists = {}
+            gene_lists = {}
+            for t, cid in comp_map.items():
+                base = comp_to_mid_base[cid]
+                term_lists.setdefault(base, []).append(t)
+            for base in list(term_lists.keys()):
+                terms = sorted(term_lists[base])
+                term_lists[base] = terms
+                genes_union: set[str] = set()
+                for t in terms:
+                    genes_union |= set(term_to_genes.get(t, set()))
+                gene_lists[base] = sorted([g for g in genes_union if g])
+
+            gene_lists = pd.Series(gene_lists)
+            term_lists = pd.Series(term_lists)
 
     else:
         raise ValueError(f"Unknown method: {method}")
@@ -409,6 +449,9 @@ def factorize_modules_connected_components(
                 "term_ids": terms,
                 "rep_gene_ids_str": ",".join(rep),
                 "term_ids_str": ",".join(terms),
+                "module_method": method,
+                "module_min_shared_genes": int(min_shared_genes),
+                "module_jaccard_min": float(jaccard_min),
             }
         )
 

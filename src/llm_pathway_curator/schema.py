@@ -197,7 +197,7 @@ class EvidenceTable:
         s = g.strip().strip('"').strip("'")
         s = " ".join(s.split())
         s = s.strip(",;|")
-        return s
+        return s.upper()
 
     @classmethod
     def _parse_genes(cls, x: object) -> list[str]:
@@ -283,12 +283,14 @@ class EvidenceTable:
         if "source" not in df.columns:
             df["source"] = "unknown"
 
-        # qval: accept qval OR pval (best available)
         if "qval" not in df.columns:
-            if "pval" in df.columns:
-                df["qval"] = df["pval"]
-            else:
-                df["qval"] = pd.NA
+            df["qval"] = pd.NA
+
+        if "pval" not in df.columns:
+            df["pval"] = pd.NA
+
+        # provenance flag: whether qval was truly provided
+        df["qval_provided"] = "qval" in cols_mapped
 
         # direction: ORA often lacks it
         if "direction" not in df.columns:
@@ -358,6 +360,15 @@ class EvidenceTable:
 
         # provenance
         df.attrs["read_mode"] = rr.read_mode
+
+        # provenance / health hints (paper-facing)
+        genes_n = df["evidence_genes"].map(len)
+        df.attrs["health"] = {
+            "n_terms": int(df.shape[0]),
+            "n_terms_genes_le1": int((genes_n <= 1).sum()),
+            "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
+        }
+
         return cls(df=df)
 
     def summarize(self) -> dict[str, object]:
@@ -371,6 +382,8 @@ class EvidenceTable:
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
             "genes_per_term_p90": float(genes_n.quantile(0.9)) if len(genes_n) else 0.0,
             "read_mode": df.attrs.get("read_mode", "unknown"),
+            "genes_per_term_p10": float(genes_n.quantile(0.1)) if len(genes_n) else 0.0,
+            "n_terms_genes_le1": int((genes_n <= 1).sum()),
         }
 
     def write_tsv(self, path: str) -> None:

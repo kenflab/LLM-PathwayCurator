@@ -33,7 +33,8 @@ def _is_na_scalar(x: Any) -> bool:
     if isinstance(x, (list, tuple, set, dict)):
         return False
     try:
-        return bool(pd.isna(x))
+        v = pd.isna(x)
+        return bool(v) if isinstance(v, bool) else False
     except Exception:
         return False
 
@@ -139,15 +140,15 @@ def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
     return None
 
 
-def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any]:
+def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any, Any]:
     """
     Source of truth: claim_json (Claim schema).
-    Returns: (term_ids, gene_ids, gene_set_hash)
+    Returns: (term_ids, gene_ids, gene_set_hash, module_id)
     """
     try:
         obj = json.loads(cj)
     except Exception:
-        return ([], [], None)
+        return ([], [], None, None)
 
     ev = None
     if isinstance(obj, dict):
@@ -163,12 +164,16 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
         )
 
     if not isinstance(ev, dict):
-        return ([], [], None)
+        return ([], [], None, None)
 
     term_ids = _parse_ids(ev.get("term_ids") or ev.get("term_id") or "")
     gene_ids = _parse_ids(ev.get("gene_ids") or ev.get("gene_id") or "")
     gsh = ev.get("gene_set_hash")
-    return (term_ids, gene_ids, gsh)
+    mid = ev.get("module_id") or ev.get("module_ids")
+    # module_ids could be list-like; keep only first if list
+    if isinstance(mid, (list, tuple, set)):
+        mid = next(iter(mid), None)
+    return (term_ids, gene_ids, gsh, mid)
 
 
 def _extract_direction_from_claim_json(cj: str) -> str:
@@ -191,12 +196,23 @@ def _extract_direction_from_claim_json(cj: str) -> str:
 
 
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
+    """
+    External contradiction check (optional).
+    Policy (v1):
+      - If caller provided contradiction_status column but value is missing =>
+        ABSTAIN (inconclusive)
+      - PASS => ok
+      - FAIL => FAIL_CONTRADICTION
+      - ABSTAIN => ABSTAIN (if you choose to pass that status)
+    """
     if "contradiction_status" not in out.columns:
         return
 
     st = _norm_status(row.get("contradiction_status"))
     if not st:
+        out.at[i, "status"] = "ABSTAIN"
         out.at[i, "contradiction_ok"] = False
+        out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "audit_notes"] = _append_note(
             out.at[i, "audit_notes"], "contradiction_status missing"
         )
@@ -204,6 +220,13 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
 
     if st == "PASS":
         out.at[i, "contradiction_ok"] = True
+        return
+
+    if st == "ABSTAIN":
+        out.at[i, "status"] = "ABSTAIN"
+        out.at[i, "contradiction_ok"] = False
+        out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "contradiction=ABSTAIN")
         return
 
     if st == "FAIL":
@@ -399,9 +422,12 @@ def audit_claims(
     Source of truth for evidence references:
       1) claim_json (Claim schema)
       2) DataFrame columns as fallback (for backward compatibility)
+
+    Stability gate policy (v1, paper-aligned):
+      - Prefer module-level stability if module_id is available in BOTH claim and distilled
+      - Otherwise fallback to term-level stability (min over referenced term_ids)
     """
 
-    # Track which columns were truly provided by the caller (v1 policy).
     external_cols: set[str] = set(claims.columns)
 
     out = claims.copy()
@@ -419,13 +445,15 @@ def audit_claims(
     out["fail_reason"] = ""
     out["audit_notes"] = ""
 
-    # Keep the actual tau used by this row (helps Fig2 debugging)
+    # Debug / reporting aids (Fig2)
     if "tau_used" not in out.columns:
         out["tau_used"] = pd.NA
-
-    # Optional numeric feature for reporting/calibration
     if "term_survival_agg" not in out.columns:
         out["term_survival_agg"] = pd.NA
+    if "stability_scope" not in out.columns:
+        out["stability_scope"] = ""
+    if "module_id_effective" not in out.columns:
+        out["module_id_effective"] = ""
 
     # For intra-run contradiction
     if "gene_set_hash_effective" not in out.columns:
@@ -450,9 +478,21 @@ def audit_claims(
         tmp = distilled.copy()
         tmp["term_key"] = tmp[key_col].astype(str).str.strip()
         tmp["term_survival"] = pd.to_numeric(tmp["term_survival"], errors="coerce")
-        surv = tmp.groupby("term_key")["term_survival"].min()
+        term_surv = tmp.groupby("term_key")["term_survival"].min()
     else:
-        surv = None
+        term_surv = None
+
+    # Module-level survival (preferred if available)
+    has_module = "module_id" in distilled.columns
+    module_surv = None
+    if has_survival and has_module:
+        tmpm = distilled.copy()
+        tmpm["module_id"] = tmpm["module_id"].astype(str).str.strip()
+        tmpm["term_survival"] = pd.to_numeric(tmpm["term_survival"], errors="coerce")
+        tmpm = tmpm[~tmpm["module_id"].isin(_NA_TOKENS)]
+        tmpm = tmpm[~tmpm["module_id"].str.lower().isin({t.lower() for t in _NA_TOKENS})]
+        if not tmpm.empty:
+            module_surv = tmpm.groupby("module_id")["term_survival"].min()
 
     # Resolve tau default (tool contract)
     tau_default = _get_tau_default(card)
@@ -513,7 +553,7 @@ def audit_claims(
 
     hub_genes = {g for g, deg in gene_to_term_degree.items() if deg > int(hub_thr)}
 
-    # Control PASS note behavior (default True to avoid "empty explanations" warning)
+    # Control PASS note behavior
     pass_note_enabled = True
     try:
         extra = getattr(card, "extra", {}) or {}
@@ -568,7 +608,7 @@ def audit_claims(
                 min_overlap = min_overlap_default
 
         # 1) evidence refs (prefer claim_json)
-        term_ids_cj, gene_ids_cj, gsh_cj = _extract_evidence_from_claim_json(cj_str)
+        term_ids_cj, gene_ids_cj, gsh_cj, mid_cj = _extract_evidence_from_claim_json(cj_str)
 
         term_ids = term_ids_cj or _parse_ids(
             _get_first_present(
@@ -587,6 +627,13 @@ def audit_claims(
             if (gsh_cj is not None and not _is_na_scalar(gsh_cj) and str(gsh_cj).strip())
             else _get_first_present(row, ["gene_set_hash", "evidence_refs.gene_set_hash"])
         )
+
+        # module_id (paper-aligned): prefer claim_json; fallback to df columns
+        module_id = mid_cj or _get_first_present(
+            row, ["module_id", "evidence_refs.module_id", "evidence_refs.module_ids"]
+        )
+        module_id = "" if module_id is None else str(module_id).strip()
+        out.at[i, "module_id_effective"] = module_id
 
         gene_ids = [_norm_gene_id(g) for g in gene_ids]
 
@@ -675,8 +722,8 @@ def audit_claims(
             evk = str(out.at[i, "term_ids_set_hash"]).strip()
         out.at[i, "evidence_key"] = evk
 
-        # 2) stability gate
-        if (not has_survival) or (surv is None):
+        # 2) stability gate (prefer module-level if available)
+        if (not has_survival) or (term_surv is None):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_MISSING_SURVIVAL
@@ -686,23 +733,39 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        vals: list[float] = []
-        for t in term_ids:
-            v = surv.get(t, float("nan"))
-            try:
-                vals.append(float(v))
-            except Exception:
-                vals.append(float("nan"))
+        agg = float("nan")
+        scope = "term"
 
-        agg = float(pd.Series(vals).min(skipna=True)) if vals else float("nan")
+        # Module-level stability if possible (paper-aligned, makes tau sweep meaningful)
+        if module_surv is not None and module_id and module_id in module_surv.index:
+            try:
+                agg = float(module_surv.get(module_id, float("nan")))
+                scope = "module"
+            except Exception:
+                agg = float("nan")
+                scope = "term"
+
+        # Fallback to term-level min
+        if pd.isna(agg):
+            vals: list[float] = []
+            for t in term_ids:
+                v = term_surv.get(t, float("nan"))
+                try:
+                    vals.append(float(v))
+                except Exception:
+                    vals.append(float("nan"))
+            agg = float(pd.Series(vals).min(skipna=True)) if vals else float("nan")
+            scope = "term"
+
         out.at[i, "term_survival_agg"] = agg
+        out.at[i, "stability_scope"] = scope
 
         if pd.isna(agg):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_MISSING_SURVIVAL
             out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], "term_survival missing for referenced terms"
+                out.at[i, "audit_notes"], "term_survival missing for referenced terms/module"
             )
             _enforce_reason_vocab(out, i)
             continue
@@ -712,7 +775,7 @@ def audit_claims(
             out.at[i, "stability_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
             out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], f"term_survival_agg={agg:.3f} < tau={float(tau_row):.2f}"
+                out.at[i, "audit_notes"], f"survival[{scope}]={agg:.3f} < tau={float(tau_row):.2f}"
             )
             _enforce_reason_vocab(out, i)
             continue
@@ -720,6 +783,9 @@ def audit_claims(
         # 3) optional advanced audits
         _apply_external_contradiction(out, i, row)
         if out.at[i, "status"] == "FAIL":
+            _enforce_reason_vocab(out, i)
+            continue
+        if str(out.at[i, "status"]).strip().upper() == "ABSTAIN":
             _enforce_reason_vocab(out, i)
             continue
 
@@ -777,8 +843,7 @@ def audit_claims(
             except Exception:
                 cs = None
 
-            # NEW: allow controlling context gate behavior from SampleCard.extra
-            context_gate_mode = "abstain"  # default: backward compatible
+            context_gate_mode = "abstain"  # default conservative
             try:
                 extra = getattr(card, "extra", {}) or {}
                 if isinstance(extra, dict) and extra.get("context_gate_mode") is not None:
@@ -788,17 +853,14 @@ def audit_claims(
 
             if cs is not None and cs == 0.0:
                 if context_gate_mode in {"off", "disable", "disabled", "none"}:
-                    # do nothing
                     out.at[i, "audit_notes"] = _append_note(
                         out.at[i, "audit_notes"], "context_score=0 (context gate disabled)"
                     )
                 elif context_gate_mode in {"note", "warn", "warning"}:
-                    # NOTE-ONLY: keep tau sweep meaningful for Fig2
                     out.at[i, "audit_notes"] = _append_note(
                         out.at[i, "audit_notes"], "context_nonspecific: context_score=0"
                     )
                 else:
-                    # default behavior: ABSTAIN
                     out.at[i, "status"] = "ABSTAIN"
                     out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
                     out.at[i, "audit_notes"] = _append_note(
@@ -814,13 +876,11 @@ def audit_claims(
 
         # PASS: keep a minimal explanation if enabled
         if pass_note_enabled:
-            # Keep it very short; still gives “why PASS”
             if not str(out.at[i, "audit_notes"]).strip():
                 out.at[i, "audit_notes"] = "ok"
 
         _enforce_reason_vocab(out, i)
 
-        # If PASS and still empty, add a minimal audit breadcrumb (paper-friendly)
         if str(out.at[i, "status"]).strip().upper() == "PASS":
             note = (
                 ""

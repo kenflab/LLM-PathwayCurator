@@ -15,7 +15,7 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 # Core definitions: Risk/Coverage
 # -----------------------------
 def compute_counts(status: pd.Series) -> dict[str, int]:
-    s = status.astype(str)
+    s = status.astype(str).str.strip().str.upper()
     n_pass = int((s == "PASS").sum())
     n_fail = int((s == "FAIL").sum())
     n_abs = int((s == "ABSTAIN").sum())
@@ -66,6 +66,8 @@ def risk_coverage_curve(
     status_col: str = "status",
     decision_thresholds: list[float] | None = None,
     pass_if_score_ge: bool = True,
+    promote_abstain: bool = True,
+    fail_on_degenerate: bool = False,
 ) -> pd.DataFrame:
     """
     Build a Risk–Coverage curve by sweeping a PASS threshold.
@@ -102,7 +104,18 @@ def risk_coverage_curve(
         else:
             decision_thresholds = [float(x) for x in np.quantile(uniq, np.linspace(0, 1, 200))]
 
-    base_status = df[status_col].astype(str)
+    # Degenerate curve guardrail (paper-facing)
+    if len(decision_thresholds) <= 1:
+        msg = (
+            "risk_coverage_curve: degenerate thresholds (score has <=1 unique value). "
+            f"score_col={score_col}"
+        )
+        if fail_on_degenerate:
+            raise ValueError(msg)
+        # keep behavior but make it explicit
+        decision_thresholds = list(decision_thresholds) if decision_thresholds is not None else []
+
+    base_status = df[status_col].astype(str).str.strip().str.upper()
     out_rows: list[dict[str, Any]] = []
 
     for thr in decision_thresholds:
@@ -117,13 +130,23 @@ def risk_coverage_curve(
         else:
             pass_mask = not_fail & (scores <= float(thr))
 
-        # For non-FAIL items: PASS if threshold satisfied else ABSTAIN
-        s = s.where(~not_fail, other="ABSTAIN")
-        s = s.where(~pass_mask, other="PASS")
-        # FAIL remains FAIL automatically because we never overwrite is_fail rows
+        if promote_abstain:
+            # Among non-FAIL: PASS if threshold satisfied else ABSTAIN
+            s = s.where(~not_fail, other="ABSTAIN")
+            s = s.where(~pass_mask, other="PASS")
+        else:
+            # Only allow gating of already-PASS items (more conservative)
+            # - PASS can drop to ABSTAIN if below threshold
+            # - ABSTAIN stays ABSTAIN
+            # - FAIL stays FAIL
+            was_pass = s == "PASS"
+            to_abstain = was_pass & not_fail & (~pass_mask)
+            s = s.where(~to_abstain, other="ABSTAIN")
+            # keep PASS where pass_mask, keep ABSTAIN where already ABSTAIN
 
         m = risk_coverage_from_status(s)
         m["threshold"] = float(thr)
+        m["promote_abstain"] = bool(promote_abstain)
         out_rows.append(m)
 
     return pd.DataFrame(out_rows)

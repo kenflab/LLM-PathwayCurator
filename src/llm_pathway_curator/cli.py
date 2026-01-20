@@ -46,6 +46,12 @@ def cmd_run(args: argparse.Namespace) -> None:
     _require_file(sample_card, "--sample-card")
     _ensure_outdir(outdir, force=bool(args.force))
 
+    # contract gate: validate evidence table early (clear CLI error)
+    try:
+        EvidenceTable.read_tsv(str(evidence_table))
+    except Exception as e:
+        raise SystemExit(f"[ERROR] invalid --evidence-table (EvidenceTable contract): {e}") from e
+
     cfg = RunConfig(
         evidence_table=str(evidence_table),
         sample_card=str(sample_card),
@@ -56,7 +62,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         tau=args.tau,
     )
 
-    run_pipeline(cfg)
+    res = run_pipeline(cfg)
+    print(f"[OK] wrote artifacts to: {res.outdir}")
 
 
 AdaptFormat = Literal["metascape", "fgsea"]
@@ -118,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--tau",
         type=float,
         default=None,
-        help="Audit stability threshold tau (overrides sample_card extra.audit_tau if set)",
+        help="Audit stability threshold tau (overrides sample_card.audit_tau() if set)",
     )
 
     p_adapt = sub.add_parser(
