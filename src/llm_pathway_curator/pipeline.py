@@ -188,6 +188,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         # 0) normalize inputs under internal contract
         _mark_step("normalize_inputs")
         ev_tbl = EvidenceTable.read_tsv(cfg.evidence_table)
+        meta["inputs"]["evidence_summary"] = ev_tbl.summarize()
+        _write_json(meta_path, meta)
 
         ev_norm_path = outdir / "evidence.normalized.tsv"
         ev_tbl.write_tsv(str(ev_norm_path))
@@ -226,6 +228,21 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         # 2) modules
         _mark_step("modules")
         mod_out = factorize_modules_connected_components(distilled)
+
+        # provenance from modules.py (paper-facing)
+        meta["inputs"]["modules"] = getattr(mod_out.edges_df, "attrs", {}).get("modules", {})
+        _write_json(meta_path, meta)
+
+        if not mod_out.modules_df.empty:
+            meta.setdefault("inputs", {}).setdefault("modules_stats", {})
+            meta["inputs"]["modules_stats"] = {
+                "n_modules": int(mod_out.modules_df.shape[0]),
+                "n_terms_median": float(mod_out.modules_df["n_terms"].median()),
+                "n_genes_median": float(mod_out.modules_df["n_genes"].median()),
+                "n_terms_max": int(mod_out.modules_df["n_terms"].max()),
+                "n_genes_max": int(mod_out.modules_df["n_genes"].max()),
+            }
+            _write_json(meta_path, meta)
 
         modules_path = outdir / "modules.tsv"
         term_modules_path = outdir / "term_modules.tsv"

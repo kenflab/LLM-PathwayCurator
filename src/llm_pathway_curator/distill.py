@@ -147,11 +147,16 @@ def _perturb_genes(
     p_drop: float,
     p_add: float,
     min_genes: int,
+    rescue: bool,
 ) -> set[str]:
     """
     Evidence perturbation:
       - dropout: remove each gene with prob p_drop
       - add/jitter: add ~p_add * |genes| random genes from global pool
+
+    rescue:
+      - if True, enforce at least min_genes kept by adding back from originals
+      - if False, allow full dropout (stress is harsher; helps tau sweep)
     """
     if not genes:
         return set()
@@ -162,17 +167,16 @@ def _perturb_genes(
     keep_mask = rng.random(len(g_arr)) >= p_drop
     kept = g_arr[keep_mask].tolist()
 
-    # if we dropped too much, force-keep a few (deterministic under RNG)
-    if len(kept) < min_genes and len(g_arr) > 0:
-        # sample additional from the originals
-        need = min_genes - len(kept)
-        # avoid duplicates
-        remaining = [g for g in genes if g not in set(kept)]
-        if remaining:
-            add_back = rng.choice(
-                np.array(remaining, dtype=object), size=min(need, len(remaining)), replace=False
-            )
-            kept.extend(add_back.tolist())
+    if rescue:
+        # if we dropped too much, force-keep a few (deterministic under RNG)
+        if len(kept) < min_genes and len(g_arr) > 0:
+            need = min_genes - len(kept)
+            remaining = [g for g in genes if g not in set(kept)]
+            if remaining:
+                add_back = rng.choice(
+                    np.array(remaining, dtype=object), size=min(need, len(remaining)), replace=False
+                )
+                kept.extend(add_back.tolist())
 
     out = set(kept)
 
@@ -181,7 +185,6 @@ def _perturb_genes(
         k_add = int(round(p_add * max(1, len(genes))))
         if k_add > 0:
             orig = set([str(g) for g in genes if str(g).strip()])
-            # exclude orig genes from add candidates
             candidates = np.array(
                 [g for g in gene_pool.tolist() if str(g) not in orig], dtype=object
             )
@@ -444,16 +447,23 @@ def distill_evidence(
     # TSV-friendly genes
     out["evidence_genes_str"] = out["evidence_genes"].map(lambda xs: ",".join(xs))
 
-    # ---- v1 survival computation (evidence perturbation) ----
-    # Pull parameters from card if present (best-effort), else defaults.
     n_reps = int(_get_card_param(card, "n_perturb", 64))
     p_drop = float(_get_card_param(card, "gene_dropout_p", 0.10))
     p_add = float(_get_card_param(card, "gene_jitter_p", 0.05))
+
+    # IMPORTANT: defaults that avoid survival=1.0 saturation in real tables
     j_min = float(_get_card_param(card, "evidence_jaccard_min", 0.60))
     r_min = float(_get_card_param(card, "evidence_recall_min", 0.80))
     p_min = float(_get_card_param(card, "evidence_precision_min", 0.80))
 
-    # default min_genes: make it less “helpful”
+    # Default: require keeping a meaningful fraction (paper-friendly)
+    min_keep_frac = float(_get_card_param(card, "min_keep_frac", 0.50))  # was 0.0
+    min_keep_frac = min(max(min_keep_frac, 0.0), 1.0)
+
+    # Default rescue policy: OFF for survival computation (harsh stress), but can be enabled by card
+    rescue = bool(_get_card_param(card, "perturb_rescue", False))  # new
+
+    # Back-compat: user can still supply absolute min genes; if not, derive from min_keep_frac
     min_genes = int(_get_card_param(card, "min_evidence_genes", 1))
 
     # Clamp for safety
@@ -471,10 +481,8 @@ def distill_evidence(
     distill_mode = _get_distill_mode(card)
 
     # ===========================
-    # REPLICATES PROXY (optional)
+    # REPLICATES PROXY
     # ===========================
-    # NOTE: This is NOT true patient-level LOO enrichment; it is a proxy that
-    # evaluates stability across stacked replicate evidence tables.
     if distill_mode == "replicates_proxy":
         if "replicate_id" not in out.columns:
             raise ValueError("distill_mode=replicates_proxy requires replicate_id column")
@@ -527,7 +535,7 @@ def distill_evidence(
 
     else:
         # ===========================
-        # EVIDENCE-LEVEL PERTURBATION (default v1)
+        # EVIDENCE-LEVEL PERTURBATION
         # ===========================
 
         all_genes: list[str] = []
@@ -546,18 +554,18 @@ def distill_evidence(
         mean_j: list[float] = []
         mean_r: list[float] = []
         mean_p: list[float] = []
+        n_ok_list: list[int] = []
+        n_total_list: list[int] = []
 
         # IMPORTANT: order-invariant RNG per term_uid
         for tu, xs in zip(
-            out["term_uid"].astype(str).tolist(), out["evidence_genes"].tolist(), strict=False
+            out["term_uid"].astype(str).tolist(), out["evidence_genes"].tolist(), strict=True
         ):
             orig = set(xs)
 
+            user_min_genes = _get_card_param(card, "min_evidence_genes", None)
             if user_min_genes is None:
-                if min_keep_frac > 0.0:
-                    min_genes_eff = max(1, int(np.ceil(min_keep_frac * max(1, len(xs)))))
-                else:
-                    min_genes_eff = int(min_genes)  # fall back to earlier default (usually 1)
+                min_genes_eff = max(1, int(np.ceil(min_keep_frac * max(1, len(xs)))))
             else:
                 try:
                     min_genes_eff = int(user_min_genes)
@@ -580,6 +588,7 @@ def distill_evidence(
                     p_drop=p_drop,
                     p_add=p_add,
                     min_genes=min_genes_eff,
+                    rescue=rescue,
                 )
                 j, recall, precision = _compute_similarity_metrics(orig, pert)
                 js.append(j)
@@ -592,6 +601,8 @@ def distill_evidence(
             mean_j.append(float(np.mean(js)) if js else float("nan"))
             mean_r.append(float(np.mean(rs)) if rs else float("nan"))
             mean_p.append(float(np.mean(ps)) if ps else float("nan"))
+            n_ok_list.append(int(ok))
+            n_total_list.append(int(n_reps))
 
         trust_input_survival = bool(_get_card_param(card, "trust_input_survival", False))
 
@@ -603,28 +614,12 @@ def distill_evidence(
             out["term_survival_input"] = _ensure_float64_na_series(len(out))
 
         out["term_survival_computed"] = pd.Series(term_surv, dtype="Float64")
+        out["term_survival_n_ok"] = pd.Series(n_ok_list, dtype="Int64")
+        out["term_survival_n_total"] = pd.Series(n_total_list, dtype="Int64")
 
         out["term_survival"] = (
             out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
         ).astype("Float64")
-
-        if "gene_survival" in out.columns:
-            out["gene_survival_input"] = pd.to_numeric(
-                out["gene_survival"], errors="coerce"
-            ).astype("Float64")
-        else:
-            out["gene_survival_input"] = _ensure_float64_na_series(len(out))
-
-        out["gene_survival"] = (
-            out["gene_survival_input"] if trust_input_survival else out["term_survival"]
-        ).astype("Float64")
-
-        if "module_survival" in out.columns:
-            out["module_survival"] = pd.to_numeric(out["module_survival"], errors="coerce").astype(
-                "Float64"
-            )
-        else:
-            out["module_survival"] = _ensure_float64_na_series(len(out))
 
         out["distill_mode"] = "evidence_perturb"
         out["distill_n_perturb"] = n_reps
@@ -637,6 +632,7 @@ def distill_evidence(
         out["distill_min_evidence_genes_effective"] = (
             pd.NA if user_min_genes is None else int(user_min_genes)
         )
+        out["distill_perturb_rescue"] = bool(rescue)
 
     # Gates for downstream (now meaningful): keep_term can be used by select/audit
     if "keep_term" not in out.columns:

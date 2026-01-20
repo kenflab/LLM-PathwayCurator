@@ -57,12 +57,14 @@ def _prefer_str_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 def _is_na_scalar(x: Any) -> bool:
+    """pd.isna is unsafe for list-like; only treat scalars here."""
     if x is None:
         return True
     if isinstance(x, (list, tuple, set, dict)):
         return False
     try:
-        return bool(pd.isna(x))
+        v = pd.isna(x)
+        return bool(v) if isinstance(v, bool) else False
     except Exception:
         return False
 
@@ -448,9 +450,16 @@ def write_report_jsonl(
 
             context_keys = _context_keys_from_row_or_card(row, card)
 
-            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip()
+            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip().lower()
             if not gene_set_hash:
                 raise ValueError("audit_log has empty gene_set_hash for a row (v1 requires it)")
+            ok_hex = (len(gene_set_hash) >= 8) and all(
+                ch in "0123456789abcdef" for ch in gene_set_hash
+            )
+            if not ok_hex:
+                raise ValueError(
+                    "audit_log gene_set_hash must be hex string (len>=8) for v1 contract"
+                )
 
             module_ids = _sorted_list(_get_first_present(row, ["module_ids", "module_id"]) or [])
             term_ids = _sorted_list(
@@ -460,13 +469,20 @@ def write_report_jsonl(
                 _get_first_present(row, ["gene_ids", "gene_id", "gene_id(s)"]) or []
             )
 
-            # harden: if term_ids empty, fall back to term_uid (most common in your pipeline)
+            # fallback: term_uid (most common in pipeline)
             if not term_ids:
                 tu = str(row.get("term_uid", "") or "").strip()
                 if tu:
                     term_ids = [tu]
 
-            # also: if still empty, fall back to entity_id (last resort; avoids claim_id collisions)
+            # last resort fallback: source:term_id if both exist
+            if not term_ids:
+                src = str(row.get("source", "") or "").strip()
+                tid = str(row.get("term_id", "") or "").strip()
+                if src and tid:
+                    term_ids = [f"{src}:{tid}"]
+
+            # ultimate fallback: entity_id (avoid empty evidence refs)
             if not term_ids and entity_id:
                 term_ids = [entity_id]
 
@@ -497,8 +513,28 @@ def write_report_jsonl(
 
             reason_codes, reason_details = _reason_codes_and_details_from_row(row)
 
+            # claim_id: prefer existing; else deterministically derive (v1)
+            claim_id_row = str(row.get("claim_id", "") or "").strip()
+
+            claim_id_v1 = _claim_id_v1(
+                entity_id=entity_id,
+                direction=direction,
+                context=ctx,
+                context_keys=context_keys,
+                gene_set_hash=gene_set_hash,
+                module_ids=module_ids,
+                term_ids=term_ids,
+            )
+
+            claim_id = claim_id_row or claim_id_v1
+
             # deterministic explanation fallback (keeps paper artifacts informative)
             reason_details = dict(reason_details)
+            if claim_id_row and (claim_id_row != claim_id_v1):
+                reason_details["claim_id_mismatch_v1"] = {
+                    "row": claim_id_row,
+                    "v1": claim_id_v1,
+                }
             reason_details["audit_notes"] = _ensure_audit_notes(row, decision=decision, tau=tau_val)
 
             cancer_key = str(
@@ -506,17 +542,19 @@ def write_report_jsonl(
             ).strip()
 
             # claim_id: prefer existing; else deterministically derive (v1)
-            claim_id = str(row.get("claim_id", "") or "").strip()
-            if not claim_id:
-                claim_id = _claim_id_v1(
-                    entity_id=entity_id,
-                    direction=direction,
-                    context=ctx,
-                    context_keys=context_keys,
-                    gene_set_hash=gene_set_hash,
-                    module_ids=module_ids,
-                    term_ids=term_ids,
-                )
+            claim_id_row = str(row.get("claim_id", "") or "").strip()
+
+            claim_id_v1 = _claim_id_v1(
+                entity_id=entity_id,
+                direction=direction,
+                context=ctx,
+                context_keys=context_keys,
+                gene_set_hash=gene_set_hash,
+                module_ids=module_ids,
+                term_ids=term_ids,
+            )
+
+            claim_id = claim_id_row or claim_id_v1
 
             rec = {
                 # provenance (stable)
