@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# paper/scripts/fig2_plot_multipanel.py
 from __future__ import annotations
 
 import argparse

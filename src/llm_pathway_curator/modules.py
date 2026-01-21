@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from collections import deque
 from dataclasses import dataclass
 from typing import Literal
@@ -33,8 +32,14 @@ def _norm_gene_id(g: str) -> str:
 
 
 def _module_hash(terms: list[str], genes: list[str]) -> str:
-    payload = "T:" + "|".join(sorted(terms)) + "\n" + "G:" + "|".join(sorted(genes))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    """
+    Content hash for a module.
+    Deterministic across runs given the same term set + gene set.
+    """
+    t = sorted([str(x).strip() for x in terms if str(x).strip()])
+    g = sorted([str(x).strip() for x in genes if str(x).strip()])
+    payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 # -------------------------
@@ -60,23 +65,19 @@ def build_term_gene_edges(
 
         genes = r[genes_col]
 
-        if genes is None:
-            genes_list: list[str] = []
-        elif isinstance(genes, (list, tuple, set)):
+        # Preferred contract: list-like (post-schema/post-distill)
+        if isinstance(genes, (list, tuple, set)):
             genes_list = [_norm_gene_id(g) for g in genes]
             genes_list = [g for g in genes_list if g]
+        elif genes is None:
+            genes_list = []
         else:
-            try:
-                if isinstance(genes, float) and math.isnan(genes):
-                    genes_list = []
-                elif isinstance(pd.isna(genes), bool) and bool(pd.isna(genes)):
-                    genes_list = []
-                else:
-                    s = str(genes).strip().replace(";", ",").replace("|", ",")
-                    genes_list = [_norm_gene_id(g) for g in s.split(",")]
-                    genes_list = [g for g in genes_list if g]
-            except Exception:
-                s = str(genes).strip().replace(";", ",").replace("|", ",")
+            # Last-resort: tolerate legacy string inputs, but keep behavior deterministic.
+            s = str(genes).strip()
+            if not s or s.lower() in {"na", "nan", "none"}:
+                genes_list = []
+            else:
+                s = s.replace(";", ",").replace("|", ",")
                 genes_list = [_norm_gene_id(g) for g in s.split(",")]
                 genes_list = [g for g in genes_list if g]
 
@@ -134,7 +135,7 @@ def filter_hub_genes(
 
 
 # -------------------------
-# Connected components on bipartite graph (old behavior)
+# Connected components on bipartite graph (legacy)
 # -------------------------
 def _connected_components_from_bipartite_edges(edges: pd.DataFrame) -> pd.DataFrame:
     if edges.empty:
@@ -187,7 +188,7 @@ def _connected_components_from_bipartite_edges(edges: pd.DataFrame) -> pd.DataFr
 
 
 # -------------------------
-# Term-term graph by shared genes (new, paper-friendly)
+# Term-term graph by shared genes (paper-friendly)
 # -------------------------
 def _build_term_gene_sets(edges: pd.DataFrame) -> dict[str, set[str]]:
     term_to_genes: dict[str, set[str]] = {}
@@ -212,7 +213,6 @@ def _term_term_components_shared_genes(
     if not terms:
         return {}
 
-    # Build adjacency lists deterministically (O(T^2) but T is typically manageable for Fig2)
     adj: dict[str, list[str]] = {t: [] for t in terms}
 
     for i, a in enumerate(terms):
@@ -233,7 +233,6 @@ def _term_term_components_shared_genes(
             adj[a].append(b)
             adj[b].append(a)
 
-    # BFS components
     comp_map: dict[str, int] = {}
     seen: set[str] = set()
     comp = 0
@@ -268,13 +267,10 @@ ModuleMethod = Literal["bipartite_cc", "term_jaccard_cc"]
 def factorize_modules_connected_components(
     evidence_df: pd.DataFrame,
     *,
-    method: ModuleMethod = "term_jaccard_cc",  # <-- was "bipartite_cc"
+    method: ModuleMethod = "term_jaccard_cc",
     module_prefix: str = "M",
-    # hub filter (gene term-degree)
     max_gene_term_degree: int | None = 200,
-    # backward compat alias
-    max_term_degree: int | None = None,
-    # term-term method knobs (tighter defaults to avoid giant components)
+    max_term_degree: int | None = None,  # deprecated alias
     min_shared_genes: int = 3,
     jaccard_min: float = 0.10,
     term_id_col: str = "term_uid",
@@ -306,12 +302,16 @@ def factorize_modules_connected_components(
         modules_df = pd.DataFrame(
             columns=[
                 "module_id",
+                "module_rank",
                 "n_terms",
                 "n_genes",
                 "rep_gene_ids",
                 "term_ids",
                 "rep_gene_ids_str",
                 "term_ids_str",
+                "module_method",
+                "module_min_shared_genes",
+                "module_jaccard_min",
             ]
         )
         term_modules_df = pd.DataFrame(columns=["term_uid", "module_id"])
@@ -319,30 +319,34 @@ def factorize_modules_connected_components(
             modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f
         )
 
+    # compute term -> genes union helper (used also for singleton fill)
+    term_to_genes = _build_term_gene_sets(edges_f)
+
     if method == "bipartite_cc":
         nodes = _connected_components_from_bipartite_edges(edges_f)
-
-        # derive term lists / gene lists per component (base module)
         comp_ids = sorted(nodes["component"].unique().tolist())
-        comp_to_mid_base = {c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)}
-        nodes = nodes.copy()
-        nodes["module_id_base"] = nodes["component"].map(comp_to_mid_base)
 
-        gene_lists = (
-            nodes[nodes["kind"].eq("gene")]
-            .groupby("module_id_base")["gene_id"]
-            .apply(lambda s: sorted([g for g in s.dropna().astype(str).tolist() if g]))
-        )
-        term_lists = (
-            nodes[nodes["kind"].eq("term")]
-            .groupby("module_id_base")["term_uid"]
-            .apply(lambda s: sorted([t for t in s.dropna().astype(str).tolist() if t]))
-        )
+        term_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
+        gene_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
+
+        # terms
+        tdf = nodes[nodes["kind"].eq("term")].copy()
+        for cid, g in tdf.groupby("component"):
+            term_lists[int(cid)] = sorted(
+                [str(x) for x in g["term_uid"].dropna().astype(str).tolist() if str(x).strip()]
+            )
+
+        # genes
+        gdf = nodes[nodes["kind"].eq("gene")].copy()
+        for cid, g in gdf.groupby("component"):
+            gene_lists[int(cid)] = sorted(
+                [str(x) for x in g["gene_id"].dropna().astype(str).tolist() if str(x).strip()]
+            )
+
+        # convert to "base buckets" (int keys)
+        buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
 
     elif method == "term_jaccard_cc":
-        term_to_genes = _build_term_gene_sets(edges_f)
-
-        # Guardrail: term-term CC is O(T^2). If too large, fall back deterministically.
         max_terms_for_pairwise = 2500
         try:
             max_terms_for_pairwise = int(evidence_df.attrs.get("max_terms_for_pairwise", 2500))  # type: ignore[attr-defined]
@@ -350,99 +354,99 @@ def factorize_modules_connected_components(
             pass
 
         if len(term_to_genes) > max_terms_for_pairwise:
-            # Deterministic fallback: bipartite_cc (legacy) to avoid quadratic blowup.
+            # deterministic fallback to bipartite_cc
             nodes = _connected_components_from_bipartite_edges(edges_f)
-
             comp_ids = sorted(nodes["component"].unique().tolist())
-            comp_to_mid_base = {
-                c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)
-            }
-            nodes = nodes.copy()
-            nodes["module_id_base"] = nodes["component"].map(comp_to_mid_base)
 
-            gene_lists = (
-                nodes[nodes["kind"].eq("gene")]
-                .groupby("module_id_base")["gene_id"]
-                .apply(lambda s: sorted([g for g in s.dropna().astype(str).tolist() if g]))
-            )
-            term_lists = (
-                nodes[nodes["kind"].eq("term")]
-                .groupby("module_id_base")["term_uid"]
-                .apply(lambda s: sorted([t for t in s.dropna().astype(str).tolist() if t]))
-            )
+            term_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
+            gene_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
 
-            # record fallback provenance (in-memory)
-            edges_f.attrs["modules"] = {
-                "method": "term_jaccard_cc_fallback_bipartite_cc",
-                "reason": f"n_terms>{max_terms_for_pairwise}",
-                "min_shared_genes": int(min_shared_genes),
-                "jaccard_min": float(jaccard_min),
-            }
+            tdf = nodes[nodes["kind"].eq("term")].copy()
+            for cid, g in tdf.groupby("component"):
+                term_lists[int(cid)] = sorted(
+                    [str(x) for x in g["term_uid"].dropna().astype(str).tolist() if str(x).strip()]
+                )
+
+            gdf = nodes[nodes["kind"].eq("gene")].copy()
+            for cid, g in gdf.groupby("component"):
+                gene_lists[int(cid)] = sorted(
+                    [str(x) for x in g["gene_id"].dropna().astype(str).tolist() if str(x).strip()]
+                )
+
+            buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
+
+            # record fallback provenance, but do NOT overwrite later
+            edges_f.attrs.setdefault("modules", {})
+            edges_f.attrs["modules"].update(
+                {
+                    "method": "term_jaccard_cc_fallback_bipartite_cc",
+                    "reason": f"n_terms>{max_terms_for_pairwise}",
+                    "min_shared_genes": int(min_shared_genes),
+                    "jaccard_min": float(jaccard_min),
+                }
+            )
         else:
             comp_map = _term_term_components_shared_genes(
                 term_to_genes,
                 min_shared_genes=min_shared_genes,
                 jaccard_min=jaccard_min,
             )
-
-            # stable base ids
             comp_ids = sorted(set(comp_map.values()))
-            comp_to_mid_base = {
-                c: f"{module_prefix}{i:04d}" for i, c in enumerate(comp_ids, start=1)
-            }
 
-            # build lists directly
-            term_lists = {}
-            gene_lists = {}
-            for t, cid in comp_map.items():
-                base = comp_to_mid_base[cid]
-                term_lists.setdefault(base, []).append(t)
-            for base in list(term_lists.keys()):
-                terms = sorted(term_lists[base])
-                term_lists[base] = terms
+            buckets = []
+            for cid in comp_ids:
+                terms = sorted([t for t, c in comp_map.items() if c == cid])
                 genes_union: set[str] = set()
                 for t in terms:
                     genes_union |= set(term_to_genes.get(t, set()))
-                gene_lists[base] = sorted([g for g in genes_union if g])
-
-            gene_lists = pd.Series(gene_lists)
-            term_lists = pd.Series(term_lists)
-
+                genes = sorted([g for g in genes_union if str(g).strip()])
+                buckets.append((cid, terms, genes))
     else:
         raise ValueError(f"Unknown method: {method}")
 
-    # stabilize module_id by content hash
-    base_to_mid: dict[str, str] = {}
-    for base in sorted(term_lists.index.tolist()):
-        genes = gene_lists.get(base, [])
-        terms = term_lists.get(base, [])
+    # --- ensure every term gets a module (singleton for isolated terms) ---
+    all_terms = sorted(set(edges_f["term_uid"].astype(str).tolist()))
+    assigned_terms: set[str] = set()
+    for _, terms, _ in buckets:
+        for t in terms:
+            assigned_terms.add(str(t))
+
+    missing_terms = [t for t in all_terms if t not in assigned_terms]
+    if missing_terms:
+        # append as deterministic singleton buckets
+        next_cid = max([int(x[0]) for x in buckets], default=-1) + 1
+        for t in sorted(missing_terms):
+            genes = sorted(list(term_to_genes.get(t, set())))
+            buckets.append((next_cid, [t], genes))
+            next_cid += 1
+
+    # --- stable module_id by content hash ONLY (no component numbering) ---
+    # sort buckets by (hash, n_terms, n_genes, first_term) for deterministic module_rank
+    hashed: list[tuple[str, list[str], list[str]]] = []
+    for _, terms, genes in buckets:
         h = _module_hash(list(terms), list(genes))
-        base_to_mid[str(base)] = f"{base}__{h}"
+        hashed.append((h, list(terms), list(genes)))
+
+    hashed = sorted(
+        hashed,
+        key=lambda x: (x[0], len(x[1]), len(x[2]), (x[1][0] if x[1] else "")),
+    )
 
     # term_modules_df
     term_modules_rows: list[tuple[str, str]] = []
-    for base in sorted(base_to_mid.keys()):
-        mid = base_to_mid[base]
-        for t in term_lists.get(base, []):
+    modules_rows: list[dict[str, object]] = []
+
+    for rank, (h, terms, genes) in enumerate(hashed, start=1):
+        mid = f"{module_prefix}{h}"
+
+        for t in terms:
             term_modules_rows.append((str(t), mid))
 
-    term_modules_df = (
-        pd.DataFrame(term_modules_rows, columns=["term_uid", "module_id"])
-        .drop_duplicates()
-        .sort_values(["module_id", "term_uid"], kind="mergesort")
-        .reset_index(drop=True)
-    )
-
-    # modules_df
-    modules_rows: list[dict[str, object]] = []
-    for base in sorted(base_to_mid.keys()):
-        mid = base_to_mid[base]
-        genes = list(gene_lists.get(base, []))
-        terms = list(term_lists.get(base, []))
-        rep = genes[:10]
+        rep = list(genes)[:10]
         modules_rows.append(
             {
                 "module_id": mid,
+                "module_rank": int(rank),
                 "n_terms": int(len(terms)),
                 "n_genes": int(len(genes)),
                 "rep_gene_ids": rep,
@@ -455,16 +459,38 @@ def factorize_modules_connected_components(
             }
         )
 
-    modules_df = (
-        pd.DataFrame(modules_rows).sort_values("module_id", kind="mergesort").reset_index(drop=True)
+    term_modules_df = (
+        pd.DataFrame(term_modules_rows, columns=["term_uid", "module_id"])
+        .sort_values(["term_uid", "module_id"], kind="mergesort")
+        .reset_index(drop=True)
     )
 
-    # record provenance on edges_f (kept in-memory; TSV writers can optionally serialize)
-    edges_f.attrs["modules"] = {
-        "method": method,
-        "min_shared_genes": int(min_shared_genes),
-        "jaccard_min": float(jaccard_min),
-    }
+    # Contract: 1 term_uid -> exactly 1 module_id
+    dup_term = term_modules_df.groupby("term_uid")["module_id"].nunique()
+    bad = dup_term[dup_term > 1]
+    if not bad.empty:
+        ex = bad.index.astype(str).tolist()[:5]
+        raise ValueError(
+            "term_modules_df violates contract: a term_uid maps to multiple module_id. "
+            f"examples={ex}"
+        )
+
+    modules_df = (
+        pd.DataFrame(modules_rows)
+        .sort_values(["module_rank", "module_id"], kind="mergesort")
+        .reset_index(drop=True)
+    )
+
+    # record provenance (do not clobber fallback provenance)
+    edges_f.attrs.setdefault("modules", {})
+    edges_f.attrs["modules"].update(
+        {
+            "method": method,
+            "min_shared_genes": int(min_shared_genes),
+            "jaccard_min": float(jaccard_min),
+        }
+    )
+
     return ModuleOutputs(modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f)
 
 

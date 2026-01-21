@@ -30,8 +30,7 @@ def _is_na_scalar(x: Any) -> bool:
 
 
 def _make_id(s: str, *, n: int = 12) -> str:
-    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
-    return h[:n]
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:n]
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
@@ -92,14 +91,7 @@ def _norm_direction(x: Any) -> str:
 
 def _context_tokens(card: SampleCard) -> list[str]:
     toks: list[str] = []
-    for v in [
-        getattr(card, "disease", None),
-        getattr(card, "tissue", None),
-        getattr(card, "perturbation", None),
-        getattr(card, "comparison", None),
-    ]:
-        if v is None:
-            continue
+    for v in [card.disease, card.tissue, card.perturbation, card.comparison]:
         s = str(v).strip().lower()
         if not s or s in {t.lower() for t in _NA_TOKENS}:
             continue
@@ -110,7 +102,7 @@ def _context_tokens(card: SampleCard) -> list[str]:
 
 
 def _context_score(term_name: str, toks: list[str]) -> int:
-    # v1 proxy only; real context conditioning happens in LLM stage
+    # v1 proxy only; must be explicitly enabled by SampleCard knob
     name = str(term_name).lower()
     return sum(1 for t in toks if t and t in name)
 
@@ -128,36 +120,34 @@ def _context_keys(card: SampleCard) -> list[str]:
     return keys
 
 
-def _get_card_extra(card: SampleCard, key: str, default: Any) -> Any:
+def _resolve_mode(card: SampleCard, mode: str | None) -> str:
+    # Priority: explicit arg > env > SampleCard getter > default
+    if mode is not None:
+        s = str(mode).strip().lower()
+        return s if s in {"deterministic", "llm"} else "deterministic"
+
+    env = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower()
+    if env:
+        return env if env in {"deterministic", "llm"} else "deterministic"
+
     try:
-        ex = getattr(card, "extra", None) or {}
-        if isinstance(ex, dict) and key in ex and ex.get(key) is not None:
-            return ex.get(key)
+        return card.claim_mode(default="deterministic")
     except Exception:
-        pass
-    return default
+        return "deterministic"
 
 
-def _get_tau_from_card(card: SampleCard, default: float = 0.8) -> float:
-    # keep robust: allow method, attribute, or extra dict
-    if hasattr(card, "audit_tau") and callable(card.audit_tau):
+def _resolve_k(card: SampleCard, k_default: int) -> int:
+    # Priority: env > SampleCard getter(default=k_default)
+    env = str(os.environ.get("LLMPATH_K_CLAIMS", "")).strip()
+    if env:
         try:
-            return float(card.audit_tau())  # type: ignore[misc]
+            return max(1, int(env))
         except Exception:
             pass
-    v = getattr(card, "audit_tau", None)
-    if v is not None:
-        try:
-            return float(v)
-        except Exception:
-            pass
-    extra = getattr(card, "extra", None) or {}
-    if isinstance(extra, dict) and "audit_tau" in extra:
-        try:
-            return float(extra["audit_tau"])
-        except Exception:
-            pass
-    return float(default)
+    try:
+        return int(card.k_claims(default=int(k_default)))
+    except Exception:
+        return max(1, int(k_default))
 
 
 def _select_claims_deterministic(
@@ -168,7 +158,6 @@ def _select_claims_deterministic(
     if missing:
         raise ValueError(f"select_claims: missing columns in distilled: {missing}")
 
-    toks = _context_tokens(card)
     df = distilled.copy()
 
     df["term_id"] = df["term_id"].astype(str).str.strip()
@@ -186,7 +175,17 @@ def _select_claims_deterministic(
         else (df["source"] + ":" + df["term_id"])
     )
 
-    df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
+    # ---- context proxy: default OFF (must be enabled explicitly) ----
+    try:
+        enable_ctx_proxy = bool(card.enable_context_score_proxy(default=False))
+    except Exception:
+        enable_ctx_proxy = False
+
+    if enable_ctx_proxy:
+        toks = _context_tokens(card)
+        df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
+    else:
+        df["context_score"] = 0
 
     # ---- Evidence hygiene gates ----
     if "keep_term" in df.columns:
@@ -194,15 +193,22 @@ def _select_claims_deterministic(
     else:
         df["keep_term"] = True
 
-    preselect_tau_gate = _get_card_extra(card, "preselect_tau_gate", False)
-    tau_f = _get_tau_from_card(card, default=0.8)
+    try:
+        preselect_tau_gate = bool(card.preselect_tau_gate(default=False))
+    except Exception:
+        preselect_tau_gate = False
+
+    try:
+        tau_f = float(card.audit_tau(default=0.8))
+    except Exception:
+        tau_f = 0.8
 
     if "term_survival" in df.columns:
         df["term_survival"] = pd.to_numeric(df["term_survival"], errors="coerce")
     else:
         df["term_survival"] = pd.NA
 
-    if bool(preselect_tau_gate):
+    if preselect_tau_gate:
         df["eligible_tau"] = df["term_survival"].ge(float(tau_f))
         df["eligible"] = (df["keep_term"]) & (df["eligible_tau"])
     else:
@@ -215,18 +221,9 @@ def _select_claims_deterministic(
     else:
         df["term_survival_sort"] = -1.0
 
-    # allow overriding k from card
-    k_card = _get_card_extra(card, "k_claims", None)
-    if k_card is not None:
-        try:
-            k = int(k_card)
-        except Exception:
-            pass
-
-    # module diversity default: 1 per module (override via card.extra)
-    max_per_module = _get_card_extra(card, "max_per_module", 1)
+    # module diversity default: 1 per module (SampleCard getter)
     try:
-        max_per_module = int(max_per_module)
+        max_per_module = int(card.max_per_module(default=1))
     except Exception:
         max_per_module = 1
     max_per_module = max(1, max_per_module)
@@ -265,10 +262,10 @@ def _select_claims_deterministic(
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
     ctx_vals = [
-        str(getattr(card, "disease", "")) or "",
-        str(getattr(card, "tissue", "")) or "",
-        str(getattr(card, "perturbation", "")) or "",
-        str(getattr(card, "comparison", "")) or "",
+        str(card.disease or ""),
+        str(card.tissue or ""),
+        str(card.perturbation or ""),
+        str(card.comparison or ""),
     ]
 
     for _, r in df_pick.iterrows():
@@ -298,7 +295,7 @@ def _select_claims_deterministic(
             context_keys=ctx_keys,
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                gene_ids=genes_full[:10],  # compact reference (top10) for readability
+                gene_ids=genes_full[:10],  # compact ref (top10) for readability
                 term_ids=[term_uid],
                 gene_set_hash=gene_set_hash,
             ),
@@ -326,6 +323,7 @@ def _select_claims_deterministic(
                 "keep_reason": str(r.get("keep_reason", "ok")),
                 "claim_json": claim.model_dump_json(),
                 "preselect_tau_gate": bool(preselect_tau_gate),
+                "context_score_proxy": bool(enable_ctx_proxy),
             }
         )
 
@@ -349,47 +347,23 @@ def select_claims(
     - mode="llm": LLM selects from top candidates but is post-validated against
       candidates (term_uid/entity/gene_set_hash) and MUST emit JSON; otherwise
       we fall back to deterministic output.
+
+    Contract:
+      - knobs are read ONLY via SampleCard getters (plus env override).
+      - env has priority over card; card has priority over function defaults.
     """
+    mode_eff = _resolve_mode(card, mode)
+    k_eff = _resolve_k(card, k_default=int(k))
 
-    # Mode resolution (Less is more: env or card.extra; no new CLI required)
-    if mode is None:
-        mode = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower() or None
-    if mode is None:
-        try:
-            ex = getattr(card, "extra", {}) or {}
-            if isinstance(ex, dict) and ex.get("claim_mode"):
-                mode = str(ex.get("claim_mode")).strip().lower()
-        except Exception:
-            mode = None
-    if mode is None:
-        mode = "deterministic"
-
-    # Allow overriding k without adding CLI flags (paper scripts friendly)
-    k_env = str(os.environ.get("LLMPATH_K_CLAIMS", "")).strip()
-    if k_env:
-        try:
-            k = int(k_env)
-        except Exception:
-            pass
-
-    # LLM mode
-    if mode == "llm":
+    if mode_eff == "llm":
         if backend is None:
-            mode = "deterministic"
+            mode_eff = "deterministic"
         else:
-            # allow overriding k from card.extra
-            try:
-                ex = getattr(card, "extra", {}) or {}
-                if isinstance(ex, dict) and ex.get("k_claims") is not None:
-                    k = int(ex["k_claims"])
-            except Exception:
-                pass
-
             res = propose_claims_llm(
                 distilled_with_modules=distilled,
                 card=card,
                 backend=backend,
-                k=int(k),
+                k=int(k_eff),
                 seed=seed,
                 outdir=outdir,
             )
@@ -404,12 +378,12 @@ def select_claims(
                 out_llm["llm_notes"] = res.notes
                 return out_llm
 
-            out_det = _select_claims_deterministic(distilled, card, k=int(k))
+            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff))
             out_det["claim_mode"] = "deterministic_fallback"
             out_det["llm_notes"] = res.notes
             return out_det
 
-    out_det = _select_claims_deterministic(distilled, card, k=int(k))
+    out_det = _select_claims_deterministic(distilled, card, k=int(k_eff))
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
     return out_det

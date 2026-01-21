@@ -11,6 +11,7 @@ import pandas as pd
 # - ORA often has no direction
 # - some exports have no qval (or only p-value)
 # We therefore enforce a "core required" set and auto-fill the rest.
+
 CORE_REQUIRED_EVIDENCE_COLS = [
     "term_id",
     "term_name",
@@ -92,7 +93,7 @@ ALIASES = {
     "adj_p": "qval",
     "adj_pval": "qval",
     "adj_p_value": "qval",
-    # some tools only export p-value; we map to qval as "best available"
+    # some tools only export p-value; we map to pval then (optionally) to qval
     "pval": "pval",
     "p_value": "pval",
     "p-value": "pval",
@@ -118,6 +119,13 @@ ALIASES = {
     "overlap": "evidence_genes",
     "overlap_genes": "evidence_genes",
     "overlap genes": "evidence_genes",
+    # -------------------------
+    # optional flags (not required; used to tolerate summary rows)
+    # -------------------------
+    "is_summary": "is_summary",
+    "summary": "is_summary",
+    "group_id": "group_id",
+    "groupid": "group_id",
 }
 
 ReadMode = Literal["tsv", "sniff", "whitespace"]
@@ -135,9 +143,9 @@ class EvidenceTable:
 
     @staticmethod
     def _normalize_col(c: str) -> str:
+        # Normalize common messiness while keeping it conservative.
         c = c.strip().lstrip("\ufeff")
-        c = c.replace(" ", "_")
-        c = c.replace("-", "_")
+        c = c.replace(" ", "_").replace("-", "_")
         return c.lower()
 
     @staticmethod
@@ -214,6 +222,8 @@ class EvidenceTable:
                 return []
             # normalize common delimiters
             s = s.replace(";", ",").replace("|", ",")
+            # tolerate tabs/newlines
+            s = s.replace("\n", " ").replace("\t", " ")
             # sometimes exported as space-separated tokens without commas
             if "," not in s and " " in s:
                 parts = s.split()
@@ -230,6 +240,13 @@ class EvidenceTable:
                 seen.add(g)
                 out.append(g)
         return out
+
+    @staticmethod
+    def _normalize_bool(x: object) -> bool:
+        if EvidenceTable._is_na_scalar(x):
+            return False
+        s = str(x).strip().lower()
+        return s in {"1", "true", "t", "yes", "y"}
 
     @classmethod
     def _read_flexible(cls, path: str) -> EvidenceReadResult:
@@ -258,7 +275,21 @@ class EvidenceTable:
         return EvidenceReadResult(df=df3, read_mode="whitespace")
 
     @classmethod
-    def read_tsv(cls, path: str) -> EvidenceTable:
+    def read_tsv(
+        cls, path: str, *, strict: bool = False, drop_invalid: bool = True
+    ) -> EvidenceTable:
+        """
+        Read an evidence table and normalize it to the tool-facing contract.
+
+        strict:
+          - if True, any invalid row triggers ValueError (old behavior).
+          - if False (default), invalid rows are optionally dropped with provenance.
+
+        drop_invalid:
+          - if True (default), drop rows that violate term×gene (empty evidence_genes),
+            unless strict=True (then we raise).
+          - if False, keep rows but mark them invalid; downstream should ignore them.
+        """
         rr = cls._read_flexible(path)
         df_raw = rr.df
 
@@ -283,18 +314,27 @@ class EvidenceTable:
         if "source" not in df.columns:
             df["source"] = "unknown"
 
+        # qval / pval (best-effort)
+        qval_in_input = "qval" in cols_mapped
+        pval_in_input = "pval" in cols_mapped
+
         if "qval" not in df.columns:
             df["qval"] = pd.NA
-
         if "pval" not in df.columns:
             df["pval"] = pd.NA
-
-        # provenance flag: whether qval was truly provided
-        df["qval_provided"] = "qval" in cols_mapped
 
         # direction: ORA often lacks it
         if "direction" not in df.columns:
             df["direction"] = "na"
+
+        # optional flags
+        if "is_summary" in df.columns:
+            df["is_summary"] = df["is_summary"].map(cls._normalize_bool)
+        else:
+            df["is_summary"] = False
+
+        if "group_id" not in df.columns:
+            df["group_id"] = pd.NA
 
         # evidence_genes: must exist
         # term_id / term_name / stat: must exist
@@ -329,7 +369,59 @@ class EvidenceTable:
         # ---- numeric normalization ----
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
         df["qval"] = pd.to_numeric(df["qval"], errors="coerce")
+        df["pval"] = pd.to_numeric(df["pval"], errors="coerce")
 
+        # ---- qval fallback policy ----
+        # If qval is missing but pval exists, compute q-values by Benjamini–Hochberg (BH)
+        # within conservative groups (source × direction) to preserve interpretability.
+        #
+        # Provenance:
+        #   - "qval": provided in input
+        #   - "bh(pval)": computed from p-values (BH)
+        #   - "missing": neither qval nor pval available
+        df["qval_source"] = "missing"
+
+        # mark provided qvals
+        if qval_in_input:
+            df.loc[~df["qval"].isna(), "qval_source"] = "qval"
+
+        # helper: BH q-value (no external deps)
+        def _bh_qvalues(p: pd.Series) -> pd.Series:
+            p = pd.to_numeric(p, errors="coerce")
+            m = int(p.notna().sum())
+            if m == 0:
+                return pd.Series([pd.NA] * len(p), index=p.index, dtype="float64")
+
+            # ranks among non-NA
+            p_non = p.dropna()
+            order = p_non.sort_values().index
+            ranks = pd.Series(range(1, len(order) + 1), index=order, dtype="float64")
+
+            q_non = p_non.loc[order] * (m / ranks.loc[order])
+            # enforce monotonicity
+            q_non = q_non.iloc[::-1].cummin().iloc[::-1]
+            q_non = q_non.clip(lower=0.0, upper=1.0)
+
+            q = pd.Series(pd.NA, index=p.index, dtype="float64")
+            q.loc[q_non.index] = q_non
+            return q
+
+        # compute BH qvals only where qval is missing but pval exists
+        needs_q = df["qval"].isna() & (~df["pval"].isna())
+        if needs_q.any():
+            # conservative grouping: source × direction
+            group_cols = ["source", "direction"]
+            for _, idx in df.loc[needs_q].groupby(group_cols).groups.items():
+                idx = list(idx)
+                q_calc = _bh_qvalues(df.loc[idx, "pval"])
+                df.loc[idx, "qval"] = q_calc
+                df.loc[idx, "qval_source"] = "bh(pval)"
+
+        # provenance flags (stable, downstream-friendly)
+        df["qval_provided"] = df["qval_source"].eq("qval")
+        df["pval_provided"] = pval_in_input
+
+        # ---- required sanity checks ----
         bad_required = df["term_id"].eq("") | df["term_name"].eq("")
         if bad_required.any():
             i = int(df.index[bad_required][0])
@@ -348,25 +440,48 @@ class EvidenceTable:
                 "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP)."
             )
 
+        # ---- enforce term×gene contract (tolerate + drop/mark invalid) ----
+        df["is_valid"] = True
+        df["invalid_reason"] = ""
+
         empty_ev = df["evidence_genes"].map(len).eq(0)
-        if empty_ev.any():
-            i = int(df.index[empty_ev][0])
-            raise ValueError(
-                f"EvidenceTable has empty evidence_genes at row index={i} "
-                f"(term_id={df.loc[i, 'term_id']}). "
-                f"read_mode={rr.read_mode}. "
-                "Fix: provide overlap genes (ORA) or leadingEdge/core_enrichment (GSEA/fgsea)."
-            )
+
+        # Summary rows are common in ORA exports; they often have no gene list.
+        # We never pass empty gene evidence downstream; we either drop or mark invalid.
+        invalid_mask = empty_ev
+        if invalid_mask.any():
+            df.loc[invalid_mask, "is_valid"] = False
+            df.loc[invalid_mask, "invalid_reason"] = "EMPTY_EVIDENCE_GENES"
+
+            if strict:
+                i = int(df.index[invalid_mask][0])
+                raise ValueError(
+                    f"EvidenceTable has empty evidence_genes at row index={i} "
+                    f"(term_id={df.loc[i, 'term_id']}). "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: provide overlap genes (ORA) or leadingEdge/core_enrichment (GSEA/fgsea), "
+                    "or set strict=False to drop/mark summary rows."
+                )
+
+            if drop_invalid:
+                df = df.loc[df["is_valid"]].copy()
 
         # provenance
         df.attrs["read_mode"] = rr.read_mode
 
         # provenance / health hints (paper-facing)
-        genes_n = df["evidence_genes"].map(len)
+        genes_n = (
+            df["evidence_genes"].map(len)
+            if "evidence_genes" in df.columns
+            else pd.Series([], dtype=int)
+        )
         df.attrs["health"] = {
             "n_terms": int(df.shape[0]),
-            "n_terms_genes_le1": int((genes_n <= 1).sum()),
+            "n_terms_genes_le1": int((genes_n <= 1).sum()) if len(genes_n) else 0,
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
+            "qval_source_counts": df["qval_source"].value_counts(dropna=False).to_dict()
+            if "qval_source" in df.columns
+            else {},
         }
 
         return cls(df=df)
@@ -381,9 +496,12 @@ class EvidenceTable:
             "direction_counts": df["direction"].value_counts(dropna=False).to_dict(),
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
             "genes_per_term_p90": float(genes_n.quantile(0.9)) if len(genes_n) else 0.0,
-            "read_mode": df.attrs.get("read_mode", "unknown"),
             "genes_per_term_p10": float(genes_n.quantile(0.1)) if len(genes_n) else 0.0,
             "n_terms_genes_le1": int((genes_n <= 1).sum()),
+            "read_mode": df.attrs.get("read_mode", "unknown"),
+            "qval_source_counts": df["qval_source"].value_counts(dropna=False).to_dict()
+            if "qval_source" in df.columns
+            else {},
         }
 
     def write_tsv(self, path: str) -> None:
