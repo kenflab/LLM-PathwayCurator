@@ -24,6 +24,7 @@ from .claim_schema import Claim
 from .sample_card import SampleCard
 
 _NA_TOKENS = {"", "na", "nan", "none", "NA"}
+_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -41,28 +42,42 @@ def _is_na_scalar(x: Any) -> bool:
 
 def _parse_ids(x: Any) -> list[str]:
     """
-    Parse comma/semicolon separated ids into list[str].
+    Parse ids into list[str] with tolerant separators:
+      - list/tuple/set: preserve order (dedup)
+      - string: split on , ; | (fallback: whitespace if no commas)
+      - NA -> []
     Safe against list-like inputs (won't call pd.isna on list).
     """
     if _is_na_scalar(x):
         return []
+
     if isinstance(x, (list, tuple, set)):
         items = [str(t).strip() for t in x if str(t).strip()]
     else:
         s = str(x).strip()
-        if not s or s in _NA_TOKENS or s.lower() in {t.lower() for t in _NA_TOKENS}:
+        if not s or s.lower() in _NA_TOKENS_L:
             return []
-        s = s.replace(";", ",")
-        items = [t.strip() for t in s.split(",") if t.strip()]
+
+        s = s.replace(";", ",").replace("|", ",")
+        s = s.replace("\n", " ").replace("\t", " ")
+        s = " ".join(s.split()).strip()
+        if not s or s.lower() in _NA_TOKENS_L:
+            return []
+
+        if "," in s:
+            items = [t.strip() for t in s.split(",") if t.strip()]
+        else:
+            items = [t.strip() for t in s.split(" ") if t.strip()]
 
     seen: set[str] = set()
     uniq: list[str] = []
     for t in items:
-        if t in _NA_TOKENS or t.lower() in {x.lower() for x in _NA_TOKENS}:
+        tt = str(t).strip()
+        if not tt or tt.lower() in _NA_TOKENS_L:
             continue
-        if t not in seen:
-            seen.add(t)
-            uniq.append(t)
+        if tt not in seen:
+            seen.add(tt)
+            uniq.append(tt)
     return uniq
 
 
@@ -348,26 +363,15 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
     """
     Backfill stress/contradiction columns on claims using distilled annotations.
 
-    Why:
-      - Tool contract says audit consumes stress if provided.
-      - Fig2 v4 style pipelines may annotate distilled (stress_tag/contradiction_flip)
-        but not mutate claims DF.
-      - This function turns distilled annotations into "external" stress inputs
-        ONLY when claims did not already provide them.
-
-    Rules (minimal + auditable):
-      - If claims already include any stress_* columns, do nothing (respect caller).
+    This is treated as an external input (v4 support):
+      - If claims already include stress_* columns, do nothing (respect caller).
       - Else if distilled has stress_tag:
           * non-empty tag => stress_status=FAIL, stress_reason="STRESS_TAG"
-          * empty tag => leave stress columns absent (not evaluated)
+          * empty tag => do not mark (leave absent)
       - If claims already include contradiction_* columns, do nothing.
       - Else if distilled has contradiction_flip:
           * True => contradiction_status=FAIL, contradiction_reason="CONTRADICTION_FLIP"
           * False/NA => leave absent
-
-    Notes:
-      - This does NOT change evidence validation logic; it only enables existing gates.
-      - Detailed per-term logs belong in masking.py term_events (written by pipeline).
     """
     out2 = out.copy()
 
@@ -384,7 +388,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
         ]
     )
 
-    # Build term_uid in distilled if needed
     dist = distilled.copy()
     if "term_uid" not in dist.columns:
         if {"source", "term_id"}.issubset(set(dist.columns)):
@@ -400,7 +403,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
 
     dist["term_uid"] = dist["term_uid"].astype(str).str.strip()
 
-    # We map from term_uid -> tag/flip (first non-empty occurrence wins)
     stress_map: dict[str, str] = {}
     if (not claim_has_stress) and ("stress_tag" in dist.columns):
         for tu, tag in zip(dist["term_uid"].tolist(), dist["stress_tag"].tolist(), strict=False):
@@ -415,9 +417,7 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
         for tu, v in zip(
             dist["term_uid"].tolist(), dist["contradiction_flip"].tolist(), strict=False
         ):
-            if not tu:
-                continue
-            if tu in contra_map:
+            if not tu or tu in contra_map:
                 continue
             if _is_na_scalar(v):
                 continue
@@ -426,11 +426,9 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
             except Exception:
                 continue
 
-    # If nothing to inject, return as-is
     if not stress_map and not contra_map:
         return out2
 
-    # Ensure schema columns exist only if we are injecting
     if stress_map and (not claim_has_stress):
         out2["stress_status"] = ""
         out2["stress_reason"] = ""
@@ -440,7 +438,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
         out2["contradiction_reason"] = ""
         out2["contradiction_notes"] = ""
 
-    # Inject per-claim using claim_json evidence_ref.term_ids (term_uid space)
     for i, row in out2.iterrows():
         cj = row.get("claim_json", None)
         if cj is None or _is_na_scalar(cj) or (not str(cj).strip()):
@@ -450,7 +447,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
         if not term_ids:
             continue
 
-        # stress: if ANY referenced term has a stress tag, mark this claim stressed
         if stress_map and (not claim_has_stress):
             tags = [stress_map.get(t, "") for t in term_ids]
             tags = [t for t in tags if t]
@@ -461,7 +457,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
                     f"stress_tag={tags[0]}" if len(tags) == 1 else f"stress_tag={tags}"
                 )
 
-        # contradiction: if ANY referenced term has contradiction_flip True, mark FAIL
         if contra_map and (not claim_has_contra):
             flips = [contra_map.get(t, False) for t in term_ids]
             if any(bool(x) for x in flips):
@@ -528,27 +523,23 @@ def _apply_external_stress(
     i: int,
     row: pd.Series,
     *,
-    external_cols: set[str],
     gate_mode: str,
 ) -> None:
     """
-    Apply stress results ONLY if they were provided as inputs in the original claims DF.
+    Apply stress results if present (including v4 injected columns).
 
     Semantics:
-      - stress_evaluated indicates whether stress was supplied as an input.
-      - stress_ok is:
-          True/False when evaluated,
-          NA when not evaluated or missing (unless we hard-gate and convert to ABSTAIN/FAIL).
+      - stress_ok is True/False when evaluated, NA when not evaluated.
+      - Missing stress values are handled by gate_mode.
     """
-    has_any = any(
-        c in external_cols for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
-    )
-    if not has_any:
+    if not any(
+        c in out.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+    ):
         out.at[i, "stress_ok"] = pd.NA
         return
 
     # If only stress_ok provided
-    if ("stress_ok" in external_cols) and ("stress_status" not in external_cols):
+    if ("stress_ok" in out.columns) and ("stress_status" not in out.columns):
         v = row.get("stress_ok")
         if _is_na_scalar(v):
             out.at[i, "stress_ok"] = pd.NA
@@ -571,7 +562,6 @@ def _apply_external_stress(
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=True")
             return
 
-        # stress_ok=False
         if gate_mode == "hard":
             out.at[i, "status"] = "FAIL"
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
@@ -744,8 +734,6 @@ def audit_claims(
     # ---- v4 compat: inject stress/contradiction columns from distilled when absent ----
     out = _inject_stress_from_distilled(out, distilled)
 
-    external_cols: set[str] = set(out.columns)
-
     # Stable audit fields
     out["status"] = "PASS"
     out["link_ok"] = True
@@ -794,8 +782,7 @@ def audit_claims(
     key_col = "term_uid"
 
     term_key = dist[key_col].astype(str).str.strip()
-    term_key = term_key[~term_key.isin(_NA_TOKENS)]
-    term_key = term_key[~term_key.str.lower().isin({t.lower() for t in _NA_TOKENS})]
+    term_key = term_key[~term_key.str.lower().isin(_NA_TOKENS_L)]
     known_terms = set(term_key.tolist())
 
     has_survival = "term_survival" in distilled.columns
@@ -813,8 +800,7 @@ def audit_claims(
         tmpm = distilled.copy()
         tmpm["module_id"] = tmpm["module_id"].astype(str).str.strip()
         tmpm["term_survival"] = pd.to_numeric(tmpm["term_survival"], errors="coerce")
-        tmpm = tmpm[~tmpm["module_id"].isin(_NA_TOKENS)]
-        tmpm = tmpm[~tmpm["module_id"].str.lower().isin({t.lower() for t in _NA_TOKENS})]
+        tmpm = tmpm[~tmpm["module_id"].str.lower().isin(_NA_TOKENS_L)]
         if not tmpm.empty:
             module_surv = tmpm.groupby("module_id")["term_survival"].min()
 
@@ -836,7 +822,7 @@ def audit_claims(
             dist["evidence_genes"],
             strict=True,
         ):
-            if tk in _NA_TOKENS or tk.lower() in {t.lower() for t in _NA_TOKENS}:
+            if tk.lower() in _NA_TOKENS_L:
                 continue
             if isinstance(xs, (list, tuple, set)):
                 genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
@@ -853,7 +839,7 @@ def audit_claims(
             dist["evidence_genes_str"].astype(str),
             strict=True,
         ):
-            if tk in _NA_TOKENS or tk.lower() in {t.lower() for t in _NA_TOKENS}:
+            if tk.lower() in _NA_TOKENS_L:
                 continue
             genes = [_norm_gene_id(g) for g in _parse_ids(s)]
             gs = set([g for g in genes if g])
@@ -880,8 +866,9 @@ def audit_claims(
     min_union = _get_min_union_genes(card, default=3)
     hub_frac_thr = _get_hub_frac_thr(card, default=0.5)
 
-    stress_cols = {"stress_status", "stress_ok", "stress_reason", "stress_notes"}
-    has_stress_any = any(c in external_cols for c in stress_cols)
+    has_stress_cols = any(
+        c in out.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+    )
 
     for i, row in out.iterrows():
         # 0) schema validation (claim_json -> Claim)
@@ -975,7 +962,6 @@ def audit_claims(
             continue
 
         if not ev_union:
-            # cannot verify hash without distilled evidence genes
             if strict_evidence:
                 out.at[i, "status"] = "FAIL"
                 out.at[i, "link_ok"] = False
@@ -1146,19 +1132,28 @@ def audit_claims(
                     _enforce_reason_vocab(out, i)
                     continue
 
-        # 5) stress gate (single place)
-        if not has_stress_any:
+        # 5) stress gate
+        # Define "evaluated" per-row: some non-empty stress field present
+        row_has_stress_value = False
+        if has_stress_cols:
+            for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]:
+                if c not in out.columns:
+                    continue
+                v = row.get(c)
+                if not _is_na_scalar(v) and str(v).strip():
+                    row_has_stress_value = True
+                    break
+
+        if not has_stress_cols or (not row_has_stress_value):
             out.at[i, "stress_evaluated"] = False
 
             if stress_gate_mode == "off":
                 out.at[i, "stress_ok"] = pd.NA
-
             elif stress_gate_mode == "note":
                 out.at[i, "stress_ok"] = pd.NA
                 out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"], "stress_skipped(note_mode)"
+                    out.at[i, "audit_notes"], "stress_missing(note_mode)"
                 )
-
             else:
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
@@ -1170,9 +1165,7 @@ def audit_claims(
                 continue
         else:
             out.at[i, "stress_evaluated"] = True
-            _apply_external_stress(
-                out, i, row, external_cols=external_cols, gate_mode=stress_gate_mode
-            )
+            _apply_external_stress(out, i, row, gate_mode=stress_gate_mode)
             if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
                 _enforce_reason_vocab(out, i)
                 continue

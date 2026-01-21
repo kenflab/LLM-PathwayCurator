@@ -289,7 +289,8 @@ def write_report_jsonl(
     surv_s = pd.to_numeric(audit_log["term_survival_agg"], errors="coerce")
     if surv_s.isna().all():
         raise ValueError(
-            "audit_log term_survival_agg is all-NA (upstream survival missing entirely)"
+            "audit_log term_survival_agg is all-NA (upstream survival missing entirely; "
+            "check masking/term_survival export)"
         )
 
     ctx_s = (
@@ -375,10 +376,18 @@ def write_report_jsonl(
                 "tau": float(tau_val),
                 "species": species,
                 "claim": claim.model_dump(),
+                "decision_obj": decision_obj.model_dump(),
                 "metrics": {
                     "term_survival_agg": surv_val,
                     "context_score": ctx_val,
                     "stat": stat_val,
+                    # ADD: audit-derived effective fields (stable + useful for Fig2)
+                    "tau_used": _to_float_or_none(row_raw.get("tau_used")),
+                    "stability_scope": str(row_raw.get("stability_scope") or "").strip(),
+                    "module_id_effective": str(row_raw.get("module_id_effective") or "").strip(),
+                    "gene_set_hash_effective": str(
+                        row_raw.get("gene_set_hash_effective") or ""
+                    ).strip(),
                 },
                 # -------------------------
                 # v1 compatibility aliases (ADD ONLY)
@@ -529,7 +538,9 @@ def write_report(
                     "module_id_effective",
                     "term_ids",
                     "gene_ids",
-                    "gene_set_hash",
+                    "gene_set_hash_effective",
+                    "evidence_key",
+                    "term_ids_set_hash",
                     "term_survival_agg",
                     "context_score",
                     "stat",
@@ -556,7 +567,7 @@ def write_report(
                     "claim_id",
                     "entity",
                     "direction",
-                    "module_id",
+                    "module_id_effective",
                     "abstain_reason",
                     "gene_set_hash",
                     "term_survival_agg",
@@ -582,7 +593,7 @@ def write_report(
                     "claim_id",
                     "entity",
                     "direction",
-                    "module_id",
+                    "module_id_effective",
                     "fail_reason",
                     "gene_set_hash",
                     "audit_notes",

@@ -42,6 +42,10 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
     Also provide "audit failure rate" over all:
       - risk_fail_total = FAIL / TOTAL
       - fail_rate_total = FAIL / TOTAL  (alias; kept for backward compatibility)
+
+    “decided = PASS ∪ FAIL (ABSTAIN excluded).
+    FAIL is an explicit negative decision,
+    kept in denominator to quantify audit failure among decided items.”
     """
     c = compute_counts(status)
     total = c["TOTAL"]
@@ -105,10 +109,15 @@ def risk_coverage_curve(
         uniq = np.sort(uniq)
         if len(uniq) == 0:
             raise ValueError("risk_coverage_curve: empty score array")
+
         if len(uniq) <= 400:
             decision_thresholds = [float(x) for x in uniq.tolist()]
         else:
-            decision_thresholds = [float(x) for x in np.quantile(uniq, np.linspace(0, 1, 200))]
+            qs = np.quantile(uniq, np.linspace(0, 1, 200))
+            decision_thresholds = [float(x) for x in qs.tolist()]
+
+        # de-duplicate (important for discretized scores / quantiles)
+        decision_thresholds = sorted(set(decision_thresholds))
 
     # Degenerate curve guardrail (paper-facing)
     if len(decision_thresholds) <= 1:
@@ -118,8 +127,11 @@ def risk_coverage_curve(
         )
         if fail_on_degenerate:
             raise ValueError(msg)
-        # keep behavior but make it explicit
+        # keep behavior but do NOT return empty curve
         decision_thresholds = list(decision_thresholds) if decision_thresholds is not None else []
+        if len(decision_thresholds) == 0:
+            # fallback to the only available threshold
+            decision_thresholds = [float(scores.iloc[0])]
 
     base_status = df[status_col].astype(str).str.strip().str.upper()
     out_rows: list[dict[str, Any]] = []
@@ -371,9 +383,13 @@ def extract_probs_and_labels(
         if not np.isfinite(yv.to_numpy()).all():
             raise ValueError("extract_probs_and_labels: label contains non-finite values")
 
-        y_int = yv.to_numpy().astype(int)
-        if set(np.unique(y_int).tolist()) - {0, 1}:
-            raise ValueError("extract_probs_and_labels: labels must be binary {0,1}")
-        y = y_int
+        # STRICT: allow only exact {0,1} (as int-like floats), refuse rounding
+        y_arr = yv.to_numpy().astype(float)
+        uniq = set(np.unique(y_arr).tolist())
+        if uniq - {0.0, 1.0}:
+            raise ValueError(
+                f"extract_probs_and_labels: labels must be binary {{0,1}}, got {sorted(uniq)}"
+            )
+        y = y_arr.astype(int)
 
     return probs.to_numpy().astype(float), (None if y is None else y)

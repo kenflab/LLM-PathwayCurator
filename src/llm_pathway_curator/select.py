@@ -15,6 +15,7 @@ from .sample_card import SampleCard
 
 _ALLOWED_DIRECTIONS = {"up", "down", "na"}
 _NA_TOKENS = {"na", "nan", "none", "", "NA"}
+_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -48,16 +49,34 @@ def _dedup_preserve_order(items: list[str]) -> list[str]:
 
 
 def _as_gene_list(x: Any) -> list[str]:
+    """
+    Tolerant parsing for evidence genes (align with schema/distill):
+      - list/tuple/set -> preserve order (dedup)
+      - string -> split on , ; | (fallback: whitespace if no commas)
+      - NA -> []
+    """
     if _is_na_scalar(x):
         return []
     if isinstance(x, (list, tuple, set)):
         genes = [str(g).strip() for g in x if str(g).strip()]
+        return _dedup_preserve_order(genes)
+
+    s = str(x).strip()
+    if not s or s.lower() in _NA_TOKENS_L:
+        return []
+
+    s = s.replace(";", ",").replace("|", ",")
+    s = s.replace("\n", " ").replace("\t", " ")
+    s = " ".join(s.split()).strip()
+    if not s or s.lower() in _NA_TOKENS_L:
+        return []
+
+    if "," in s:
+        parts = [p.strip() for p in s.split(",") if p.strip()]
     else:
-        s = str(x).strip().replace(";", ",").replace("|", ",")
-        if not s or s.lower() in {t.lower() for t in _NA_TOKENS}:
-            return []
-        genes = [g.strip() for g in s.split(",") if g.strip()]
-    return _dedup_preserve_order(genes)
+        parts = [p.strip() for p in s.split(" ") if p.strip()]
+
+    return _dedup_preserve_order(parts)
 
 
 def _norm_gene_id(g: str) -> str:
@@ -96,7 +115,7 @@ def _norm_direction(x: Any) -> str:
         return "up"
     if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
         return "down"
-    if s in {t.lower() for t in _NA_TOKENS}:
+    if s in _NA_TOKENS_L:
         return "na"
     return "na"
 
@@ -105,7 +124,7 @@ def _context_tokens(card: SampleCard) -> list[str]:
     toks: list[str] = []
     for v in [card.disease, card.tissue, card.perturbation, card.comparison]:
         s = str(v).strip().lower()
-        if not s or s in {t.lower() for t in _NA_TOKENS}:
+        if not s or s in _NA_TOKENS_L:
             continue
         if len(s) < 3:
             continue
@@ -126,7 +145,7 @@ def _context_keys(card: SampleCard) -> list[str]:
         if v is None:
             continue
         s = str(v).strip().lower()
-        if not s or s in {t.lower() for t in _NA_TOKENS}:
+        if not s or s in _NA_TOKENS_L:
             continue
         keys.append(k)
     return keys
@@ -256,7 +275,7 @@ def _perturb_gene_set(
         if k_add > 0:
             orig = set([_norm_gene_id(g) for g in genes if str(g).strip()])
             candidates = np.array(
-                [g for g in gene_pool.tolist() if str(g) not in orig], dtype=object
+                [g for g in gene_pool.tolist() if _norm_gene_id(g) not in orig], dtype=object
             )
             if candidates.size > 0:
                 add = rng.choice(candidates, size=min(k_add, candidates.size), replace=False)
@@ -268,9 +287,10 @@ def _perturb_gene_set(
 def _module_hash_like_modules_py(terms: list[str], genes: list[str]) -> str:
     """
     Match modules.py: sha256("T:...\\nG:...")[:12]
+    IMPORTANT: gene IDs are normalized (upper) to avoid spurious drift.
     """
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
-    g = sorted([str(x).strip() for x in genes if str(x).strip()])
+    g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
     payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -288,7 +308,7 @@ def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
         strict=True,
     ):
         key = str(tu).strip()
-        if not key or key.lower() in {t.lower() for t in _NA_TOKENS}:
+        if not key or key.lower() in _NA_TOKENS_L:
             continue
         genes = _as_gene_list(xs)
         gs = set([_norm_gene_id(g) for g in genes if str(g).strip()])
@@ -316,17 +336,17 @@ def _build_module_terms_genes(
         strict=True,
     ):
         t = str(tu).strip()
-        m = str(mid).strip()
-        if not t or not m or m.lower() in {x.lower() for x in _NA_TOKENS}:
+        m0 = str(mid).strip()
+        if not t or not m0 or m0.lower() in _NA_TOKENS_L:
             continue
-        mod_to_terms.setdefault(m, set()).add(t)
+        mod_to_terms.setdefault(m0, set()).add(t)
 
-    for m, terms_set in mod_to_terms.items():
+    for m0, terms_set in mod_to_terms.items():
         terms = sorted(list(terms_set))
         genes_u: set[str] = set()
         for t in terms:
             genes_u |= set(term_to_genes.get(t, set()))
-        out[m] = (terms, genes_u)
+        out[m0] = (terms, genes_u)
 
     return out
 
@@ -357,10 +377,8 @@ def _evaluate_stress_for_claim(
     r_min = min(max(_as_float(ex.get("stress_recall_min", None), 0.80), 0.0), 1.0)
     p_min = min(max(_as_float(ex.get("stress_precision_min", None), 0.80), 0.0), 1.0)
 
-    # stress survival threshold (separate from audit_tau; default mildly strict)
     surv_thr = min(max(_as_float(ex.get("stress_survival_thr", None), 0.80), 0.0), 1.0)
 
-    # baseline union genes for referenced terms
     base_genes: set[str] = set()
     for t in term_ids:
         base_genes |= set(term_to_genes.get(str(t).strip(), set()))
@@ -374,8 +392,7 @@ def _evaluate_stress_for_claim(
         }
 
     base_hash = str(gene_set_hash).strip().lower()
-    if not base_hash or base_hash.lower() in {x.lower() for x in _NA_TOKENS}:
-        # claim schema/audit should prevent this, but keep robust
+    if not base_hash or base_hash.lower() in _NA_TOKENS_L:
         return {
             "stress_status": "ABSTAIN",
             "stress_ok": False,
@@ -385,7 +402,6 @@ def _evaluate_stress_for_claim(
 
     rng = np.random.default_rng(_seed_for_claim(seed, claim_id))
 
-    # replicate perturbations on union evidence genes
     ok = 0
     js: list[float] = []
     rs: list[float] = []
@@ -405,16 +421,13 @@ def _evaluate_stress_for_claim(
 
     surv = ok / float(n) if n > 0 else 0.0
 
-    # module-level drift proxy (optional but recommended when module_id exists in distilled)
     module_ok = True
     module_note = ""
-    if module_id and module_id.lower() not in {x.lower() for x in _NA_TOKENS}:
+    if module_id and module_id.lower() not in _NA_TOKENS_L:
         mtg = module_to_terms_genes.get(module_id)
         if mtg is not None:
             terms_m, genes_m = mtg
             if terms_m and genes_m:
-                # perturb module gene union and compare content hash change rate
-                # (single-shot proxy: if hash changes, identity drift is real)
                 genes_m_list = sorted(list(genes_m))
                 pert_m = _perturb_gene_set(
                     genes_m_list,
@@ -425,12 +438,9 @@ def _evaluate_stress_for_claim(
                 )
                 h0 = _module_hash_like_modules_py(terms_m, genes_m_list)
                 h1 = _module_hash_like_modules_py(terms_m, sorted(list(pert_m)))
-                # If module hash changes AND stress survival is low,
-                # call out module drift explicitly.
                 if h0 != h1 and surv < float(surv_thr):
                     module_ok = False
                     module_note = f"module_id_drift_proxy: hash {h0}->{h1}"
-        # else: cannot evaluate module drift; keep module_ok True
 
     if surv >= float(surv_thr) and module_ok:
         return {
@@ -445,7 +455,6 @@ def _evaluate_stress_for_claim(
             ),
         }
 
-    # FAIL: identity collapse (primary). module drift adds specificity
     reason = "stress_identity_collapse"
     if not module_ok:
         reason = "stress_module_id_drift"
@@ -504,7 +513,6 @@ def _select_claims_deterministic(
         toks = _context_tokens(card)
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
     else:
-        # If proxy disabled, keep 0 but DO NOT force gating here; audit controls gating behavior.
         df["context_score"] = 0
 
     # ---- Evidence hygiene gates ----
@@ -535,11 +543,9 @@ def _select_claims_deterministic(
         df["eligible_tau"] = True
         df["eligible"] = df["keep_term"]
 
-    # survival sort key (missing -> -inf)
-    if "term_survival" in df.columns:
-        df["term_survival_sort"] = df["term_survival"].fillna(-1.0)
-    else:
-        df["term_survival_sort"] = -1.0
+    df["term_survival_sort"] = (
+        df["term_survival"].fillna(-1.0) if "term_survival" in df.columns else -1.0
+    )
 
     # module diversity default: 1 per module (SampleCard getter)
     try:
@@ -567,7 +573,8 @@ def _select_claims_deterministic(
         mid = ""
         if has_module and (not _is_na_scalar(r.get("module_id"))):
             mid = str(r.get("module_id")).strip()
-        if (not mid) or (mid.lower() in {t.lower() for t in _NA_TOKENS}):
+
+        if (not mid) or (mid.lower() in _NA_TOKENS_L):
             # treat "missing module" as its own bucket per term_uid to avoid collapsing
             mid = f"M_missing::{str(r.get('term_uid'))}"
 
@@ -585,7 +592,6 @@ def _select_claims_deterministic(
     term_to_genes = _build_term_gene_map(df_ranked) if do_stress else {}
     module_to_terms_genes = _build_module_terms_genes(df_ranked, term_to_genes) if do_stress else {}
 
-    # global gene pool for stress jitter
     gene_pool = np.array([], dtype=object)
     if do_stress:
         all_genes: list[str] = []
@@ -604,37 +610,35 @@ def _select_claims_deterministic(
 
         term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
-        # evidence genes (normalized for hashing + audit alignment)
         genes_full = [_norm_gene_id(g) for g in _as_gene_list(r.get("evidence_genes"))]
         genes_full = [g for g in genes_full if str(g).strip()]
 
-        # module_id (prefer upstream modules.py; deterministic fallback if missing)
         module_id = ""
         module_reason = ""
+        module_missing = False
+
         if has_module and (not _is_na_scalar(r.get("module_id"))):
             module_id = str(r.get("module_id")).strip()
 
-        if (not module_id) or (module_id.lower() in {t.lower() for t in _NA_TOKENS}):
-            module_id = f"M_fallback_{_make_id(term_uid)}"
+        if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
+            # Deterministic fallback that matches modules.py identity shape: M{content_hash12}
+            # Use singleton module content: terms=[term_uid], genes=genes_full
+            content_hash = _module_hash_like_modules_py([term_uid], genes_full)
+            module_id = f"M{content_hash}"
             module_reason = "missing_module_id"
+            module_missing = True
 
-        # gene_set_hash:
-        # - gene-driven when possible
-        # - term-driven fallback when evidence genes are empty
         if genes_full:
             gene_set_hash = _hash_gene_set_audit(genes_full)
         else:
             gene_set_hash = _hash_term_set_fallback([term_uid])
 
-        # Build schema-locked claim (claim_id is tool-owned and will be auto-filled by Claim schema)
         claim = Claim(
             entity=term_id,
             direction=direction,
             context_keys=ctx_keys,
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                # Display/reference only: compact for readability.
-                # Hash is computed from the full set above.
                 gene_ids=genes_full[:10],
                 term_ids=[term_uid],
                 gene_set_hash=gene_set_hash,
@@ -651,6 +655,7 @@ def _select_claims_deterministic(
             "term_id": term_id,
             "term_name": term_name,
             "module_id": claim.evidence_ref.module_id,
+            "module_missing": bool(module_missing),
             "module_reason": module_reason,
             "gene_ids": ",".join(claim.evidence_ref.gene_ids),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
@@ -665,7 +670,6 @@ def _select_claims_deterministic(
             "context_score_proxy": bool(enable_ctx_proxy),
         }
 
-        # ---- Stress suite injection (optional) ----
         if do_stress:
             st = _evaluate_stress_for_claim(
                 claim_id=claim.claim_id,
