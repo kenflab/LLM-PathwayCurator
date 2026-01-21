@@ -201,6 +201,20 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         ev = ev_tbl.df.copy()
         card = SampleCard.from_json(cfg.sample_card)
 
+        # stamp context/species for reproducibility (non-breaking)
+        species = ""
+        try:
+            extra = getattr(card, "extra", {}) or {}
+            if isinstance(extra, dict):
+                species = str(extra.get("species", "") or "").strip()
+        except Exception:
+            species = ""
+
+        meta.setdefault("inputs", {}).setdefault("sample", {})
+        meta["inputs"]["sample"].update(
+            {"disease": str(getattr(card, "disease", "") or "").strip(), "species": species}
+        )
+
         # ---- resolve tau ONCE (contract) ----
         effective_tau = _resolve_tau(cfg.tau, card)
 
@@ -209,12 +223,18 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["artifacts"]["sample_card_resolved_json"] = str(sc_path)
 
         # Record resolved knobs (reproducibility)
+        try:
+            tau_card = float(card.audit_tau())
+        except Exception:
+            tau_card = None
+
         meta["inputs"]["audit"] = {
             "tau_cfg": cfg.tau,
-            "tau_card": card.audit_tau(),
+            "tau_card": tau_card,
             "tau_effective": effective_tau,
             "min_gene_overlap": card.audit_min_gene_overlap(),
         }
+
         _write_json(meta_path, meta)
 
         # 1) distill (evidence hygiene)
@@ -356,6 +376,9 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             outdir=str(outdir),
             run_id=rid,
             tau=effective_tau,
+            method="llm-pathway-curator",  # or cfg/CLIから渡す
+            cancer=str(getattr(card, "disease", "") or ""),  # ←重要
+            comparison=str(getattr(card, "comparison", "") or ""),
         )
 
         meta["artifacts"]["report_jsonl"] = str(jsonl_path)
