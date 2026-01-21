@@ -414,7 +414,7 @@ def _evaluate_stress_for_claim(
                 )
                 h0 = _module_hash_like_modules_py(terms_m, genes_m_list)
                 h1 = _module_hash_like_modules_py(terms_m, sorted(list(pert_m)))
-                # If module hash changes AND stress survival is low, 
+                # If module hash changes AND stress survival is low,
                 # call out module drift explicitly.
                 if h0 != h1 and surv < float(surv_thr):
                     module_ok = False
