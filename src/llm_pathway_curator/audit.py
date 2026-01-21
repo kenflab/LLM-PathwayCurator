@@ -108,6 +108,19 @@ def _get_extra(card: SampleCard) -> dict[str, Any]:
         return {}
 
 
+def _as_bool(x: Any, default: bool) -> bool:
+    if x is None:
+        return bool(default)
+    if isinstance(x, bool):
+        return x
+    s = str(x).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
 def _get_tau_default(card: SampleCard) -> float:
     # Source of truth: SampleCard.audit_tau()
     try:
@@ -175,17 +188,7 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
     v = ex.get("pass_notes", None)
     if v is None:
         return bool(default)
-    try:
-        if isinstance(v, bool):
-            return v
-        s = str(v).strip().lower()
-        if s in {"1", "true", "t", "yes", "y", "on"}:
-            return True
-        if s in {"0", "false", "f", "no", "n", "off"}:
-            return False
-        return bool(default)
-    except Exception:
-        return bool(default)
+    return _as_bool(v, default=bool(default))
 
 
 def _get_context_gate_mode(card: SampleCard, default: str = "hard") -> str:
@@ -221,11 +224,10 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
       - "off" (default): ignore missing stress entirely
       - "note": missing stress => PASS with note; stress FAIL => PASS with note
       - "hard": missing stress => ABSTAIN_INCONCLUSIVE_STRESS;
-        stress FAIL => FAIL (auditable violation)
+        stress FAIL => FAIL_EVIDENCE_DRIFT (auditable violation)
     Backward compat:
       - "abstain" => "hard"
     """
-    # 1) read raw mode (SampleCard getter > extra)
     if hasattr(card, "stress_gate_mode") and callable(card.stress_gate_mode):
         try:
             s = str(card.stress_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
@@ -235,7 +237,6 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
         ex = _get_extra(card)
         s = str(ex.get("stress_gate_mode", default)).strip().lower()
 
-    # 2) normalize synonyms
     if s in {"off", "none", "disable", "disabled"}:
         return "off"
     if s in {"note", "warn", "warning"}:
@@ -243,11 +244,10 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
     if s in {"hard", "abstain"}:
         return "hard"
 
-    # 3) IMPORTANT: honor default when unknown/empty
     d = str(default).strip().lower()
     if d in {"off", "note", "hard"}:
         return d
-    return "off"  # safest fallback
+    return "off"
 
 
 def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
@@ -277,6 +277,15 @@ def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
     return "hard"
 
 
+def _get_strict_evidence_check(card: SampleCard, default: bool = False) -> bool:
+    """
+    If True: missing evidence_genes in distilled => FAIL_SCHEMA_VIOLATION (strict contract).
+    If False (default): missing evidence_genes => ABSTAIN_INCONCLUSIVE_STRESS (decision-grade).
+    """
+    ex = _get_extra(card)
+    return _as_bool(ex.get("strict_evidence_check", None), default=default)
+
+
 def _norm_status(x: Any) -> str:
     if _is_na_scalar(x):
         return ""
@@ -286,20 +295,6 @@ def _norm_status(x: Any) -> str:
 def _append_note(old: str, msg: str) -> str:
     old = "" if _is_na_scalar(old) else str(old)
     return msg if not old else f"{old} | {msg}"
-
-
-def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
-    for k in keys:
-        if k in row.index:
-            v = row.get(k)
-            if v is None or _is_na_scalar(v):
-                continue
-            if isinstance(v, str) and (
-                v.strip() == "" or v.strip().lower() in {t.lower() for t in _NA_TOKENS}
-            ):
-                continue
-            return v
-    return None
 
 
 def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any, Any]:
@@ -314,7 +309,6 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
 
     ev = None
     if isinstance(obj, dict):
-        # allow both keys just in case (LLM legacy)
         ev = obj.get("evidence_ref") or obj.get("evidence_refs")
         if ev is None and isinstance(obj.get("claim"), dict):
             ev = obj["claim"].get("evidence_ref") or obj["claim"].get("evidence_refs")
@@ -353,6 +347,7 @@ def _extract_direction_from_claim_json(cj: str) -> str:
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     """
     External contradiction check (optional).
+    If contradiction_status is present but missing/unknown, we treat it as inconclusive.
     """
     if "contradiction_status" not in out.columns:
         return
@@ -361,7 +356,6 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
     if not st:
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "contradiction_ok"] = False
-        # NOTE: no dedicated reason code; reuse inconclusive bucket but keep clear note.
         out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "audit_notes"] = _append_note(
             out.at[i, "audit_notes"], "contradiction_status missing"
@@ -412,11 +406,11 @@ def _apply_external_stress(
     """
     Apply stress results ONLY if they were provided as inputs in the original claims DF.
 
-    gate_mode:
-      - off: do not change status based on stress; annotate if present
-      - note: do not change status; annotate
-      - hard: stress FAIL => FAIL_EVIDENCE_DRIFT (identity collapse)
-              stress ABSTAIN => ABSTAIN (reason validated)
+    Semantics:
+      - stress_evaluated indicates whether stress was supplied as an input.
+      - stress_ok is:
+          True/False when evaluated,
+          NA when not evaluated or missing (unless we hard-gate and convert to ABSTAIN/FAIL).
     """
     has_any = any(
         c in external_cols for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
@@ -429,17 +423,16 @@ def _apply_external_stress(
     if ("stress_ok" in external_cols) and ("stress_status" not in external_cols):
         v = row.get("stress_ok")
         if _is_na_scalar(v):
+            out.at[i, "stress_ok"] = pd.NA
             if gate_mode == "hard":
                 out.at[i, "status"] = "ABSTAIN"
-                out.at[i, "stress_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], "stress_ok missing (hard)"
                 )
             else:
-                out.at[i, "stress_ok"] = True
                 out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"], "stress_ok missing (note/off)"
+                    out.at[i, "audit_notes"], "stress_ok missing"
                 )
             return
 
@@ -452,15 +445,13 @@ def _apply_external_stress(
 
         # stress_ok=False
         if gate_mode == "hard":
-            out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"], "stress_ok=False (hard)"
             )
         else:
-            out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], "stress_ok=False (note/off)"
-            )
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
         return
 
     st = _norm_status(row.get("stress_status"))
@@ -468,17 +459,16 @@ def _apply_external_stress(
     nt = str(row.get("stress_notes", "")).strip()
 
     if not st:
+        out.at[i, "stress_ok"] = pd.NA
         if gate_mode == "hard":
             out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "stress_ok"] = False
             out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
             out.at[i, "audit_notes"] = _append_note(
                 out.at[i, "audit_notes"], "stress_status missing (hard)"
             )
         else:
-            out.at[i, "stress_ok"] = True
             out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], "stress_status missing (note/off)"
+                out.at[i, "audit_notes"], "stress_status missing"
             )
         return
 
@@ -517,11 +507,9 @@ def _apply_external_stress(
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
             return
 
-        # note/off: do not change status, just annotate
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
-    # unknown status => schema violation
     out.at[i, "status"] = "FAIL"
     out.at[i, "stress_ok"] = False
     out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
@@ -620,7 +608,6 @@ def audit_claims(
       - This function does NOT generate stress tests; it only consumes them if provided.
       - Missing stress is governed by SampleCard.stress_gate_mode() (default: off).
     """
-
     external_cols: set[str] = set(claims.columns)
     out = claims.copy()
 
@@ -629,7 +616,7 @@ def audit_claims(
     out["link_ok"] = True
     out["stability_ok"] = True
     out["contradiction_ok"] = pd.NA
-    out["stress_ok"] = False
+    out["stress_ok"] = pd.NA
     out["stress_evaluated"] = False
     out["abstain_reason"] = ""
     out["fail_reason"] = ""
@@ -665,7 +652,6 @@ def audit_claims(
                 + dist["term_id"].astype(str).str.strip()
             )
         elif "term_id" in dist.columns:
-            # last resort (not ideal): treat term_id as uid
             dist["term_uid"] = dist["term_id"].astype(str).str.strip()
         else:
             raise ValueError("audit_claims: distilled must have term_uid OR (source, term_id)")
@@ -750,11 +736,11 @@ def audit_claims(
     hub_genes = {g for g, deg in gene_to_term_degree.items() if deg > int(hub_thr)}
 
     pass_note_enabled = _get_pass_notes(card, default=True)
-    context_gate_mode = _get_context_gate_mode(card, default="abstain")
+    context_gate_mode = _get_context_gate_mode(card, default="hard")
     stability_gate_mode = _get_stability_gate_mode(card, default="hard")
 
-    # IMPORTANT: default "off" (paper-aligned) unless user explicitly asks otherwise
     stress_gate_mode = _get_stress_gate_mode(card, default="off")
+    strict_evidence = _get_strict_evidence_check(card, default=False)
 
     min_union = _get_min_union_genes(card, default=3)
     hub_frac_thr = _get_hub_frac_thr(card, default=0.5)
@@ -815,11 +801,6 @@ def audit_claims(
 
         gene_ids = [_norm_gene_id(g) for g in gene_ids]
 
-        module_id = "" if module_id is None else str(module_id).strip()
-        out.at[i, "module_id_effective"] = module_id
-
-        gene_ids = [_norm_gene_id(g) for g in gene_ids]
-
         if not term_ids:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
@@ -851,20 +832,27 @@ def audit_claims(
 
         gsh_norm = "" if _is_na_scalar(gsh) else str(gsh).strip().lower()
         if not _looks_like_hex_hash(gsh_norm):
-            # Claim schema should have caught this, but keep a hard guard.
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
-            out.at[i, "audit_notes"] = "gene_set_hash missing/invalid (v2)"
+            out.at[i, "audit_notes"] = "gene_set_hash missing/invalid"
             _enforce_reason_vocab(out, i)
             continue
 
         if not ev_union:
-            # cannot verify the hash without distilled evidence genes
-            out.at[i, "status"] = "FAIL"
-            out.at[i, "link_ok"] = False
-            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
-            out.at[i, "audit_notes"] = "evidence_genes unavailable for referenced term_ids"
+            # cannot verify hash without distilled evidence genes
+            if strict_evidence:
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "link_ok"] = False
+                out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+                out.at[i, "audit_notes"] = (
+                    "evidence_genes unavailable for referenced term_ids (strict)"
+                )
+            else:
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "link_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+                out.at[i, "audit_notes"] = "evidence_genes unavailable for referenced term_ids"
             _enforce_reason_vocab(out, i)
             continue
 
@@ -881,13 +869,6 @@ def audit_claims(
         out.at[i, "gene_set_hash_effective"] = gsh_norm
 
         if gene_ids:
-            if not ev_seen:
-                out.at[i, "status"] = "FAIL"
-                out.at[i, "link_ok"] = False
-                out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
-                out.at[i, "audit_notes"] = "gene_ids provided but evidence_genes unavailable"
-                _enforce_reason_vocab(out, i)
-                continue
             n_hit = sum(1 for g in gene_ids if g in ev_seen)
             if n_hit < int(min_overlap):
                 out.at[i, "status"] = "FAIL"
@@ -955,23 +936,18 @@ def audit_claims(
             msg = f"survival[{scope}]={agg:.3f} < tau={float(tau_row):.2f}"
 
             if stability_gate_mode == "off":
-                # research only: do not change status
                 out.at[i, "stability_ok"] = True
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], f"unstable(off): {msg}"
                 )
                 _enforce_reason_vocab(out, i)
-                # continue audit (do not stop)
             elif stability_gate_mode == "note":
-                # note: annotate only, keep PASS
                 out.at[i, "stability_ok"] = True
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], f"unstable(note): {msg}"
                 )
                 _enforce_reason_vocab(out, i)
-                # continue audit
             else:
-                # hard: gate to ABSTAIN
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stability_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
@@ -1044,16 +1020,15 @@ def audit_claims(
             out.at[i, "stress_evaluated"] = False
 
             if stress_gate_mode == "off":
-                out.at[i, "stress_ok"] = True
+                out.at[i, "stress_ok"] = pd.NA
 
             elif stress_gate_mode == "note":
-                out.at[i, "stress_ok"] = True
+                out.at[i, "stress_ok"] = pd.NA
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], "stress_skipped(note_mode)"
                 )
 
             else:
-                # hard: missing stress => ABSTAIN
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
@@ -1065,11 +1040,7 @@ def audit_claims(
         else:
             out.at[i, "stress_evaluated"] = True
             _apply_external_stress(
-                out,
-                i,
-                row,
-                external_cols=external_cols,
-                gate_mode=stress_gate_mode,
+                out, i, row, external_cols=external_cols, gate_mode=stress_gate_mode
             )
             if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
                 _enforce_reason_vocab(out, i)

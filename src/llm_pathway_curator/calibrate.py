@@ -16,6 +16,12 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 # -----------------------------
 def compute_counts(status: pd.Series) -> dict[str, int]:
     s = status.astype(str).str.strip().str.upper()
+
+    allowed = {"PASS", "FAIL", "ABSTAIN"}
+    bad = sorted(set(s.unique().tolist()) - allowed)
+    if bad:
+        raise ValueError(f"compute_counts: invalid status values: {bad}")
+
     n_pass = int((s == "PASS").sum())
     n_fail = int((s == "FAIL").sum())
     n_abs = int((s == "ABSTAIN").sum())

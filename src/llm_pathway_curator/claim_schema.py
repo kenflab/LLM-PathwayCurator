@@ -60,35 +60,88 @@ def _looks_like_12hex(s: str) -> bool:
     return all(ch in "0123456789abcdef" for ch in x)
 
 
+def _sha256_12hex(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _canonical_sorted_unique(xs: list[str]) -> list[str]:
+    # Stable, order-invariant canonicalization for IDs/hashes.
+    # - strip
+    # - drop NA/empty
+    # - dedup (case-sensitive; callers can pre-normalize)
+    # - sort for determinism
+    ys = [str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() not in _NA]
+    return sorted(set(ys))
+
+
 def _stable_claim_id(
-    *, term_ids: list[str], direction: str, gene_set_hash: str, context_keys: list[str]
+    *,
+    term_ids: list[str],
+    direction: str,
+    gene_set_hash: str,
+    context_keys: list[str],
 ) -> str:
     """
     Tool-owned deterministic claim_id.
-    Keep it minimal and stable:
-      - depends on evidence identity + direction + which context KEYS are present
-      - does NOT depend on free-text context VALUES (they can drift);
-        values live in SampleCard anyway
+
+    Must be stable across:
+      - term_id ordering differences
+      - context_keys ordering differences
+      - case/whitespace jitter in inputs (handled by upstream normalizers)
+
+    Depends on:
+      - evidence identity (term_ids + gene_set_hash)
+      - direction
+      - which context KEYS are present (NOT free-text context values)
     """
+    term_ids_c = _canonical_sorted_unique([str(t) for t in term_ids])
+    ctx_keys_c = _canonical_sorted_unique([str(k) for k in context_keys])
+    d = str(direction or "na").strip().lower()
+    h = str(gene_set_hash or "").strip().lower()
+
     payload = "|".join(
         [
-            ",".join([str(t).strip() for t in term_ids if str(t).strip()]),
-            str(direction or "na").strip().lower(),
-            str(gene_set_hash or "").strip().lower(),
-            ",".join([str(k).strip() for k in context_keys if str(k).strip()]),
+            ",".join(term_ids_c),
+            d,
+            h,
+            ",".join(ctx_keys_c),
         ]
     )
-    return "c_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return "c_" + _sha256_12hex(payload)
+
+
+def _stable_gene_set_hash_from_gene_ids(gene_ids: list[str]) -> str:
+    # Hash should be order-invariant and robust to case/whitespace jitter.
+    # We intentionally do NOT attempt biological ID mapping here.
+    canon = sorted(set([str(g).strip().upper() for g in gene_ids if str(g).strip()]))
+    payload = ",".join(canon)
+    return _sha256_12hex(payload)
+
+
+def _stable_gene_set_hash_fallback(term_ids: list[str]) -> str:
+    # Fallback when gene_ids are unavailable.
+    # Still produces a deterministic fingerprint of "evidence identity",
+    # but note it is term-driven, not gene-driven.
+    canon = _canonical_sorted_unique([str(t) for t in term_ids])
+    payload = ",".join(canon)
+    return _sha256_12hex(payload)
 
 
 class EvidenceRef(BaseModel):
     """
-    V2 contract (strict, simple):
+    EvidenceRef (strict, simple, tool-owned where possible):
+
+    Required:
       - term_ids: 1+ term_uid strings (module-level evidence allowed)
-      - gene_set_hash: REQUIRED 12-hex (sha256[:12]) fingerprint of the *evidence gene set*
-        (tool-owned; should match audit.py/select.py normalization rules)
-      - gene_ids: optional, uppercase, compact (display/reference only)
-      - module_id: optional (may be empty if unknown)
+
+    Optional (tool-owned; will be auto-filled if missing):
+      - gene_set_hash: 12-hex (sha256[:12]) fingerprint of the *evidence gene set*
+        If missing, it is deterministically derived from gene_ids when available,
+        otherwise from term_ids as a fallback.
+
+    Optional (display/reference only):
+      - gene_ids: list[str]
+      - module_id: str
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -96,7 +149,7 @@ class EvidenceRef(BaseModel):
     module_id: str = ""
     gene_ids: list[str] = Field(default_factory=list)
     term_ids: list[str] = Field(default_factory=list)
-    gene_set_hash: str = ""  # REQUIRED 12-hex in v2
+    gene_set_hash: str = ""  # tool-owned; auto-fill if empty
 
     @field_validator("module_id", mode="before")
     @classmethod
@@ -111,13 +164,14 @@ class EvidenceRef(BaseModel):
     @field_validator("gene_ids", mode="before")
     @classmethod
     def _ensure_gene_list(cls, v: Any) -> list[str]:
-        xs = _dedup_preserve_order(_split_listlike(v))
-        return [str(g).strip().upper() for g in xs if str(g).strip()]
+        # Keep original casing for display as much as possible (only strip/dedup).
+        # Hashing uses a canonicalized uppercase+sorted representation internally.
+        return _dedup_preserve_order(_split_listlike(v))
 
     @field_validator("term_ids", mode="before")
     @classmethod
     def _ensure_term_list(cls, v: Any) -> list[str]:
-        # do NOT uppercase term_uids
+        # Do NOT uppercase term_uids.
         return _dedup_preserve_order(_split_listlike(v))
 
     @field_validator("gene_set_hash", mode="before")
@@ -129,23 +183,38 @@ class EvidenceRef(BaseModel):
         return s
 
     @model_validator(mode="after")
-    def _enforce_v2_contract(self) -> EvidenceRef:
+    def _enforce_contract_and_fill_hash(self) -> EvidenceRef:
         if len(self.term_ids) < 1:
-            raise ValueError("EvidenceRef.term_ids must contain at least one term_uid (v2)")
-        if not _looks_like_12hex(self.gene_set_hash):
-            raise ValueError(
-                "EvidenceRef.gene_set_hash is required and must be 12-hex (sha256[:12]) (v2)"
-            )
-        return self
+            raise ValueError("EvidenceRef.term_ids must contain at least one term_uid")
+
+        # Tool-owned auto-fill for gene_set_hash:
+        h = str(self.gene_set_hash or "").strip().lower()
+        if not _looks_like_12hex(h):
+            if self.gene_ids:
+                h = _stable_gene_set_hash_from_gene_ids(self.gene_ids)
+            else:
+                h = _stable_gene_set_hash_fallback(self.term_ids)
+
+        if not _looks_like_12hex(h):
+            raise ValueError("EvidenceRef.gene_set_hash must be 12-hex (sha256[:12])")
+
+        try:
+            return self.model_copy(update={"gene_set_hash": h})
+        except Exception:
+            d = self.model_dump()
+            d["gene_set_hash"] = h
+            return EvidenceRef.model_validate(d)
 
 
 class Claim(BaseModel):
     """
-    V2 Claim:
+    Claim (typed, auditable):
+
       - claim_id is tool-owned; may be omitted/empty on input and will be filled deterministically.
-      - entity: term_id (not term_name)
+      - entity: a stable identifier (prefer term_id; not free text)
       - direction: up|down|na
-      - evidence_ref: schema-locked EvidenceRef
+      - context_keys: which SampleCard keys this claim is conditioned on (values live elsewhere)
+      - evidence_ref: schema-locked EvidenceRef (no free text evidence)
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -178,7 +247,6 @@ class Claim(BaseModel):
     @classmethod
     def _ctx_keys_dedup(cls, v: Any) -> list[str]:
         xs = _dedup_preserve_order(_split_listlike(v))
-        # keep only allowed keys, preserve order
         allowed = {"disease", "tissue", "perturbation", "comparison"}
         xs2 = [x for x in xs if x in allowed]
         return xs2
@@ -186,7 +254,6 @@ class Claim(BaseModel):
     @field_validator("claim_id", mode="before")
     @classmethod
     def _claim_id_strip(cls, v: Any) -> str:
-        # allow empty; will auto-fill
         if v is None:
             return ""
         s = str(v).strip()
@@ -198,13 +265,14 @@ class Claim(BaseModel):
     def _fill_claim_id(self) -> Claim:
         if self.claim_id:
             return self
+
         cid = _stable_claim_id(
             term_ids=list(self.evidence_ref.term_ids or []),
             direction=str(self.direction or "na"),
             gene_set_hash=str(self.evidence_ref.gene_set_hash or ""),
             context_keys=list(self.context_keys or []),
         )
-        # pydantic v2 safe copy
+
         try:
             return self.model_copy(update={"claim_id": cid})
         except Exception:
@@ -234,7 +302,7 @@ class Decision(BaseModel):
 
 class AuditedClaim(BaseModel):
     """
-    Keep as the single audited container (no v1/v2 split).
+    Single audited container (stable contract).
     """
 
     model_config = ConfigDict(extra="forbid")

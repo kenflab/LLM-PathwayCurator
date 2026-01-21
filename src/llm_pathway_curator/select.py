@@ -75,6 +75,17 @@ def _hash_gene_set_audit(genes: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _hash_term_set_fallback(term_uids: list[str]) -> str:
+    """
+    Fallback when evidence genes are missing/empty.
+    Keep it deterministic and set-stable across ordering.
+    This is term-driven (not gene-driven).
+    """
+    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
+    payload = ",".join(canon)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _norm_direction(x: Any) -> str:
     if _is_na_scalar(x):
         return "na"
@@ -557,6 +568,7 @@ def _select_claims_deterministic(
         if has_module and (not _is_na_scalar(r.get("module_id"))):
             mid = str(r.get("module_id")).strip()
         if (not mid) or (mid.lower() in {t.lower() for t in _NA_TOKENS}):
+            # treat "missing module" as its own bucket per term_uid to avoid collapsing
             mid = f"M_missing::{str(r.get('term_uid'))}"
 
         c = per_module_count.get(mid, 0)
@@ -583,21 +595,20 @@ def _select_claims_deterministic(
 
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
-    ctx_vals = [
-        str(card.disease or ""),
-        str(card.tissue or ""),
-        str(card.perturbation or ""),
-        str(card.comparison or ""),
-    ]
 
     for _, r in df_pick.iterrows():
         term_id = str(r["term_id"]).strip()
         term_name = str(r["term_name"]).strip()
         direction = _norm_direction(r.get("direction", "na"))
-        genes_full = [_norm_gene_id(g) for g in _as_gene_list(r.get("evidence_genes"))]
         source = str(r["source"]).strip()
+
         term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
+        # evidence genes (normalized for hashing + audit alignment)
+        genes_full = [_norm_gene_id(g) for g in _as_gene_list(r.get("evidence_genes"))]
+        genes_full = [g for g in genes_full if str(g).strip()]
+
+        # module_id (prefer upstream modules.py; deterministic fallback if missing)
         module_id = ""
         module_reason = ""
         if has_module and (not _is_na_scalar(r.get("module_id"))):
@@ -607,17 +618,24 @@ def _select_claims_deterministic(
             module_id = f"M_fallback_{_make_id(term_uid)}"
             module_reason = "missing_module_id"
 
-        gene_set_hash = _hash_gene_set_audit(genes_full)
-        ctx_key = "|".join([term_uid] + ctx_vals)
+        # gene_set_hash:
+        # - gene-driven when possible
+        # - term-driven fallback when evidence genes are empty
+        if genes_full:
+            gene_set_hash = _hash_gene_set_audit(genes_full)
+        else:
+            gene_set_hash = _hash_term_set_fallback([term_uid])
 
+        # Build schema-locked claim (claim_id is tool-owned and will be auto-filled by Claim schema)
         claim = Claim(
-            claim_id=f"c_{_make_id(ctx_key)}",
             entity=term_id,
             direction=direction,
             context_keys=ctx_keys,
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                gene_ids=genes_full[:10],  # compact ref (top10) for readability
+                # Display/reference only: compact for readability.
+                # Hash is computed from the full set above.
+                gene_ids=genes_full[:10],
                 term_ids=[term_uid],
                 gene_set_hash=gene_set_hash,
             ),
@@ -636,7 +654,7 @@ def _select_claims_deterministic(
             "module_reason": module_reason,
             "gene_ids": ",".join(claim.evidence_ref.gene_ids),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
-            "gene_set_hash": gene_set_hash,
+            "gene_set_hash": claim.evidence_ref.gene_set_hash,
             "context_score": int(r.get("context_score", 0)),
             "eligible": bool(r.get("eligible", True)),
             "term_survival": r.get("term_survival", pd.NA),
@@ -653,7 +671,7 @@ def _select_claims_deterministic(
                 claim_id=claim.claim_id,
                 term_ids=[term_uid],
                 module_id=module_id,
-                gene_set_hash=gene_set_hash,
+                gene_set_hash=claim.evidence_ref.gene_set_hash,
                 term_to_genes=term_to_genes,
                 module_to_terms_genes=module_to_terms_genes,
                 gene_pool=gene_pool,

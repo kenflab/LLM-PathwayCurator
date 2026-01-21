@@ -74,6 +74,7 @@ def _safe_write_json(path: Path, obj: Any) -> None:
 
 
 def _context_dict(card: SampleCard) -> dict[str, str]:
+    # values are used for prompting only; NOT used for claim_id identity
     return {
         "disease": _strip_na(getattr(card, "disease", "")),
         "tissue": _strip_na(getattr(card, "tissue", "")),
@@ -127,24 +128,14 @@ def _hash_gene_set_12hex(genes: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def _deterministic_claim_id(
-    *, term_uid: str, ctx: dict[str, str], direction: str, gene_set_hash: str
-) -> str:
+def _hash_term_set_fallback_12hex(term_uids: list[str]) -> str:
     """
-    Tool-owned claim_id. Stable across runs given same context + evidence identity.
-    Includes CONTEXT VALUES (not just keys) to avoid collisions.
+    Fallback when genes are missing/empty.
+    Deterministic 12-hex from term_uid set (order-invariant).
     """
-    parts = [
-        str(term_uid).strip(),
-        str(ctx.get("disease", "")).strip(),
-        str(ctx.get("tissue", "")).strip(),
-        str(ctx.get("perturbation", "")).strip(),
-        str(ctx.get("comparison", "")).strip(),
-        str(direction or "na").strip().lower(),
-        str(gene_set_hash or "").strip().lower(),
-    ]
-    sig = "|".join(parts)
-    return "c_" + hashlib.sha256(sig.encode("utf-8")).hexdigest()[:12]
+    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
+    payload = ",".join(canon)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass(frozen=True)
@@ -209,7 +200,7 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
         "output_schema": {
             "claims": [
                 {
-                    "claim_id": "string (optional; tool will overwrite)",
+                    "claim_id": "string (optional; tool-owned)",
                     "entity": "term_id",
                     "direction": "up|down|na",
                     "context_keys": ["disease|tissue|perturbation|comparison"],
@@ -256,7 +247,6 @@ def _post_validate_against_candidates(
     claims: list[Claim],
     cand: pd.DataFrame,
     require_gene_set_hash: bool,
-    ctx: dict[str, str],
     ctx_keys_resolved: list[str],
 ) -> tuple[bool, str, list[Claim]]:
     """
@@ -266,8 +256,8 @@ def _post_validate_against_candidates(
       - tool fills evidence_ref.gene_set_hash from candidates (LLM output may omit)
       - gene_ids (if provided) subset of candidate gene_ids_suggest
       - unique term_uid across returned claims
-      - tool overwrites claim_id deterministically (context values included)
       - context_keys projected to resolved keys (stable)
+      - claim_id is TOOL-OWNED by Claim schema; do NOT generate or overwrite here
     """
     cand2 = cand.copy()
     cand2["term_uid"] = cand2.get("term_uid", pd.Series([""] * len(cand2))).astype(str).str.strip()
@@ -292,6 +282,7 @@ def _post_validate_against_candidates(
     ctx_allowed = set(ctx_keys_resolved or [])
 
     for c in claims:
+        # project context_keys to resolved keys (stable); if none, use resolved keys
         ck_in = list(c.context_keys or [])
         ck_proj = [k for k in ck_in if (k in ctx_allowed)]
         if not ck_proj:
@@ -314,7 +305,7 @@ def _post_validate_against_candidates(
         if term_id_expected and str(c.entity).strip() != term_id_expected:
             return (False, f"entity != term_id for term_uid={term_uid}", [])
 
-        # tool-owned gene_set_hash (canonical, from candidates)
+        # tool-owned gene_set_hash (prefer candidate; fallback allowed only if candidate missing)
         gsh_expected = str(row.get("gene_set_hash", "")).strip().lower()
         if require_gene_set_hash:
             if (not gsh_expected) or (not _looks_like_12hex(gsh_expected)):
@@ -324,7 +315,6 @@ def _post_validate_against_candidates(
                     [],
                 )
 
-        # if LLM provided gsh, it must match candidate (when both exist)
         gsh_in = str(c.evidence_ref.gene_set_hash or "").strip().lower()
         if gsh_in and gsh_expected and gsh_in != gsh_expected:
             return (
@@ -344,28 +334,21 @@ def _post_validate_against_candidates(
                     [],
                 )
 
-        # tool-owned deterministic claim_id (includes context VALUES)
-        cid = _deterministic_claim_id(
-            term_uid=term_uid,
-            ctx=ctx,
-            direction=str(c.direction or "na"),
-            gene_set_hash=str(gsh_expected or gsh_in or ""),
-        )
+        # Normalize claim by overwriting context_keys + evidence_ref.gene_set_hash.
+        # IMPORTANT: do NOT overwrite claim_id here; Claim schema owns it.
+        gsh_final = gsh_expected or gsh_in or ""
+        update: dict[str, Any] = {"context_keys": ck_proj}
 
-        # rebuild normalized claim: overwrite claim_id, context_keys, gene_set_hash
-        update = {"claim_id": cid, "context_keys": ck_proj}
-        # fill gene_set_hash into evidence_ref
         try:
-            ev = c.evidence_ref.model_copy(update={"gene_set_hash": (gsh_expected or gsh_in or "")})
+            ev = c.evidence_ref.model_copy(update={"gene_set_hash": gsh_final})
             update["evidence_ref"] = ev
             c2 = c.model_copy(update=update)
         except Exception:
             d = c.model_dump()
-            d["claim_id"] = cid
             d["context_keys"] = ck_proj
             d_ev = d.get("evidence_ref", {}) if isinstance(d.get("evidence_ref"), dict) else {}
             if isinstance(d_ev, dict):
-                d_ev["gene_set_hash"] = gsh_expected or gsh_in or ""
+                d_ev["gene_set_hash"] = gsh_final
                 d["evidence_ref"] = d_ev
             c2 = Claim.model_validate(d)
 
@@ -411,7 +394,8 @@ def propose_claims_llm(
     else:
         df["gene_ids_suggest"] = [[] for _ in range(len(df))]
 
-    # gene_set_hash: deterministic fill from gene_ids_suggest when missing/invalid
+    # gene_set_hash: deterministic fill from gene_ids_suggest when missing/invalid;
+    # if genes are empty, use term_uid fallback (never leave empty).
     if "gene_set_hash" not in df.columns:
         df["gene_set_hash"] = ""
 
@@ -420,7 +404,10 @@ def propose_claims_llm(
         if _looks_like_12hex(gsh):
             return gsh
         genes = _parse_gene_list(row.get("gene_ids_suggest", []))
-        return _hash_gene_set_12hex(genes) if genes else ""
+        if genes:
+            return _hash_gene_set_12hex(genes)
+        term_uid = str(row.get("term_uid", "") or "").strip()
+        return _hash_term_set_fallback_12hex([term_uid]) if term_uid else ""
 
     df["gene_set_hash"] = df.apply(_fill_gsh, axis=1)
 
@@ -491,14 +478,12 @@ def propose_claims_llm(
             claims=[], raw_text=raw_text, used_fallback=True, notes=meta["notes"], meta=meta
         )
 
-    ctx = _context_dict(card)
     ctx_keys_resolved = _context_keys(card)
 
     ok, why, claims_norm = _post_validate_against_candidates(
         claims=claims,
         cand=df_rank,
         require_gene_set_hash=bool(require_gsh),
-        ctx=ctx,
         ctx_keys_resolved=ctx_keys_resolved,
     )
     if not ok:
@@ -528,6 +513,8 @@ def claims_to_proposed_tsv(
     distilled_with_modules: pd.DataFrame,
     card: SampleCard,
 ) -> pd.DataFrame:
+    _ = card  # reserved for future use (do not bake context values into IDs)
+
     df = distilled_with_modules.copy()
 
     if "term_uid" not in df.columns:

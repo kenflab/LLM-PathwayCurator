@@ -318,6 +318,15 @@ def write_report_jsonl(
     ctx_pert = str(getattr(card, "perturbation", "") or "").strip()
     ctx_comp = str(getattr(card, "comparison", "") or "").strip()
 
+    # optional species stamp (non-breaking)
+    species = ""
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict):
+            species = str(extra.get("species", "") or "").strip()
+    except Exception:
+        species = ""
+
     jsonl_path = out_path / "report.jsonl"
     created_at = datetime.now(timezone.utc).isoformat()
 
@@ -325,13 +334,14 @@ def write_report_jsonl(
         for i, row in df.iterrows():
             _ = _normalize_status(row.get("status", ""))
 
+            # IMPORTANT: decision is derived from RAW audit_log row (preserve NA semantics)
+            row_raw = audit_log.loc[i]
+            decision_obj = _decision_from_audit_row(row_raw)
+
             cj = str(row.get("claim_json", "") or "").strip()
             if not cj:
                 raise ValueError("audit_log has empty claim_json for a row (required)")
             claim = Claim.model_validate_json(cj)
-
-            decision_obj = _decision_from_audit_row(row)
-
             surv_val = _to_float_or_none(surv_s.loc[i])
 
             ctx_val = None
@@ -342,9 +352,14 @@ def write_report_jsonl(
             if stat_s is not None:
                 stat_val = _to_float_or_none(stat_s.loc[i])
 
-            cancer_key = str(
-                _get_first_present(row, ["cancer", "cancer_type"]) or default_cancer
+            # prefer explicit disease fields; keep cancer as alias for backward compatibility
+            disease_key = str(
+                _get_first_present(row, ["disease"])
+                or ctx_disease
+                or _get_first_present(row, ["cancer", "cancer_type"])
+                or default_cancer
             ).strip()
+
             comp_val = str(default_comparison or row.get("comparison", "") or "").strip()
 
             # -------------------------
@@ -354,9 +369,11 @@ def write_report_jsonl(
                 "created_at": created_at,
                 "run_id": str(run_id),
                 "method": method_val,
-                "cancer": cancer_key,
+                "disease": disease_key,  # v2 official
+                "cancer": disease_key,  # v1 alias
                 "comparison": comp_val,
                 "tau": float(tau_val),
+                "species": species,
                 "claim": claim.model_dump(),
                 "metrics": {
                     "term_survival_agg": surv_val,
@@ -499,7 +516,7 @@ def write_report(
     # PASS
     lines.append("## PASS (top)")
     lines.append("")
-    pass_df = audit_log[audit_log[status_col] == "PASS"] if status_col else audit_log.iloc[0:0]
+    pass_df = audit_out[audit_out[status_col] == "PASS"] if status_col else audit_out.iloc[0:0]
     pass_df = _top(pass_df)
     lines.append(
         _safe_table_md(
@@ -509,7 +526,7 @@ def write_report(
                     "claim_id",
                     "entity",
                     "direction",
-                    "module_id",
+                    "module_id_effective",
                     "term_ids",
                     "gene_ids",
                     "gene_set_hash",
@@ -517,6 +534,8 @@ def write_report(
                     "context_score",
                     "stat",
                     "audit_notes",
+                    "stress_evaluated",
+                    "stress_ok",
                 ],
             ),
             n=5,
@@ -527,7 +546,7 @@ def write_report(
     # ABSTAIN
     lines.append("## ABSTAIN (top)")
     lines.append("")
-    abs_df = audit_log[audit_log[status_col] == "ABSTAIN"] if status_col else audit_log.iloc[0:0]
+    abs_df = audit_out[audit_out[status_col] == "ABSTAIN"] if status_col else audit_out.iloc[0:0]
     abs_df = _top(abs_df)
     lines.append(
         _safe_table_md(
@@ -553,7 +572,7 @@ def write_report(
     # FAIL
     lines.append("## FAIL (top)")
     lines.append("")
-    fail_df = audit_log[audit_log[status_col] == "FAIL"] if status_col else audit_log.iloc[0:0]
+    fail_df = audit_out[audit_out[status_col] == "FAIL"] if status_col else audit_out.iloc[0:0]
     fail_df = _top(fail_df)
     lines.append(
         _safe_table_md(
