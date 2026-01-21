@@ -12,14 +12,36 @@ from functools import wraps
 
 
 def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
-    backend = os.environ.get("LLMPATH_BACKEND", "ollama").lower()
+    backend = os.environ.get("LLMPATH_BACKEND", "ollama").strip().lower()
+    seed_val = 42 if seed is None else int(seed)
+
     if backend == "openai":
         return OpenAIBackend(
             api_key=os.environ["LLMPATH_OPENAI_API_KEY"],
             model_name=os.environ.get("LLMPATH_OPENAI_MODEL", "gpt-4o"),
             temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
-            seed=int(seed or 42),
+            seed=seed_val,
         )
+
+    if backend == "gemini":
+        return GeminiBackend(
+            api_key=os.environ["LLMPATH_GEMINI_API_KEY"],
+            model_name=os.environ.get("LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"),
+            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+        )
+
+    if backend == "ollama":
+        return OllamaBackend(
+            host=os.environ.get("LLMPATH_OLLAMA_HOST", None),
+            model_name=os.environ.get("LLMPATH_OLLAMA_MODEL", None),
+            temperature=float(os.environ.get("LLMPATH_OLLAMA_TEMPERATURE", "0.0")),
+            timeout=float(os.environ.get("LLMPATH_OLLAMA_TIMEOUT", "120")),
+        )
+
+    if backend in {"local", "offline"}:
+        return LocalLLMBackend()
+
+    raise ValueError(f"Unknown LLMPATH_BACKEND={backend!r} (expected: openai|gemini|ollama|local)")
 
 
 class BaseLLMBackend(ABC):
@@ -80,7 +102,7 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
         "invalid_api_key",
         "unauthorized",
         "forbidden",
-        "bad request",
+        # "bad request",  # <- optional: remove to avoid over-blocking retries
         "invalid_request",
         "model not found",
         "insufficient_quota",

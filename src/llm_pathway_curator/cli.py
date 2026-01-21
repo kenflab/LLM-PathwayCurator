@@ -115,18 +115,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed", type=int, default=None, help="Optional seed (plumbing; v0 deterministic)"
     )
     p_run.add_argument(
-        "--run-meta",
-        default="run_meta.json",
-        help="Filename for run metadata JSON inside outdir",
-    )
-    p_run.set_defaults(func=cmd_run)
-
-    p_run.add_argument(
         "--tau",
         type=float,
         default=None,
         help="Audit stability threshold tau (overrides sample_card.audit_tau() if set)",
     )
+    p_run.add_argument(
+        "--run-meta",
+        default="run_meta.json",
+        help="Relative path for run metadata JSON inside outdir (default: run_meta.json)",
+    )
+    p_run.set_defaults(func=cmd_run)
 
     p_adapt = sub.add_parser(
         "adapt", help="Convert external enrichment outputs to EvidenceTable TSV"

@@ -45,7 +45,11 @@ def _get_distill_knob(card: SampleCard, key: str, default: Any) -> Any:
     return default if v is None else v
 
 
-def _normalize_direction_loose(x: Any) -> str:
+def _normalize_direction(x: Any) -> str:
+    """
+    Keep direction vocabulary consistent with schema.py:
+      - up/down/na
+    """
     if _is_na_scalar(x):
         return "na"
     s = str(x).strip().lower()
@@ -77,7 +81,7 @@ def _normalize_direction_loose(x: Any) -> str:
 
 
 def _clean_gene_symbol(g: str) -> str:
-    s = g.strip().strip('"').strip("'")
+    s = str(g).strip().strip('"').strip("'")
     s = " ".join(s.split())
     s = s.strip(",;|")
     return s.upper()
@@ -100,6 +104,9 @@ def _split_genes_loose(x: Any) -> list[str]:
         if not s or s.lower() in _NA_TOKENS_L:
             return []
         s = s.replace(";", ",").replace("|", ",").replace("\n", " ").replace("\t", " ")
+        s = " ".join(s.split()).strip()
+        if not s or s.lower() in _NA_TOKENS_L:
+            return []
         if "," not in s and " " in s:
             parts = s.split()
         else:
@@ -108,7 +115,7 @@ def _split_genes_loose(x: Any) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for p in parts:
-        g = _clean_gene_symbol(str(p))
+        g = _clean_gene_symbol(p)
         if not g:
             continue
         if g not in seen:
@@ -141,7 +148,7 @@ def _hash_gene_set_short12(genes: list[str]) -> str:
       - order invariant
       - uppercased symbols
     """
-    uniq = sorted({_clean_gene_symbol(str(g)) for g in genes if str(g).strip()})
+    uniq = sorted({_clean_gene_symbol(g) for g in genes if str(g).strip()})
     payload = ",".join(uniq)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -151,7 +158,7 @@ def _get_distill_mode(card: SampleCard) -> str:
     Explicit mode switch. Default keeps v1 semantics (evidence perturbation).
     Allowed:
       - "evidence_perturb" (default)
-      - "replicates_proxy" (only if replicate_id exists; NOT true LOO enrichment)
+      - "replicates_proxy" (requires replicate_id; NOT true LOO enrichment)
     """
     m = _get_distill_knob(card, "mode", None)
     if m is None:
@@ -236,7 +243,8 @@ def _perturb_genes(
 
     if rescue and len(kept) < min_genes and len(g_arr) > 0:
         need = min_genes - len(kept)
-        remaining = [g for g in genes if g not in set(kept)]
+        kept_set = set([str(g) for g in kept])
+        remaining = [g for g in genes if str(g) not in kept_set]
         if remaining:
             add_back = rng.choice(
                 np.array(remaining, dtype=object),
@@ -245,7 +253,7 @@ def _perturb_genes(
             )
             kept.extend(add_back.tolist())
 
-    out = set(kept)
+    out = set([str(g) for g in kept if str(g).strip()])
 
     # jitter/add: add genes NOT already in the original set, to actually model drift
     if p_add > 0.0 and gene_pool.size > 0:
@@ -259,6 +267,8 @@ def _perturb_genes(
                 add_genes = rng.choice(candidates, size=min(k_add, candidates.size), replace=False)
                 out.update([str(g) for g in add_genes.tolist()])
 
+    # normalize symbols
+    out = set([_clean_gene_symbol(g) for g in out if str(g).strip()])
     return out
 
 
@@ -272,9 +282,9 @@ def _loo_survival_from_replicates(
     p_min: float,
 ) -> pd.DataFrame:
     """
-    Compute patient-level survival given stacked EvidenceTable with replicate_id column.
+    Compute proxy survival given stacked EvidenceTable with replicate_id column.
 
-    Survival definition (per term_uid, anchored to baseline replicate):
+    Proxy survival definition (per term_uid, anchored to baseline replicate):
       survival = fraction of non-baseline replicates where:
         - term exists (same term_uid), and
         - direction matches baseline (optional), and
@@ -308,7 +318,7 @@ def _loo_survival_from_replicates(
         g_clean = set([_clean_gene_symbol(g) for g in gset if str(g).strip()])
         base_map_genes.setdefault(tu, set()).update(g_clean)
         if tu not in base_map_dir:
-            base_map_dir[tu] = _normalize_direction_loose(r.get("direction"))
+            base_map_dir[tu] = _normalize_direction(r.get("direction"))
 
     reps = sorted(set(df["replicate_id"].astype(str).tolist()))
     reps_nb = [rid for rid in reps if rid != str(baseline_id)]
@@ -330,7 +340,7 @@ def _loo_survival_from_replicates(
             tu = str(r["term_uid"]).strip()
             if not tu:
                 continue
-            d = _normalize_direction_loose(r.get("direction"))
+            d = _normalize_direction(r.get("direction"))
             genes = r["evidence_genes"]
             gset = set(genes) if isinstance(genes, list) else set(_split_genes_loose(genes))
             m[tu] = (d, set([_clean_gene_symbol(g) for g in gset if str(g).strip()]))
@@ -376,7 +386,7 @@ def distill_evidence(
 
     v1 semantics:
       - Evidence-level stress tests reproducible from EvidenceTable (no re-running enrichment).
-      - Optional replicates_proxy mode if replicate_id exists.
+      - Optional replicates_proxy mode if replicate_id exists (NOT true re-run LOO enrichment).
 
     Contract:
       - Input must preserve term×gene (evidence_genes non-empty) for rows used downstream.
@@ -397,35 +407,44 @@ def distill_evidence(
 
     out = evidence.copy()
 
-    # If schema.py provided validity flags, respect them (hygiene step should not explode).
+    # If schema.py provided validity flags, respect them.
     if "is_valid" in out.columns:
         out = out[out["is_valid"].astype(bool)].copy()
 
-    # Minimal normalization for "EvidenceTable-like" inputs
+    # Normalize required fields
     out["term_id"] = out["term_id"].astype(str).str.strip()
     out["term_name"] = out["term_name"].astype(str).str.strip()
     out["source"] = out["source"].astype(str).str.strip()
-    out["direction"] = out["direction"].map(_normalize_direction_loose)
+    out.loc[out["source"].eq(""), "source"] = "unknown"
+    out["direction"] = out["direction"].map(_normalize_direction)
 
     out["stat"] = pd.to_numeric(out["stat"], errors="coerce")
     out["qval"] = pd.to_numeric(out["qval"], errors="coerce")
 
-    if out["stat"].isna().any():
-        i = int(out.index[out["stat"].isna()][0])
-        raise ValueError(
-            f"distill_evidence: non-numeric stat at row index={i}. "
-            "Upstream must supply numeric stat (NES / -log10(q) / LogP)."
-        )
-
-    # Normalize evidence_genes (list[str]) and validate non-empty
+    # Robust evidence_genes: prefer list-like, tolerate scalar strings
+    # Record provenance so downstream/report can show what happened.
+    out["evidence_genes_was_list"] = out["evidence_genes"].map(
+        lambda x: isinstance(x, (list, tuple, set))
+    )
     out["evidence_genes"] = out["evidence_genes"].map(_split_genes_loose)
     out["n_evidence_genes"] = out["evidence_genes"].map(len)
+
+    # Validate core (distill should be strict by default; schema is expected to drop invalid rows)
+    if out["stat"].isna().any():
+        i = int(out.index[out["stat"].isna()][0])
+        bad = out.loc[i, ["term_id", "term_name", "source"]].to_dict()
+        raw_stat = evidence.loc[out.index[out["stat"].isna()][0], "stat"]
+        raise ValueError(
+            f"distill_evidence: non-numeric stat at row index={i} (row={bad}, stat={raw_stat}). "
+            "Upstream must supply numeric stat (NES / -log10(q) / LogP)."
+        )
 
     empty = out["n_evidence_genes"].eq(0)
     if empty.any():
         i = int(out.index[empty][0])
+        bad = out.loc[i, ["term_id", "term_name", "source"]].to_dict()
         raise ValueError(
-            f"distill_evidence: empty evidence_genes at row index={i}. "
+            f"distill_evidence: empty evidence_genes at row index={i} (row={bad}). "
             "Upstream adapter/schema must supply overlap genes / leadingEdge, or drop invalid rows."
         )
 
@@ -456,23 +475,25 @@ def distill_evidence(
     r_min = float(_get_distill_knob(card, "evidence_recall_min", 0.80))
     p_min = float(_get_distill_knob(card, "evidence_precision_min", 0.80))
 
-    # identity drift metric (optional, for stress strength)
     drift_hash = bool(_get_distill_knob(card, "track_hash_drift", True))
 
-    # min genes policy (defaults OFF for v1-compat)
     min_keep_frac = float(_get_distill_knob(card, "min_keep_frac", 0.0))
     min_keep_frac = min(max(min_keep_frac, 0.0), 1.0)
 
     user_min_genes_raw = _get_distill_knob(card, "min_evidence_genes", None)
     rescue = bool(_get_distill_knob(card, "perturb_rescue", False))
 
-    # Clamp for safety
+    # Clamp knobs for safety / reproducibility
     n_reps = max(1, min(int(n_reps), 512))
     p_drop = min(max(float(p_drop), 0.0), 0.95)
     p_add = min(max(float(p_add), 0.0), 0.95)
     j_min = min(max(float(j_min), 0.0), 1.0)
     r_min = min(max(float(r_min), 0.0), 1.0)
     p_min = min(max(float(p_min), 0.0), 1.0)
+
+    # Always export knob provenance (report/audit can cite this)
+    out["distill_mode"] = distill_mode
+    out["distill_track_hash_drift"] = bool(drift_hash)
 
     # ===========================
     # REPLICATES PROXY
@@ -497,6 +518,10 @@ def distill_evidence(
         out = out[out["replicate_id"].astype(str) == baseline_id].copy()
         out = out.reset_index(drop=True)
 
+        # survival provenance: input vs computed
+        trust_input_survival = bool(_get_distill_knob(card, "trust_input_survival", False))
+        out["distill_trust_input_survival"] = bool(trust_input_survival)
+
         out["term_survival_input"] = (
             pd.to_numeric(out.get("term_survival", pd.NA), errors="coerce").astype("Float64")
             if "term_survival" in out.columns
@@ -506,19 +531,23 @@ def distill_evidence(
             out["term_survival_loo"], errors="coerce"
         ).astype("Float64")
 
-        trust_input_survival = bool(_get_distill_knob(card, "trust_input_survival", False))
+        out["term_survival_source"] = "computed"
+        if trust_input_survival and "term_survival" in out.columns:
+            out["term_survival_source"] = "input"
+
         out["term_survival"] = (
             out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
         ).astype("Float64")
 
-        out["term_gene_set_hash"] = out["evidence_genes"].map(lambda xs: _hash_gene_set_short12(xs))
+        out["term_gene_set_hash"] = out["evidence_genes"].map(_hash_gene_set_short12)
         out["term_survival_agg"] = out["term_survival"].astype("Float64")
         out["term_hash_drift_rate"] = _ensure_float64_na_series(len(out))
 
+        # convenience fields (downstream expects these columns)
         out["gene_survival"] = out["term_survival"].astype("Float64")
         out["module_survival"] = _ensure_float64_na_series(len(out))
 
-        out["distill_mode"] = "replicates_proxy"
+        out["distill_loo_is_proxy"] = True
         out["distill_loo_baseline_id"] = baseline_id
         out["distill_loo_direction_match"] = bool(direction_match)
 
@@ -556,11 +585,12 @@ def distill_evidence(
         base_hashes: list[str] = []
         drift_rate_list: list[float] = []
 
-        # IMPORTANT: order-invariant RNG per term_uid
         for tu, xs in zip(
-            out["term_uid"].astype(str).tolist(), out["evidence_genes"].tolist(), strict=True
+            out["term_uid"].astype(str).tolist(),
+            out["evidence_genes"].tolist(),
+            strict=False,
         ):
-            orig = set(xs)
+            orig = set([_clean_gene_symbol(g) for g in xs if str(g).strip()])
 
             base_hash = _hash_gene_set_short12(xs)
             base_hashes.append(base_hash)
@@ -611,6 +641,7 @@ def distill_evidence(
             n_total_list.append(int(n_reps))
 
         trust_input_survival = bool(_get_distill_knob(card, "trust_input_survival", False))
+        out["distill_trust_input_survival"] = bool(trust_input_survival)
 
         if "term_survival" in out.columns:
             out["term_survival_input"] = pd.to_numeric(
@@ -623,11 +654,14 @@ def distill_evidence(
         out["term_survival_n_ok"] = pd.Series(n_ok_list, dtype="Int64")
         out["term_survival_n_total"] = pd.Series(n_total_list, dtype="Int64")
 
+        out["term_survival_source"] = "computed"
+        if trust_input_survival and "term_survival" in out.columns:
+            out["term_survival_source"] = "input"
+
         out["term_survival"] = (
             out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
         ).astype("Float64")
 
-        # identity fields (audit-friendly)
         out["term_gene_set_hash"] = pd.Series(base_hashes, dtype="string")
         out["term_survival_agg"] = out["term_survival"].astype("Float64")
 
@@ -636,7 +670,7 @@ def distill_evidence(
         else:
             out["term_hash_drift_rate"] = _ensure_float64_na_series(len(out))
 
-        out["distill_mode"] = "evidence_perturb"
+        out["distill_loo_is_proxy"] = False
         out["distill_n_perturb"] = n_reps
         out["distill_gene_dropout_p"] = p_drop
         out["distill_gene_jitter_p"] = p_add
@@ -649,12 +683,15 @@ def distill_evidence(
         )
         out["distill_perturb_rescue"] = bool(rescue)
 
-        # (optional) keep these summary metrics if you later want them in report/audit
         out["term_survival_mean_jaccard"] = pd.Series(mean_j, dtype="Float64")
         out["term_survival_mean_recall"] = pd.Series(mean_r, dtype="Float64")
         out["term_survival_mean_precision"] = pd.Series(mean_p, dtype="Float64")
 
-    # Gates for downstream (now meaningful): keep_term can be used by select/audit
+        # convenience fields (downstream expects these columns)
+        out["gene_survival"] = out["term_survival"].astype("Float64")
+        out["module_survival"] = _ensure_float64_na_series(len(out))
+
+    # Gates for downstream
     if "keep_term" not in out.columns:
         out["keep_term"] = True
     if "keep_reason" not in out.columns:
@@ -674,12 +711,11 @@ def distill_evidence(
                 out.loc[unstable, "keep_term"] = False
                 out.loc[unstable, "keep_reason"] = "low_term_survival_agg"
             elif pre_gate_mode == "note":
-                # keep_term stays True; annotate only
                 out.loc[unstable, "keep_reason"] = "low_term_survival_agg(note)"
             else:
-                # off: do nothing
                 pass
         except Exception:
+            # do not explode on tau parse errors; keep distill deterministic and safe
             pass
 
     return out

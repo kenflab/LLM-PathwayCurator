@@ -1,3 +1,4 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/modules.py
 from __future__ import annotations
 
 import hashlib
@@ -40,6 +41,16 @@ def _hash_set_short12(items: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _hash_gene_set_short12(genes: list[str]) -> str:
+    """
+    Gene-set stable short hash (sha256[:12]), normalized (upper).
+    This prevents spurious drift from casing differences.
+    """
+    uniq = sorted({_norm_gene_id(x) for x in genes if str(x).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
     g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
@@ -50,6 +61,42 @@ def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
 # -------------------------
 # Edges: term x gene (bipartite)
 # -------------------------
+def _parse_genes_fallback(x: object) -> list[str]:
+    """
+    Last-resort parser for legacy string inputs.
+    Matches schema/distill tolerant behavior:
+      - delimiters: , ; |
+      - whitespace fallback if no commas present
+    """
+    if x is None:
+        return []
+    s = str(x).strip()
+    if not s or s.lower() in {"na", "nan", "none"}:
+        return []
+
+    s = s.replace(";", ",").replace("|", ",")
+    s = s.replace("\n", " ").replace("\t", " ")
+    s = " ".join(s.split()).strip()
+    if not s or s.lower() in {"na", "nan", "none"}:
+        return []
+
+    if "," in s:
+        parts = s.split(",")
+    else:
+        parts = s.split()
+
+    genes = [_norm_gene_id(p) for p in parts]
+    genes = [g for g in genes if g]
+    # de-duplicate while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for g in genes:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+
 def build_term_gene_edges(
     evidence_df: pd.DataFrame,
     *,
@@ -74,17 +121,8 @@ def build_term_gene_edges(
         if isinstance(genes, (list, tuple, set)):
             genes_list = [_norm_gene_id(g) for g in genes]
             genes_list = [g for g in genes_list if g]
-        elif genes is None:
-            genes_list = []
         else:
-            # Last-resort: tolerate legacy string inputs, but keep behavior deterministic.
-            s = str(genes).strip()
-            if not s or s.lower() in {"na", "nan", "none"}:
-                genes_list = []
-            else:
-                s = s.replace(";", ",").replace("|", ",")
-                genes_list = [_norm_gene_id(g) for g in s.split(",")]
-                genes_list = [g for g in genes_list if g]
+            genes_list = _parse_genes_fallback(genes)
 
         for g in genes_list:
             rows.append((term_uid, g, 1.0))
@@ -111,6 +149,10 @@ def filter_hub_genes(
 ) -> pd.DataFrame:
     """
     Remove hub genes that connect too many terms (gene term-degree).
+
+    Policy:
+      - Remove genes with degree STRICTLY greater than threshold (> max_gene_term_degree).
+      - Threshold is recorded in edges.attrs and should also be exported by caller.
 
     NOTE: max_term_degree is a deprecated alias kept for backward compatibility.
     """
@@ -334,6 +376,10 @@ def factorize_modules_connected_components(
         edges, max_gene_term_degree=max_gene_term_degree, max_term_degree=max_term_degree
     )
 
+    hub_meta = edges_f.attrs.get("hub_filter", {}) if hasattr(edges_f, "attrs") else {}
+    hub_max = hub_meta.get("max_gene_term_degree", max_gene_term_degree)
+    hub_n = hub_meta.get("n_hubs", 0)
+
     if edges_f.empty:
         modules_df = pd.DataFrame(
             columns=[
@@ -348,6 +394,8 @@ def factorize_modules_connected_components(
                 "module_method",
                 "module_min_shared_genes",
                 "module_jaccard_min",
+                "hub_filter_max_gene_term_degree",
+                "hub_filter_n_hubs",
                 "module_terms_hash12",
                 "module_genes_hash12",
                 "module_content_hash12",
@@ -358,7 +406,6 @@ def factorize_modules_connected_components(
             modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f
         )
 
-    # compute term -> genes union helper (used also for singleton fill)
     term_to_genes = _build_term_gene_sets(edges_f)
 
     if method == "bipartite_cc":
@@ -368,14 +415,12 @@ def factorize_modules_connected_components(
         term_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
         gene_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
 
-        # terms
         tdf = nodes[nodes["kind"].eq("term")].copy()
         for cid, g in tdf.groupby("component"):
             term_lists[int(cid)] = sorted(
                 [str(x) for x in g["term_uid"].dropna().astype(str).tolist() if str(x).strip()]
             )
 
-        # genes
         gdf = nodes[nodes["kind"].eq("gene")].copy()
         for cid, g in gdf.groupby("component"):
             gene_lists[int(cid)] = sorted(
@@ -385,14 +430,17 @@ def factorize_modules_connected_components(
         buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
 
     elif method == "term_jaccard_cc":
-        max_terms_for_pairwise = 2500
+        # Conservative default guard (paper+tool safety).
+        # 1200 -> ~720k pairs, still heavy but less likely to timeout.
+        max_terms_for_pairwise = 1200
         try:
-            max_terms_for_pairwise = int(evidence_df.attrs.get("max_terms_for_pairwise", 2500))  # type: ignore[attr-defined]
+            max_terms_for_pairwise = int(
+                evidence_df.attrs.get("max_terms_for_pairwise", 1200)  # type: ignore[attr-defined]
+            )
         except Exception:
             pass
 
         if len(term_to_genes) > max_terms_for_pairwise:
-            # deterministic fallback to bipartite_cc
             nodes = _connected_components_from_bipartite_edges(edges_f)
             comp_ids = sorted(nodes["component"].unique().tolist())
 
@@ -461,9 +509,12 @@ def factorize_modules_connected_components(
     hashed: list[tuple[str, list[str], list[str], str, str]] = []
     for _, terms, genes in buckets:
         terms_clean = [str(x).strip() for x in terms if str(x).strip()]
-        genes_clean = [str(x).strip() for x in genes if str(x).strip()]
+        # normalize genes for stable identity
+        genes_clean = [_norm_gene_id(x) for x in genes if str(x).strip()]
+        genes_clean = [g for g in genes_clean if g]
+
         terms_hash = _hash_set_short12(terms_clean)
-        genes_hash = _hash_set_short12(genes_clean)
+        genes_hash = _hash_gene_set_short12(genes_clean)
         content_hash = _module_hash_content12(terms_clean, genes_clean)
         hashed.append((content_hash, terms_clean, genes_clean, terms_hash, genes_hash))
 
@@ -496,6 +547,8 @@ def factorize_modules_connected_components(
                 "module_method": method,
                 "module_min_shared_genes": int(min_shared_genes),
                 "module_jaccard_min": float(jaccard_min),
+                "hub_filter_max_gene_term_degree": int(hub_max) if hub_max is not None else pd.NA,
+                "hub_filter_n_hubs": int(hub_n),
                 "module_terms_hash12": terms_hash,
                 "module_genes_hash12": genes_hash,
                 "module_content_hash12": content_hash,
@@ -554,6 +607,7 @@ def attach_module_ids(
         how="left",
         validate="m:1",
     )
+    out["module_id_missing"] = out["module_id"].isna()
     return out
 
 
@@ -571,8 +625,6 @@ def compute_term_module_drift(
 
     Returns per-term drift table:
       term_uid, module_id_base, module_id_stress, module_drift (bool)
-
-    This is the core observable for "module re-factorization stress".
     """
     for df, name in [
         (baseline_term_modules_df, "baseline"),
@@ -584,7 +636,6 @@ def compute_term_module_drift(
     b = baseline_term_modules_df[[term_id_col, "module_id"]].copy()
     s = stressed_term_modules_df[[term_id_col, "module_id"]].copy()
 
-    # enforce 1:1 contract defensively
     if b.groupby(term_id_col)["module_id"].nunique().max() > 1:
         raise ValueError(
             "baseline_term_modules_df violates contract (term maps to multiple modules)"
@@ -606,11 +657,6 @@ def compute_term_module_drift(
 def summarize_module_drift(drift_df: pd.DataFrame) -> dict[str, object]:
     """
     Summarize drift_df from compute_term_module_drift().
-
-    Returns dict:
-      n_terms_total, n_terms_drift, term_drift_rate,
-      n_modules_base, n_modules_stress, n_modules_shared,
-      module_churn_rate (1 - shared/base)
     """
     required = {"term_uid", "module_id_base", "module_id_stress", "module_drift"}
     if not required.issubset(set(drift_df.columns)):
@@ -678,7 +724,6 @@ def attach_module_drift_stress_tag(
             return s
         return s + "+" + add
 
-    # only tag drifted terms
     mask = out["module_drift"].astype(bool)
     out.loc[mask, stress_col] = out.loc[mask, stress_col].map(lambda x: _append(x, tag))
 
