@@ -344,6 +344,134 @@ def _extract_direction_from_claim_json(cj: str) -> str:
     return "na"
 
 
+def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) -> pd.DataFrame:
+    """
+    Backfill stress/contradiction columns on claims using distilled annotations.
+
+    Why:
+      - Tool contract says audit consumes stress if provided.
+      - Fig2 v4 style pipelines may annotate distilled (stress_tag/contradiction_flip)
+        but not mutate claims DF.
+      - This function turns distilled annotations into "external" stress inputs
+        ONLY when claims did not already provide them.
+
+    Rules (minimal + auditable):
+      - If claims already include any stress_* columns, do nothing (respect caller).
+      - Else if distilled has stress_tag:
+          * non-empty tag => stress_status=FAIL, stress_reason="STRESS_TAG"
+          * empty tag => leave stress columns absent (not evaluated)
+      - If claims already include contradiction_* columns, do nothing.
+      - Else if distilled has contradiction_flip:
+          * True => contradiction_status=FAIL, contradiction_reason="CONTRADICTION_FLIP"
+          * False/NA => leave absent
+
+    Notes:
+      - This does NOT change evidence validation logic; it only enables existing gates.
+      - Detailed per-term logs belong in masking.py term_events (written by pipeline).
+    """
+    out2 = out.copy()
+
+    claim_has_stress = any(
+        c in out2.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+    )
+    claim_has_contra = any(
+        c in out2.columns
+        for c in [
+            "contradiction_status",
+            "contradiction_ok",
+            "contradiction_reason",
+            "contradiction_notes",
+        ]
+    )
+
+    # Build term_uid in distilled if needed
+    dist = distilled.copy()
+    if "term_uid" not in dist.columns:
+        if {"source", "term_id"}.issubset(set(dist.columns)):
+            dist["term_uid"] = (
+                dist["source"].astype(str).str.strip()
+                + ":"
+                + dist["term_id"].astype(str).str.strip()
+            )
+        elif "term_id" in dist.columns:
+            dist["term_uid"] = dist["term_id"].astype(str).str.strip()
+        else:
+            return out2
+
+    dist["term_uid"] = dist["term_uid"].astype(str).str.strip()
+
+    # We map from term_uid -> tag/flip (first non-empty occurrence wins)
+    stress_map: dict[str, str] = {}
+    if (not claim_has_stress) and ("stress_tag" in dist.columns):
+        for tu, tag in zip(dist["term_uid"].tolist(), dist["stress_tag"].tolist(), strict=False):
+            t = "" if _is_na_scalar(tag) else str(tag).strip()
+            if not t:
+                continue
+            if tu and tu not in stress_map:
+                stress_map[tu] = t
+
+    contra_map: dict[str, bool] = {}
+    if (not claim_has_contra) and ("contradiction_flip" in dist.columns):
+        for tu, v in zip(
+            dist["term_uid"].tolist(), dist["contradiction_flip"].tolist(), strict=False
+        ):
+            if not tu:
+                continue
+            if tu in contra_map:
+                continue
+            if _is_na_scalar(v):
+                continue
+            try:
+                contra_map[tu] = bool(v)
+            except Exception:
+                continue
+
+    # If nothing to inject, return as-is
+    if not stress_map and not contra_map:
+        return out2
+
+    # Ensure schema columns exist only if we are injecting
+    if stress_map and (not claim_has_stress):
+        out2["stress_status"] = ""
+        out2["stress_reason"] = ""
+        out2["stress_notes"] = ""
+    if contra_map and (not claim_has_contra):
+        out2["contradiction_status"] = ""
+        out2["contradiction_reason"] = ""
+        out2["contradiction_notes"] = ""
+
+    # Inject per-claim using claim_json evidence_ref.term_ids (term_uid space)
+    for i, row in out2.iterrows():
+        cj = row.get("claim_json", None)
+        if cj is None or _is_na_scalar(cj) or (not str(cj).strip()):
+            continue
+
+        term_ids, _gene_ids, _gsh, _mid = _extract_evidence_from_claim_json(str(cj))
+        if not term_ids:
+            continue
+
+        # stress: if ANY referenced term has a stress tag, mark this claim stressed
+        if stress_map and (not claim_has_stress):
+            tags = [stress_map.get(t, "") for t in term_ids]
+            tags = [t for t in tags if t]
+            if tags:
+                out2.at[i, "stress_status"] = "FAIL"
+                out2.at[i, "stress_reason"] = "STRESS_TAG"
+                out2.at[i, "stress_notes"] = (
+                    f"stress_tag={tags[0]}" if len(tags) == 1 else f"stress_tag={tags}"
+                )
+
+        # contradiction: if ANY referenced term has contradiction_flip True, mark FAIL
+        if contra_map and (not claim_has_contra):
+            flips = [contra_map.get(t, False) for t in term_ids]
+            if any(bool(x) for x in flips):
+                out2.at[i, "contradiction_status"] = "FAIL"
+                out2.at[i, "contradiction_reason"] = "CONTRADICTION_FLIP"
+                out2.at[i, "contradiction_notes"] = "distilled.contradiction_flip=True"
+
+    return out2
+
+
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     """
     External contradiction check (optional).
@@ -607,9 +735,16 @@ def audit_claims(
     NOTE:
       - This function does NOT generate stress tests; it only consumes them if provided.
       - Missing stress is governed by SampleCard.stress_gate_mode() (default: off).
+      - If claims lack stress/contradiction columns but distilled provides
+        stress_tag / contradiction_flip,
+        we backfill them deterministically (v4 support).
     """
-    external_cols: set[str] = set(claims.columns)
     out = claims.copy()
+
+    # ---- v4 compat: inject stress/contradiction columns from distilled when absent ----
+    out = _inject_stress_from_distilled(out, distilled)
+
+    external_cols: set[str] = set(out.columns)
 
     # Stable audit fields
     out["status"] = "PASS"
@@ -962,8 +1097,6 @@ def audit_claims(
             continue
 
         # 4) deterministic abstain rules
-
-        # 4a) under_supported
         if len(ev_union) < int(min_union):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "abstain_reason"] = ABSTAIN_UNDER_SUPPORTED
@@ -975,7 +1108,6 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        # 4b) hub_bridge
         if ev_union and hub_genes:
             hub_hits = [g for g in ev_union if g in hub_genes]
             frac = (len(hub_hits) / len(ev_union)) if ev_union else 0.0
@@ -989,7 +1121,6 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        # 4c) context_nonspecific (only if context_score exists; only if numeric and ==0.0)
         if "context_score" in out.columns:
             cs_raw = row.get("context_score")
             try:
@@ -1046,7 +1177,6 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        # PASS: minimal explanation if enabled
         if pass_note_enabled and (not str(out.at[i, "audit_notes"]).strip()):
             out.at[i, "audit_notes"] = "ok"
 
