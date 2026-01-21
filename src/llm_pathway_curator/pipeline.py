@@ -126,9 +126,434 @@ def _resolve_tau(cfg_tau: float | None, card: SampleCard) -> float:
         try:
             return float(cfg_tau)
         except Exception:
-            # fall back to card if malformed
             pass
     return float(card.audit_tau())
+
+
+# -------------------------
+# Fig2 v4 stress helpers (pipeline-owned)
+# -------------------------
+_NA_TOKENS = {"", "na", "nan", "none", "NA"}
+
+
+def _is_na_scalar(x: Any) -> bool:
+    if x is None:
+        return True
+    if isinstance(x, (list, tuple, set, dict)):
+        return False
+    try:
+        v = pd.isna(x)
+        return bool(v) if isinstance(v, bool) else False
+    except Exception:
+        return False
+
+
+def _parse_ids(x: Any) -> list[str]:
+    if _is_na_scalar(x):
+        return []
+    if isinstance(x, (list, tuple, set)):
+        items = [str(t).strip() for t in x if str(t).strip()]
+    else:
+        s = str(x).strip()
+        if not s or s in _NA_TOKENS or s.lower() in {t.lower() for t in _NA_TOKENS}:
+            return []
+        s = s.replace(";", ",")
+        items = [t.strip() for t in s.split(",") if t.strip()]
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in items:
+        if t in _NA_TOKENS or t.lower() in {y.lower() for y in _NA_TOKENS}:
+            continue
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def _norm_gene_id(g: str) -> str:
+    return str(g).strip().upper()
+
+
+def _hash_gene_set_12(genes: list[str]) -> str:
+    uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _extract_claim_evidence(cj: str) -> tuple[list[str], str, str]:
+    """
+    Returns (term_ids, gene_set_hash, direction) from claim_json.
+    Backward-tolerant but expects schema-ish structure:
+      - obj.evidence_ref or obj.claim.evidence_ref
+      - obj.direction or obj.claim.direction
+    """
+    try:
+        obj = json.loads(cj)
+    except Exception:
+        return ([], "", "na")
+
+    ev = None
+    direction = "na"
+
+    if isinstance(obj, dict):
+        direction = str(obj.get("direction", "na") or "na").strip().lower()
+        ev = obj.get("evidence_ref") or obj.get("evidence_refs")
+        if isinstance(obj.get("claim"), dict):
+            if direction == "na":
+                direction = str(obj["claim"].get("direction", "na") or "na").strip().lower()
+            if ev is None:
+                ev = obj["claim"].get("evidence_ref") or obj["claim"].get("evidence_refs")
+
+    if direction not in {"up", "down"}:
+        direction = "na"
+
+    if not isinstance(ev, dict):
+        return ([], "", direction)
+
+    term_ids = _parse_ids(ev.get("term_ids") or ev.get("term_id") or "")
+    gsh = ev.get("gene_set_hash")
+    gsh = "" if _is_na_scalar(gsh) else str(gsh).strip().lower()
+    return (term_ids, gsh, direction)
+
+
+def _flip_claim_direction_json(cj: str) -> str:
+    """
+    Flip direction in claim_json (up<->down). If missing/na, leave as-is.
+    Writes back without pretty-print to keep stable-ish.
+    """
+    try:
+        obj = json.loads(cj)
+    except Exception:
+        return cj
+
+    def _flip(d: str) -> str:
+        d = str(d).strip().lower()
+        if d == "up":
+            return "down"
+        if d == "down":
+            return "up"
+        return d
+
+    if isinstance(obj, dict):
+        if "direction" in obj:
+            obj["direction"] = _flip(obj.get("direction"))
+        if isinstance(obj.get("claim"), dict):
+            if "direction" in obj["claim"]:
+                obj["claim"]["direction"] = _flip(obj["claim"].get("direction"))
+
+    try:
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return cj
+
+
+def _env_float(name: str, default: float) -> float:
+    s = (os.environ.get(name, "") or "").strip()
+    if not s:
+        return float(default)
+    try:
+        return float(s)
+    except Exception:
+        return float(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    s = (os.environ.get(name, "") or "").strip()
+    if not s:
+        return int(default)
+    try:
+        return int(s)
+    except Exception:
+        return int(default)
+
+
+def _apply_evidence_gene_dropout(
+    distilled: pd.DataFrame,
+    *,
+    p_drop: float,
+    seed: int,
+    genes_col: str = "evidence_genes",
+    min_keep: int = 1,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Drop genes from evidence lists to induce identity collapse.
+    Deterministic given seed.
+
+    Returns:
+      - stressed_distilled (copy)
+      - stress_meta (summary stats)
+    """
+    p = float(p_drop)
+    if p <= 0.0:
+        return distilled.copy(), {"enabled": False, "p_drop": p, "min_keep": int(min_keep)}
+
+    if genes_col not in distilled.columns:
+        # Nothing to do; keep but mark
+        return distilled.copy(), {
+            "enabled": True,
+            "p_drop": p,
+            "min_keep": int(min_keep),
+            "warning": f"missing column {genes_col}",
+        }
+
+    rng = __import__("random").Random(int(seed))
+    out = distilled.copy()
+
+    dropped_total = 0
+    kept_total = 0
+    n_rows = 0
+    n_rows_changed = 0
+
+    new_lists: list[list[str]] = []
+    drop_counts: list[int] = []
+
+    for xs in out[genes_col].tolist():
+        n_rows += 1
+        # tolerate scalar strings
+        if _is_na_scalar(xs):
+            genes = []
+        elif isinstance(xs, (list, tuple, set)):
+            genes = [str(g).strip() for g in xs if str(g).strip()]
+        else:
+            genes = [g for g in str(xs).replace(";", ",").split(",") if g.strip()]
+            genes = [g.strip() for g in genes if g.strip()]
+
+        if not genes:
+            new_lists.append([])
+            drop_counts.append(0)
+            continue
+
+        kept: list[str] = []
+        dropped: list[str] = []
+        for g in genes:
+            if rng.random() < p:
+                dropped.append(g)
+            else:
+                kept.append(g)
+
+        # enforce min_keep (avoid degenerate empty that makes Fig2 too trivial)
+        if len(kept) < int(min_keep):
+            need = int(min_keep) - len(kept)
+            # rescue from dropped deterministically
+            if dropped:
+                rescue = sorted(dropped)[:need]
+                kept.extend(rescue)
+                dropped = [g for g in dropped if g not in set(rescue)]
+
+        kept_total += len(kept)
+        dropped_total += len(dropped)
+
+        if dropped:
+            n_rows_changed += 1
+
+        new_lists.append([_norm_gene_id(g) for g in kept if str(g).strip()])
+        drop_counts.append(len(dropped))
+
+    out[genes_col] = new_lists
+    out["stress_drop_count"] = drop_counts
+    out["evidence_genes_str"] = out[genes_col].map(lambda ys: ",".join([str(y) for y in ys]))
+
+    meta = {
+        "enabled": True,
+        "p_drop": float(p),
+        "min_keep": int(min_keep),
+        "n_rows": int(n_rows),
+        "n_rows_changed": int(n_rows_changed),
+        "dropped_total": int(dropped_total),
+        "kept_total": int(kept_total),
+    }
+    return out, meta
+
+
+def _score_dropout_stress_on_claims(
+    proposed: pd.DataFrame,
+    *,
+    stressed_distilled: pd.DataFrame,
+    genes_col: str = "evidence_genes",
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Add stress_* columns based on gene_set_hash drift under stressed_distilled.
+
+    Rule:
+      - recompute gene_set_hash from stressed distilled union evidence genes over claim term_ids
+      - compare to claim_json evidence_ref.gene_set_hash
+      - mismatch => stress FAIL (identity collapse)
+      - if cannot evaluate => stress ABSTAIN
+    """
+    out = proposed.copy()
+
+    # initialize columns (only if not present)
+    if "stress_status" not in out.columns:
+        out["stress_status"] = ""
+    if "stress_reason" not in out.columns:
+        out["stress_reason"] = ""
+    if "stress_notes" not in out.columns:
+        out["stress_notes"] = ""
+
+    # build term_key / known mapping consistent with audit.py:
+    # prefer term_uid if present, else source:term_id, else term_id
+    dist = stressed_distilled.copy()
+    if "term_uid" not in dist.columns:
+        if {"source", "term_id"}.issubset(set(dist.columns)):
+            dist["term_uid"] = (
+                dist["source"].astype(str).str.strip()
+                + ":"
+                + dist["term_id"].astype(str).str.strip()
+            )
+        elif "term_id" in dist.columns:
+            dist["term_uid"] = dist["term_id"].astype(str).str.strip()
+        else:
+            # cannot evaluate
+            out["stress_status"] = "ABSTAIN"
+            out["stress_reason"] = "MISSING_TERM_UID"
+            out["stress_notes"] = "stressed_distilled missing term identifiers"
+            return out, {"evaluated": False, "reason": "missing term identifiers"}
+
+    # map term_uid -> set(genes)
+    term_to_genes: dict[str, set[str]] = {}
+    if genes_col in dist.columns:
+        for tk, xs in zip(dist["term_uid"].astype(str).str.strip(), dist[genes_col], strict=True):
+            if tk in _NA_TOKENS or tk.lower() in {t.lower() for t in _NA_TOKENS}:
+                continue
+            if _is_na_scalar(xs):
+                genes = []
+            elif isinstance(xs, (list, tuple, set)):
+                genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
+            else:
+                genes = [_norm_gene_id(g) for g in _parse_ids(xs)]
+            gs = {g for g in genes if g}
+            if not gs:
+                continue
+            term_to_genes.setdefault(tk, set()).update(gs)
+
+    n_eval = 0
+    n_fail = 0
+    n_abstain = 0
+    n_pass = 0
+
+    for i, row in out.iterrows():
+        cj = row.get("claim_json", None)
+        if cj is None or _is_na_scalar(cj) or (not str(cj).strip()):
+            out.at[i, "stress_status"] = "ABSTAIN"
+            out.at[i, "stress_reason"] = "MISSING_CLAIM_JSON"
+            out.at[i, "stress_notes"] = "cannot evaluate stress without claim_json"
+            n_abstain += 1
+            continue
+
+        term_ids, gsh_ref, _dir = _extract_claim_evidence(str(cj))
+        if not term_ids or not gsh_ref:
+            out.at[i, "stress_status"] = "ABSTAIN"
+            out.at[i, "stress_reason"] = "MISSING_EVIDENCE_REF"
+            out.at[i, "stress_notes"] = "term_ids or gene_set_hash missing"
+            n_abstain += 1
+            continue
+
+        # union genes under stressed evidence
+        ev_seen: set[str] = set()
+        union: list[str] = []
+        for t in term_ids:
+            for g in sorted(term_to_genes.get(str(t).strip(), set())):
+                if g not in ev_seen:
+                    ev_seen.add(g)
+                    union.append(g)
+
+        if not union:
+            out.at[i, "stress_status"] = "ABSTAIN"
+            out.at[i, "stress_reason"] = "EMPTY_EVIDENCE_AFTER_STRESS"
+            out.at[i, "stress_notes"] = "no union evidence genes under stress"
+            n_abstain += 1
+            continue
+
+        gsh_stress = _hash_gene_set_12(union).lower()
+        n_eval += 1
+
+        if gsh_stress != str(gsh_ref).strip().lower():
+            out.at[i, "stress_status"] = "FAIL"
+            out.at[i, "stress_reason"] = "EVIDENCE_DROPOUT_GENESET_HASH_DRIFT"
+            out.at[i, "stress_notes"] = (
+                f"hash_stress={gsh_stress} != hash_ref={str(gsh_ref).strip().lower()}"
+            )
+            n_fail += 1
+        else:
+            out.at[i, "stress_status"] = "PASS"
+            out.at[i, "stress_reason"] = ""
+            out.at[i, "stress_notes"] = f"hash_stress={gsh_stress} (ok)"
+            n_pass += 1
+
+    stats = {
+        "evaluated": True,
+        "n_eval": int(n_eval),
+        "n_pass": int(n_pass),
+        "n_fail": int(n_fail),
+        "n_abstain": int(n_abstain),
+    }
+    return out, stats
+
+
+def _inject_contradictory_direction(
+    proposed: pd.DataFrame,
+    *,
+    p_inject: float,
+    seed: int,
+    max_extra: int = 0,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Duplicate a subset of rows and flip direction in claim_json to force intra-run contradiction.
+    Keeps evidence_ref identical.
+
+    max_extra:
+      - 0 means no cap (inject based on probability)
+      - >0 caps number of injected duplicates (useful for small Fig2 runs)
+    """
+    p = float(p_inject)
+    if p <= 0.0 or proposed.empty:
+        return proposed.copy(), {"enabled": False, "p_inject": p, "n_injected": 0}
+
+    rng = __import__("random").Random(int(seed) + 1337)
+    out = proposed.copy()
+    out["is_contradict_injected"] = False
+
+    injected_rows: list[pd.Series] = []
+    n_injected = 0
+
+    for _, row in proposed.iterrows():
+        if max_extra > 0 and n_injected >= int(max_extra):
+            break
+        if rng.random() >= p:
+            continue
+
+        cj = row.get("claim_json", None)
+        if cj is None or _is_na_scalar(cj) or (not str(cj).strip()):
+            continue
+
+        # only inject if direction exists and is flippable
+        term_ids, gsh_ref, direction = _extract_claim_evidence(str(cj))
+        if not term_ids or not gsh_ref:
+            continue
+        if direction not in {"up", "down"}:
+            continue
+
+        row2 = row.copy()
+        row2["claim_json"] = _flip_claim_direction_json(str(cj))
+
+        # keep DataFrame-level direction column in sync if present
+        if "direction" in out.columns:
+            d = str(row.get("direction", "")).strip().lower()
+            if d == "up":
+                row2["direction"] = "down"
+            elif d == "down":
+                row2["direction"] = "up"
+
+        row2["is_contradict_injected"] = True
+        injected_rows.append(row2)
+        n_injected += 1
+
+    if injected_rows:
+        out = pd.concat([out, pd.DataFrame(injected_rows)], ignore_index=True)
+
+    meta = {"enabled": True, "p_inject": float(p), "n_injected": int(n_injected)}
+    return out, meta
 
 
 def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
@@ -139,7 +564,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     For reproducibility, it writes run metadata (run_meta.json) and stable artifacts
     into cfg.outdir.
     """
-    # Validate inputs early (API users may bypass CLI)
     _require_file(cfg.evidence_table, "evidence_table")
     _require_file(cfg.sample_card, "sample_card")
 
@@ -181,7 +605,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             filt = {k: v for k, v in kwargs.items() if k in allowed}
             return fn(*args, **filt)
         except Exception:
-            # If signature introspection fails, fall back to no extra kwargs.
             return fn(*args)
 
     try:
@@ -194,8 +617,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         ev_norm_path = outdir / "evidence.normalized.tsv"
         ev_tbl.write_tsv(str(ev_norm_path))
         meta["artifacts"]["evidence_normalized_tsv"] = str(ev_norm_path)
-
-        # Streaming hash (avoid loading the whole TSV into memory)
         meta["inputs"]["evidence_normalized_sha256"] = _sha256_file(ev_norm_path)
 
         ev = ev_tbl.df.copy()
@@ -222,7 +643,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _write_json(sc_path, card.model_dump())
         meta["artifacts"]["sample_card_resolved_json"] = str(sc_path)
 
-        # Record resolved knobs (reproducibility)
         try:
             tau_card = float(card.audit_tau())
         except Exception:
@@ -234,7 +654,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "tau_effective": effective_tau,
             "min_gene_overlap": card.audit_min_gene_overlap(),
         }
-
         _write_json(meta_path, meta)
 
         # 1) distill (evidence hygiene)
@@ -249,7 +668,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _mark_step("modules")
         mod_out = factorize_modules_connected_components(distilled)
 
-        # provenance from modules.py (paper-facing)
         meta["inputs"]["modules"] = getattr(mod_out.edges_df, "attrs", {}).get("modules", {})
         _write_json(meta_path, meta)
 
@@ -285,14 +703,11 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["artifacts"]["distilled_with_modules_tsv"] = str(dist2_path)
 
         # 3) propose claims (schema-locked)
-
         _mark_step("select_claims")
 
         backend: BaseLLMBackend | None = None
         llm_backend_notes = ""
 
-        # Let select.py decide mode from env/card (Less is more).
-        # Only build backend if LLM mode is requested via env.
         claim_mode = (os.environ.get("LLMPATH_CLAIM_MODE", "") or "").strip().lower()
         if claim_mode == "llm":
             b = (os.environ.get("LLMPATH_BACKEND", "ollama") or "").strip().lower()
@@ -346,6 +761,72 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             outdir=str(outdir),
         )
 
+        # -------------------------
+        # Fig2 v4: stress generation (pipeline-owned; audit consumes stress_* columns)
+        # -------------------------
+        _mark_step("stress_v4")
+
+        seed0 = int(cfg.seed or 42)
+        p_drop = _env_float("LLMPATH_STRESS_EVIDENCE_DROPOUT_P", 0.0)
+        min_keep = _env_int("LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP", 1)
+        p_contra = _env_float("LLMPATH_STRESS_CONTRADICTORY_P", 0.0)
+        contra_cap = _env_int("LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA", 0)
+
+        meta["inputs"]["stress_v4"] = {
+            "evidence_dropout_p": float(p_drop),
+            "evidence_dropout_min_keep": int(min_keep),
+            "contradictory_p": float(p_contra),
+            "contradictory_max_extra": int(contra_cap),
+            "seed": int(seed0),
+        }
+        _write_json(meta_path, meta)
+
+        stressed_distilled = distilled2.copy()
+        dropout_meta: dict[str, Any] = {"enabled": False, "p_drop": float(p_drop)}
+        stress_score_meta: dict[str, Any] = {"evaluated": False}
+        contra_meta: dict[str, Any] = {
+            "enabled": False,
+            "p_inject": float(p_contra),
+            "n_injected": 0,
+        }
+
+        # A) evidence dropout -> compute stress_status via gene_set_hash drift
+        if float(p_drop) > 0.0:
+            stressed_distilled, dropout_meta = _apply_evidence_gene_dropout(
+                distilled2,
+                p_drop=float(p_drop),
+                seed=int(seed0),
+                genes_col="evidence_genes",
+                min_keep=int(min_keep),
+            )
+
+            stressed_path = outdir / "distilled.stressed_dropout.tsv"
+            _write_tsv(stressed_distilled, stressed_path)
+            meta["artifacts"]["distilled_stressed_dropout_tsv"] = str(stressed_path)
+
+            proposed, stress_score_meta = _score_dropout_stress_on_claims(
+                proposed, stressed_distilled=stressed_distilled, genes_col="evidence_genes"
+            )
+
+        # B) contradictory injection -> duplicate + flip direction in claim_json
+        if float(p_contra) > 0.0:
+            proposed, contra_meta = _inject_contradictory_direction(
+                proposed,
+                p_inject=float(p_contra),
+                seed=int(seed0),
+                max_extra=int(contra_cap),
+            )
+
+        meta["inputs"]["stress_v4_runtime"] = {
+            "dropout": dropout_meta,
+            "dropout_scoring": stress_score_meta,
+            "contradictory": contra_meta,
+        }
+        _write_json(meta_path, meta)
+
+        # -------------------------
+        # write proposed after stress modifications (more reproducible than raw)
+        # -------------------------
         proposed_path = outdir / "claims.proposed.tsv"
         _write_tsv(proposed, proposed_path)
         meta["artifacts"]["claims_proposed_tsv"] = str(proposed_path)
@@ -376,8 +857,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             outdir=str(outdir),
             run_id=rid,
             tau=effective_tau,
-            method="llm-pathway-curator",  # or cfg/CLIから渡す
-            cancer=str(getattr(card, "disease", "") or ""),  # ←重要
+            method="llm-pathway-curator",
+            cancer=str(getattr(card, "disease", "") or ""),
             comparison=str(getattr(card, "comparison", "") or ""),
         )
 

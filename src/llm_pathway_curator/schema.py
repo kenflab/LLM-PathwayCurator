@@ -39,10 +39,10 @@ ALIASES = {
     "termid": "term_id",
     "term_id": "term_id",
     "id": "term_id",
-    "pathway": "term_id",
-    "geneset": "term_id",
-    "gene_set": "term_id",
-    "set": "term_id",
+    # "pathway": "term_id",
+    # "geneset": "term_id",
+    # "gene_set": "term_id",
+    # "set": "term_id",
     "term_identifier": "term_id",
     "termid_": "term_id",
     # names/descriptions
@@ -220,15 +220,31 @@ class EvidenceTable:
             s = str(x).strip()
             if not s or s.lower() in {"na", "nan", "none"}:
                 return []
+
             # normalize common delimiters
             s = s.replace(";", ",").replace("|", ",")
             # tolerate tabs/newlines
             s = s.replace("\n", " ").replace("\t", " ")
-            # sometimes exported as space-separated tokens without commas
-            if "," not in s and " " in s:
-                parts = s.split()
-            else:
+            s = " ".join(s.split()).strip()
+
+            if not s or s.lower() in {"na", "nan", "none"}:
+                return []
+
+            # If comma-delimited, prefer commas.
+            if "," in s:
                 parts = s.split(",")
+            else:
+                # Space-separated fallback ONLY if all tokens look gene-like.
+                parts0 = s.split(" ")
+                import re
+
+                gene_tok = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+                if parts0 and all(bool(gene_tok.match(tok)) for tok in parts0):
+                    parts = parts0
+                else:
+                    # treat as a single field (avoid destructive split)
+                    parts = [s]
+
             genes = [cls._clean_gene_symbol(g) for g in parts]
             genes = [g for g in genes if g]
 
@@ -408,6 +424,10 @@ class EvidenceTable:
 
         # compute BH qvals only where qval is missing but pval exists
         needs_q = df["qval"].isna() & (~df["pval"].isna())
+
+        # Safety: do NOT BH-correct rows with unknown source (mixed DB risk).
+        needs_q = needs_q & (df["source"].astype(str).str.strip() != "unknown")
+
         if needs_q.any():
             # conservative grouping: source × direction
             group_cols = ["source", "direction"]

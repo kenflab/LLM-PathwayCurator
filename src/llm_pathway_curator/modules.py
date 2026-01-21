@@ -41,12 +41,8 @@ def _hash_set_short12(items: list[str]) -> str:
 
 
 def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
-    """
-    Content hash for a module (terms + genes).
-    Deterministic across runs given the same term set + gene set.
-    """
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
-    g = sorted([str(x).strip() for x in genes if str(x).strip()])
+    g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
     payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -641,3 +637,49 @@ def summarize_module_drift(drift_df: pd.DataFrame) -> dict[str, object]:
         "n_modules_shared": int(len(shared)),
         "module_churn_rate": (1.0 - (len(shared) / len(base_mods))) if base_mods else 0.0,
     }
+
+
+def attach_module_drift_stress_tag(
+    distilled_df: pd.DataFrame,
+    drift_df: pd.DataFrame,
+    *,
+    term_id_col: str = "term_uid",
+    stress_col: str = "stress_tag",
+    tag: str = "module_drift",
+) -> pd.DataFrame:
+    """
+    Add stress_tag=module_drift to distilled_df for terms whose module assignment drifted.
+
+    Contract:
+      - distilled_df must have term_uid
+      - drift_df must have term_uid and module_drift (bool)
+      - does NOT overwrite existing non-empty stress_tag (append with '+')
+    """
+    if term_id_col not in distilled_df.columns:
+        raise ValueError(f"distilled_df missing column: {term_id_col}")
+    if term_id_col not in drift_df.columns or "module_drift" not in drift_df.columns:
+        raise ValueError("drift_df must have columns: term_uid, module_drift")
+
+    d = drift_df[[term_id_col, "module_drift"]].copy()
+    d["module_drift"] = d["module_drift"].astype(bool)
+
+    out = distilled_df.copy()
+    out = out.merge(d, on=term_id_col, how="left", validate="m:1")
+    out["module_drift"] = out["module_drift"].fillna(False).astype(bool)
+
+    if stress_col not in out.columns:
+        out[stress_col] = ""
+
+    def _append(old: object, add: str) -> str:
+        s = "" if old is None else str(old).strip()
+        if not s:
+            return add
+        if add in s.split("+"):
+            return s
+        return s + "+" + add
+
+    # only tag drifted terms
+    mask = out["module_drift"].astype(bool)
+    out.loc[mask, stress_col] = out.loc[mask, stress_col].map(lambda x: _append(x, tag))
+
+    return out.drop(columns=["module_drift"])
