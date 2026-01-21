@@ -167,18 +167,14 @@ def _resolve_mode(card: SampleCard, mode: str | None) -> str:
         return "deterministic"
 
 
-def _resolve_k(card: SampleCard, k_default: int) -> int:
-    # Priority: env > SampleCard getter(default=k_default)
-    env = str(os.environ.get("LLMPATH_K_CLAIMS", "")).strip()
-    if env:
-        try:
-            return max(1, int(env))
-        except Exception:
-            pass
+def _validate_k(k: Any) -> int:
     try:
-        return int(card.k_claims(default=int(k_default)))
-    except Exception:
-        return max(1, int(k_default))
+        kk = int(k)
+    except Exception as e:
+        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)") from e
+    if kk < 1:
+        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)")
+    return kk
 
 
 # ===========================
@@ -481,7 +477,8 @@ def _evaluate_stress_for_claim(
 def _select_claims_deterministic(
     distilled: pd.DataFrame, card: SampleCard, *, k: int = 3, seed: int | None = None
 ) -> pd.DataFrame:
-    required = {"term_id", "term_name", "source", "stat", "direction", "evidence_genes"}
+    # direction is NOT required (we can default to "na")
+    required = {"term_id", "term_name", "source", "stat", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
     if missing:
         raise ValueError(f"select_claims: missing columns in distilled: {missing}")
@@ -602,6 +599,15 @@ def _select_claims_deterministic(
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
 
+    # selection notes (helps explain "k=100 but only 3")
+    n_total = int(df_ranked.shape[0])
+    n_eligible = int(df_ranked["eligible"].sum()) if "eligible" in df_ranked.columns else n_total
+
+    notes_common = (
+        f"ranked={n_total}; eligible={n_eligible}; picked={len(picked_idx)}; "
+        f"k={int(k)}; max_per_module={int(max_per_module)}"
+    )
+
     for _, r in df_pick.iterrows():
         term_id = str(r["term_id"]).strip()
         term_name = str(r["term_name"]).strip()
@@ -668,6 +674,7 @@ def _select_claims_deterministic(
             "claim_json": claim.model_dump_json(),
             "preselect_tau_gate": bool(preselect_tau_gate),
             "context_score_proxy": bool(enable_ctx_proxy),
+            "select_notes": notes_common,
         }
 
         if do_stress:
@@ -702,17 +709,18 @@ def select_claims(
     """
     C1: Claim proposal (schema-locked). The mechanical decider is audit_claims().
 
+    IMPORTANT: k is treated as an explicit, caller-owned parameter.
+    - The pipeline (or CLI/paper runner) should resolve precedence and pass k here.
+    - This function validates k but does NOT override it via env/card, to avoid
+      hard-to-debug "k=100 but only 3" regressions.
+
     - mode="deterministic": stable ranking + module diversity gate, emits Claim JSON.
     - mode="llm": LLM selects from top candidates but is post-validated against
       candidates (term_uid/entity/gene_set_hash) and MUST emit JSON; otherwise
       we fall back to deterministic output.
-
-    Contract:
-      - knobs are read ONLY via SampleCard getters (plus env override).
-      - env has priority over card; card has priority over function defaults.
     """
     mode_eff = _resolve_mode(card, mode)
-    k_eff = _resolve_k(card, k_default=int(k))
+    k_eff = _validate_k(k)
 
     if mode_eff == "llm":
         if backend is None:

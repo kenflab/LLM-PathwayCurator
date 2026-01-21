@@ -33,6 +33,7 @@ class RunConfig:
     seed: int | None = None
     run_meta_name: str = "run_meta.json"
     tau: float | None = None
+    k_claims: int | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,66 @@ def _resolve_tau(cfg_tau: float | None, card: SampleCard) -> float:
         except Exception:
             pass
     return float(card.audit_tau())
+
+
+def _env_int_strict(name: str) -> int | None:
+    """
+    Parse env var as int.
+    Returns None if unset/empty. Raises ValueError if malformed.
+    """
+    s = (os.environ.get(name, "") or "").strip()
+    if not s:
+        return None
+    return int(s)
+
+
+def _resolve_k_claims(cfg: RunConfig, card: SampleCard) -> tuple[int, dict[str, Any]]:
+    """
+    Single source-of-truth for k_claims used by claim selection.
+    Priority:
+      1) cfg.k_claims (explicit run override; Fig2/CLI should set this)
+      2) env LLMPATH_K_CLAIMS
+      3) card.k_claims() if available
+      4) fallback 3
+
+    Returns:
+      (k_effective, meta_dict)
+    """
+    # 1) cfg
+    if cfg.k_claims is not None:
+        k = int(cfg.k_claims)
+        if k < 1:
+            raise ValueError(f"k_claims must be >= 1 (cfg.k_claims={cfg.k_claims})")
+        return k, {"k_source": "cfg", "k_cfg": cfg.k_claims, "k_env": "", "k_card": ""}
+
+    # 2) env
+    try:
+        k_env = _env_int_strict("LLMPATH_K_CLAIMS")
+    except Exception as e:
+        raise ValueError(
+            f"invalid env LLMPATH_K_CLAIMS={os.environ.get('LLMPATH_K_CLAIMS', '')!r}"
+        ) from e
+
+    if k_env is not None:
+        if int(k_env) < 1:
+            raise ValueError(f"LLMPATH_K_CLAIMS must be >= 1 (got {k_env})")
+        return int(k_env), {"k_source": "env", "k_cfg": None, "k_env": str(k_env), "k_card": ""}
+
+    # 3) card default (optional; tolerate absence)
+    k_card = None
+    if hasattr(card, "k_claims") and callable(card.k_claims):
+        try:
+            k_card = int(card.k_claims())
+        except Exception:
+            k_card = None
+
+    if k_card is not None:
+        if int(k_card) < 1:
+            raise ValueError(f"card.k_claims() must be >= 1 (got {k_card})")
+        return int(k_card), {"k_source": "card", "k_cfg": None, "k_env": "", "k_card": str(k_card)}
+
+    # 4) fallback
+    return 3, {"k_source": "fallback", "k_cfg": None, "k_env": "", "k_card": ""}
 
 
 # -------------------------
@@ -753,13 +814,32 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "backend_notes": llm_backend_notes,
         }
 
+        # resolve k ONCE with explicit precedence + provenance (Fig2-friendly)
+        k_eff, k_meta = _resolve_k_claims(cfg, card)
+        meta["inputs"]["claims"] = {
+            **k_meta,
+            "k_effective": int(k_eff),
+            "k_env_raw": os.environ.get("LLMPATH_K_CLAIMS", ""),
+        }
+        _write_json(meta_path, meta)
+
         proposed = select_claims(
             distilled2,
             card,
+            k=int(k_eff),
             backend=backend,
             seed=cfg.seed,
             outdir=str(outdir),
         )
+
+        # Record what actually happened (critical for "k=100 but only 3 proposed")
+        meta["inputs"]["claims"].update(
+            {
+                "n_proposed_rows": int(getattr(proposed, "shape", [0, 0])[0]),
+                "n_proposed_cols": int(getattr(proposed, "shape", [0, 0])[1]),
+            }
+        )
+        _write_json(meta_path, meta)
 
         # -------------------------
         # Fig2 v4: stress generation (pipeline-owned; audit consumes stress_* columns)

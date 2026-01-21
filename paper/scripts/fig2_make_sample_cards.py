@@ -30,6 +30,7 @@ def make_card(cancer: str, *, context_gate_mode: str) -> dict:
             "goal": "context-conditioned pathway claim selection with calibrated abstention",
             # knobs (Fig2 needs these)
             "audit_tau": 0.8,
+            "k_claims": 100,
             # gate behavior
             #   note  -> PASS + annotate context nonspecificity
             #   hard  -> ABSTAIN_CONTEXT_NONSPECIFIC
