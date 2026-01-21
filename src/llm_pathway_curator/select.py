@@ -5,6 +5,7 @@ import hashlib
 import os
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .backends import BaseLLMBackend
@@ -150,8 +151,315 @@ def _resolve_k(card: SampleCard, k_default: int) -> int:
         return max(1, int(k_default))
 
 
+# ===========================
+# Stress suite (evidence identity collapse)
+# ===========================
+def _get_extra(card: SampleCard) -> dict[str, Any]:
+    ex = getattr(card, "extra", {}) or {}
+    return ex if isinstance(ex, dict) else {}
+
+
+def _as_bool(x: Any, default: bool) -> bool:
+    if x is None:
+        return bool(default)
+    if isinstance(x, bool):
+        return x
+    s = str(x).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _as_int(x: Any, default: int) -> int:
+    try:
+        if x is None:
+            return int(default)
+        return int(x)
+    except Exception:
+        return int(default)
+
+
+def _as_float(x: Any, default: float) -> float:
+    try:
+        if x is None:
+            return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _stress_enabled(card: SampleCard) -> bool:
+    # default OFF (paper-aligned). Enable via env or SampleCard.extra.
+    env = str(os.environ.get("LLMPATH_STRESS_GENERATE", "")).strip().lower()
+    if env:
+        return env in {"1", "true", "t", "yes", "y", "on"}
+    ex = _get_extra(card)
+    return _as_bool(ex.get("stress_generate", None), False)
+
+
+def _seed_for_claim(seed: int | None, claim_id: str) -> int:
+    base = 0 if seed is None else int(seed)
+    h = hashlib.blake2b(digest_size=8)
+    h.update(str(base).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(claim_id).encode("utf-8"))
+    return int.from_bytes(h.digest(), byteorder="little", signed=False)
+
+
+def _similarity(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
+    # (jaccard, recall, precision)
+    if not orig and not pert:
+        return (1.0, 1.0, 1.0)
+    if not orig:
+        prec = 0.0 if pert else 1.0
+        return (0.0, 1.0, prec)
+    inter = len(orig & pert)
+    union = len(orig | pert)
+    j = float(inter / union) if union else 0.0
+    recall = float(inter / len(orig)) if orig else 1.0
+    precision = float(inter / len(pert)) if pert else 0.0
+    return (j, recall, precision)
+
+
+def _perturb_gene_set(
+    genes: list[str],
+    gene_pool: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    p_drop: float,
+    p_add: float,
+) -> set[str]:
+    if not genes:
+        return set()
+
+    g_arr = np.array(genes, dtype=object)
+
+    keep_mask = rng.random(len(g_arr)) >= float(p_drop)
+    kept = g_arr[keep_mask].tolist()
+    out = set([_norm_gene_id(g) for g in kept if str(g).strip()])
+
+    if float(p_add) > 0.0 and gene_pool.size > 0:
+        k_add = int(round(float(p_add) * max(1, len(genes))))
+        if k_add > 0:
+            orig = set([_norm_gene_id(g) for g in genes if str(g).strip()])
+            candidates = np.array(
+                [g for g in gene_pool.tolist() if str(g) not in orig], dtype=object
+            )
+            if candidates.size > 0:
+                add = rng.choice(candidates, size=min(k_add, candidates.size), replace=False)
+                out.update([_norm_gene_id(g) for g in add.tolist() if str(g).strip()])
+
+    return out
+
+
+def _module_hash_like_modules_py(terms: list[str], genes: list[str]) -> str:
+    """
+    Match modules.py: sha256("T:...\\nG:...")[:12]
+    """
+    t = sorted([str(x).strip() for x in terms if str(x).strip()])
+    g = sorted([str(x).strip() for x in genes if str(x).strip()])
+    payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
+    m: dict[str, set[str]] = {}
+    if "term_uid" not in distilled.columns:
+        return m
+    if "evidence_genes" not in distilled.columns:
+        return m
+
+    for tu, xs in zip(
+        distilled["term_uid"].astype(str).tolist(),
+        distilled["evidence_genes"].tolist(),
+        strict=True,
+    ):
+        key = str(tu).strip()
+        if not key or key.lower() in {t.lower() for t in _NA_TOKENS}:
+            continue
+        genes = _as_gene_list(xs)
+        gs = set([_norm_gene_id(g) for g in genes if str(g).strip()])
+        if not gs:
+            continue
+        m.setdefault(key, set()).update(gs)
+    return m
+
+
+def _build_module_terms_genes(
+    distilled: pd.DataFrame, term_to_genes: dict[str, set[str]]
+) -> dict[str, tuple[list[str], set[str]]]:
+    """
+    module_id -> (sorted terms, union genes)
+    Only works if distilled has module_id.
+    """
+    out: dict[str, tuple[list[str], set[str]]] = {}
+    if "module_id" not in distilled.columns or "term_uid" not in distilled.columns:
+        return out
+
+    mod_to_terms: dict[str, set[str]] = {}
+    for tu, mid in zip(
+        distilled["term_uid"].astype(str).tolist(),
+        distilled["module_id"].astype(str).tolist(),
+        strict=True,
+    ):
+        t = str(tu).strip()
+        m = str(mid).strip()
+        if not t or not m or m.lower() in {x.lower() for x in _NA_TOKENS}:
+            continue
+        mod_to_terms.setdefault(m, set()).add(t)
+
+    for m, terms_set in mod_to_terms.items():
+        terms = sorted(list(terms_set))
+        genes_u: set[str] = set()
+        for t in terms:
+            genes_u |= set(term_to_genes.get(t, set()))
+        out[m] = (terms, genes_u)
+
+    return out
+
+
+def _evaluate_stress_for_claim(
+    *,
+    claim_id: str,
+    term_ids: list[str],
+    module_id: str,
+    gene_set_hash: str,
+    term_to_genes: dict[str, set[str]],
+    module_to_terms_genes: dict[str, tuple[list[str], set[str]]],
+    gene_pool: np.ndarray,
+    seed: int | None,
+    card: SampleCard,
+) -> dict[str, Any]:
+    """
+    Stress suite (identity collapse) for a single claim.
+    Emits: stress_status, stress_ok, stress_reason, stress_notes
+    """
+    ex = _get_extra(card)
+
+    n = max(8, min(256, _as_int(ex.get("stress_n", None), 64)))
+    p_drop = min(max(_as_float(ex.get("stress_gene_dropout_p", None), 0.20), 0.0), 0.95)
+    p_add = min(max(_as_float(ex.get("stress_gene_jitter_p", None), 0.10), 0.0), 0.95)
+
+    j_min = min(max(_as_float(ex.get("stress_jaccard_min", None), 0.60), 0.0), 1.0)
+    r_min = min(max(_as_float(ex.get("stress_recall_min", None), 0.80), 0.0), 1.0)
+    p_min = min(max(_as_float(ex.get("stress_precision_min", None), 0.80), 0.0), 1.0)
+
+    # stress survival threshold (separate from audit_tau; default mildly strict)
+    surv_thr = min(max(_as_float(ex.get("stress_survival_thr", None), 0.80), 0.0), 1.0)
+
+    # baseline union genes for referenced terms
+    base_genes: set[str] = set()
+    for t in term_ids:
+        base_genes |= set(term_to_genes.get(str(t).strip(), set()))
+
+    if not base_genes:
+        return {
+            "stress_status": "ABSTAIN",
+            "stress_ok": False,
+            "stress_reason": "stress_missing_baseline_genes",
+            "stress_notes": "no baseline evidence genes for referenced term_ids",
+        }
+
+    base_hash = str(gene_set_hash).strip().lower()
+    if not base_hash or base_hash.lower() in {x.lower() for x in _NA_TOKENS}:
+        # claim schema/audit should prevent this, but keep robust
+        return {
+            "stress_status": "ABSTAIN",
+            "stress_ok": False,
+            "stress_reason": "stress_missing_gene_set_hash",
+            "stress_notes": "claim gene_set_hash missing",
+        }
+
+    rng = np.random.default_rng(_seed_for_claim(seed, claim_id))
+
+    # replicate perturbations on union evidence genes
+    ok = 0
+    js: list[float] = []
+    rs: list[float] = []
+    ps: list[float] = []
+
+    base_list = sorted(list(base_genes))
+    for _ in range(int(n)):
+        pert = _perturb_gene_set(
+            base_list, gene_pool=gene_pool, rng=rng, p_drop=p_drop, p_add=p_add
+        )
+        j, rr, pp = _similarity(base_genes, pert)
+        js.append(j)
+        rs.append(rr)
+        ps.append(pp)
+        if (j >= j_min) and (rr >= r_min) and (pp >= p_min):
+            ok += 1
+
+    surv = ok / float(n) if n > 0 else 0.0
+
+    # module-level drift proxy (optional but recommended when module_id exists in distilled)
+    module_ok = True
+    module_note = ""
+    if module_id and module_id.lower() not in {x.lower() for x in _NA_TOKENS}:
+        mtg = module_to_terms_genes.get(module_id)
+        if mtg is not None:
+            terms_m, genes_m = mtg
+            if terms_m and genes_m:
+                # perturb module gene union and compare content hash change rate
+                # (single-shot proxy: if hash changes, identity drift is real)
+                genes_m_list = sorted(list(genes_m))
+                pert_m = _perturb_gene_set(
+                    genes_m_list,
+                    gene_pool=gene_pool,
+                    rng=rng,
+                    p_drop=p_drop,
+                    p_add=p_add,
+                )
+                h0 = _module_hash_like_modules_py(terms_m, genes_m_list)
+                h1 = _module_hash_like_modules_py(terms_m, sorted(list(pert_m)))
+                # If module hash changes AND stress survival is low,
+                # call out module drift explicitly.
+                if h0 != h1 and surv < float(surv_thr):
+                    module_ok = False
+                    module_note = f"module_id_drift_proxy: hash {h0}->{h1}"
+        # else: cannot evaluate module drift; keep module_ok True
+
+    if surv >= float(surv_thr) and module_ok:
+        return {
+            "stress_status": "PASS",
+            "stress_ok": True,
+            "stress_reason": "",
+            "stress_notes": (
+                f"identity_survival={surv:.3f} (n_ok={ok}/{n}); "
+                f"mean_j={float(np.mean(js)):.3f} "
+                f"mean_r={float(np.mean(rs)):.3f} "
+                f"mean_p={float(np.mean(ps)):.3f}"
+            ),
+        }
+
+    # FAIL: identity collapse (primary). module drift adds specificity
+    reason = "stress_identity_collapse"
+    if not module_ok:
+        reason = "stress_module_id_drift"
+
+    note = (
+        f"identity_survival={surv:.3f} < thr={float(surv_thr):.2f} "
+        f"(n_ok={ok}/{n}); "
+        f"mean_j={float(np.mean(js)):.3f} "
+        f"mean_r={float(np.mean(rs)):.3f} "
+        f"mean_p={float(np.mean(ps)):.3f}"
+    )
+
+    if module_note:
+        note += f"; {module_note}"
+
+    return {
+        "stress_status": "FAIL",
+        "stress_ok": False,
+        "stress_reason": reason,
+        "stress_notes": note,
+    }
+
+
 def _select_claims_deterministic(
-    distilled: pd.DataFrame, card: SampleCard, *, k: int = 3
+    distilled: pd.DataFrame, card: SampleCard, *, k: int = 3, seed: int | None = None
 ) -> pd.DataFrame:
     required = {"term_id", "term_name", "source", "stat", "direction", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
@@ -185,6 +493,7 @@ def _select_claims_deterministic(
         toks = _context_tokens(card)
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
     else:
+        # If proxy disabled, keep 0 but DO NOT force gating here; audit controls gating behavior.
         df["context_score"] = 0
 
     # ---- Evidence hygiene gates ----
@@ -259,6 +568,19 @@ def _select_claims_deterministic(
 
     df_pick = df_ranked.loc[picked_idx].copy()
 
+    # ---- prepare stress lookups (optional) ----
+    do_stress = _stress_enabled(card)
+    term_to_genes = _build_term_gene_map(df_ranked) if do_stress else {}
+    module_to_terms_genes = _build_module_terms_genes(df_ranked, term_to_genes) if do_stress else {}
+
+    # global gene pool for stress jitter
+    gene_pool = np.array([], dtype=object)
+    if do_stress:
+        all_genes: list[str] = []
+        for gs in term_to_genes.values():
+            all_genes.extend(list(gs))
+        gene_pool = np.array(sorted(set(all_genes)), dtype=object)
+
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
     ctx_vals = [
@@ -301,31 +623,46 @@ def _select_claims_deterministic(
             ),
         )
 
-        rows.append(
-            {
-                "claim_id": claim.claim_id,
-                "entity": claim.entity,
-                "direction": claim.direction,
-                "context_keys": ",".join(claim.context_keys),
-                "term_uid": term_uid,
-                "source": source,
-                "term_id": term_id,
-                "term_name": term_name,
-                "module_id": claim.evidence_ref.module_id,
-                "module_reason": module_reason,
-                "gene_ids": ",".join(claim.evidence_ref.gene_ids),
-                "term_ids": ",".join(claim.evidence_ref.term_ids),
-                "gene_set_hash": gene_set_hash,
-                "context_score": int(r.get("context_score", 0)),
-                "eligible": bool(r.get("eligible", True)),
-                "term_survival": r.get("term_survival", pd.NA),
-                "keep_term": bool(r.get("keep_term", True)),
-                "keep_reason": str(r.get("keep_reason", "ok")),
-                "claim_json": claim.model_dump_json(),
-                "preselect_tau_gate": bool(preselect_tau_gate),
-                "context_score_proxy": bool(enable_ctx_proxy),
-            }
-        )
+        rec: dict[str, Any] = {
+            "claim_id": claim.claim_id,
+            "entity": claim.entity,
+            "direction": claim.direction,
+            "context_keys": ",".join(claim.context_keys),
+            "term_uid": term_uid,
+            "source": source,
+            "term_id": term_id,
+            "term_name": term_name,
+            "module_id": claim.evidence_ref.module_id,
+            "module_reason": module_reason,
+            "gene_ids": ",".join(claim.evidence_ref.gene_ids),
+            "term_ids": ",".join(claim.evidence_ref.term_ids),
+            "gene_set_hash": gene_set_hash,
+            "context_score": int(r.get("context_score", 0)),
+            "eligible": bool(r.get("eligible", True)),
+            "term_survival": r.get("term_survival", pd.NA),
+            "keep_term": bool(r.get("keep_term", True)),
+            "keep_reason": str(r.get("keep_reason", "ok")),
+            "claim_json": claim.model_dump_json(),
+            "preselect_tau_gate": bool(preselect_tau_gate),
+            "context_score_proxy": bool(enable_ctx_proxy),
+        }
+
+        # ---- Stress suite injection (optional) ----
+        if do_stress:
+            st = _evaluate_stress_for_claim(
+                claim_id=claim.claim_id,
+                term_ids=[term_uid],
+                module_id=module_id,
+                gene_set_hash=gene_set_hash,
+                term_to_genes=term_to_genes,
+                module_to_terms_genes=module_to_terms_genes,
+                gene_pool=gene_pool,
+                seed=seed,
+                card=card,
+            )
+            rec.update(st)
+
+        rows.append(rec)
 
     return pd.DataFrame(rows)
 
@@ -378,12 +715,12 @@ def select_claims(
                 out_llm["llm_notes"] = res.notes
                 return out_llm
 
-            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff))
+            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
             out_det["claim_mode"] = "deterministic_fallback"
             out_det["llm_notes"] = res.notes
             return out_det
 
-    out_det = _select_claims_deterministic(distilled, card, k=int(k_eff))
+    out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
     return out_det

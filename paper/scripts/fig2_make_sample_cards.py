@@ -16,7 +16,7 @@ def _die(msg: str) -> None:
     raise SystemExit(msg)
 
 
-def make_card(cancer: str) -> dict:
+def make_card(cancer: str, *, context_gate_mode: str) -> dict:
     # minimal v1 sample card for Fig2 (audit knobs live under extra)
     return {
         "disease": cancer,
@@ -30,9 +30,10 @@ def make_card(cancer: str) -> dict:
             "goal": "context-conditioned pathway claim selection with calibrated abstention",
             # knobs (Fig2 needs these)
             "audit_tau": 0.8,
-            # IMPORTANT: do not ABSTAIN just because context_score==0
-            # (keep the note but don't gate)
-            "context_gate_mode": "note",
+            # gate behavior
+            #   note  -> PASS + annotate context nonspecificity
+            #   hard  -> ABSTAIN_CONTEXT_NONSPECIFIC
+            "context_gate_mode": context_gate_mode,
         },
     }
 
@@ -50,12 +51,25 @@ def main() -> None:
 
     for p in cancer_files:
         cancer = p.stem.split(".", 1)[0].upper()
-        out_path = OUT / f"{cancer}.sample_card.json"
-        card = make_card(cancer)
-        out_path.write_text(json.dumps(card, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        # A) Fig2-normal: do NOT gate on context nonspecificity
+        card_note = make_card(cancer, context_gate_mode="note")
+        out_note = OUT / f"{cancer}.note.sample_card.json"
+        out_note.write_text(
+            json.dumps(card_note, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        # B) Fig2-hard: ABSTAIN on context nonspecificity
+        card_hard = make_card(cancer, context_gate_mode="hard")
+        out_hard = OUT / f"{cancer}.hard.sample_card.json"
+        out_hard.write_text(
+            json.dumps(card_hard, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     print("[make_sample_cards] OK")
-    print(f"  wrote: {OUT} ({len(cancer_files)} cards)")
+    print(f"  wrote: {OUT} ({len(cancer_files)} cancers × 2 cards)")
 
 
 if __name__ == "__main__":

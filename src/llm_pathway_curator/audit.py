@@ -188,29 +188,44 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
         return bool(default)
 
 
-def _get_context_gate_mode(card: SampleCard, default: str = "abstain") -> str:
+def _get_context_gate_mode(card: SampleCard, default: str = "hard") -> str:
+    """
+    Tool contract (user-facing):
+      - "off": ignore context gate
+      - "note": annotate context nonspecificity, do not change status
+      - "hard": context nonspecific => ABSTAIN_CONTEXT_NONSPECIFIC
+    Backward compat:
+      - "abstain" => "hard"
+    """
     if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
         try:
-            return str(card.context_gate_mode(default=default))  # type: ignore[attr-defined]
+            s = str(card.context_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
         except Exception:
-            pass
-    ex = _get_extra(card)
-    s = str(ex.get("context_gate_mode", default)).strip().lower()
+            s = ""
+    else:
+        ex = _get_extra(card)
+        s = str(ex.get("context_gate_mode", default)).strip().lower()
+
     if s in {"off", "disable", "disabled", "none"}:
         return "off"
     if s in {"note", "warn", "warning"}:
         return "note"
-    return "abstain"
+    if s in {"abstain"}:
+        return "hard"
+    return "hard"
 
 
 def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
     """
     Tool contract (user-facing):
       - "off" (default): ignore missing stress entirely
-      - "note": if stress missing -> PASS, but annotate
-      - "abstain": if stress missing -> ABSTAIN_INCONCLUSIVE_STRESS
+      - "note": missing stress => PASS with note; stress FAIL => PASS with note
+      - "hard": missing stress => ABSTAIN_INCONCLUSIVE_STRESS;
+        stress FAIL => FAIL (auditable violation)
+    Backward compat:
+      - "abstain" => "hard"
     """
-    # Prefer SampleCard getter if present
+    # 1) read raw mode (SampleCard getter > extra)
     if hasattr(card, "stress_gate_mode") and callable(card.stress_gate_mode):
         try:
             s = str(card.stress_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
@@ -220,11 +235,46 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
         ex = _get_extra(card)
         s = str(ex.get("stress_gate_mode", default)).strip().lower()
 
+    # 2) normalize synonyms
+    if s in {"off", "none", "disable", "disabled"}:
+        return "off"
+    if s in {"note", "warn", "warning"}:
+        return "note"
+    if s in {"hard", "abstain"}:
+        return "hard"
+
+    # 3) IMPORTANT: honor default when unknown/empty
+    d = str(default).strip().lower()
+    if d in {"off", "note", "hard"}:
+        return d
+    return "off"  # safest fallback
+
+
+def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
+    """
+    Tool contract (user-facing):
+      - "off": do not gate on stability (research only)
+      - "note": do not change status; annotate instability
+      - "hard": agg < tau => ABSTAIN_UNSTABLE
+    Backward compat:
+      - "abstain" => "hard"
+    """
+    if hasattr(card, "stability_gate_mode") and callable(card.stability_gate_mode):
+        try:
+            s = str(card.stability_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
+        except Exception:
+            s = ""
+    else:
+        ex = _get_extra(card)
+        s = str(ex.get("stability_gate_mode", default)).strip().lower()
+
     if s in {"off", "disable", "disabled", "none"}:
         return "off"
     if s in {"note", "warn", "warning"}:
         return "note"
-    return "abstain"
+    if s in {"abstain"}:
+        return "hard"
+    return "hard"
 
 
 def _norm_status(x: Any) -> str:
@@ -352,10 +402,21 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
 
 
 def _apply_external_stress(
-    out: pd.DataFrame, i: int, row: pd.Series, *, external_cols: set[str]
+    out: pd.DataFrame,
+    i: int,
+    row: pd.Series,
+    *,
+    external_cols: set[str],
+    gate_mode: str,
 ) -> None:
     """
     Apply stress results ONLY if they were provided as inputs in the original claims DF.
+
+    gate_mode:
+      - off: do not change status based on stress; annotate if present
+      - note: do not change status; annotate
+      - hard: stress FAIL => FAIL_EVIDENCE_DRIFT (identity collapse)
+              stress ABSTAIN => ABSTAIN (reason validated)
     """
     has_any = any(
         c in external_cols for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
@@ -364,20 +425,42 @@ def _apply_external_stress(
         out.at[i, "stress_ok"] = pd.NA
         return
 
+    # If only stress_ok provided
     if ("stress_ok" in external_cols) and ("stress_status" not in external_cols):
         v = row.get("stress_ok")
         if _is_na_scalar(v):
-            out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "stress_ok"] = False
-            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok missing")
+            if gate_mode == "hard":
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stress_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], "stress_ok missing (hard)"
+                )
+            else:
+                out.at[i, "stress_ok"] = True
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], "stress_ok missing (note/off)"
+                )
             return
+
         ok = bool(v)
         out.at[i, "stress_ok"] = ok
-        if not ok:
+
+        if ok:
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=True")
+            return
+
+        # stress_ok=False
+        if gate_mode == "hard":
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "stress_ok=False (hard)"
+            )
+        else:
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "stress_ok=False (note/off)"
+            )
         return
 
     st = _norm_status(row.get("stress_status"))
@@ -385,10 +468,18 @@ def _apply_external_stress(
     nt = str(row.get("stress_notes", "")).strip()
 
     if not st:
-        out.at[i, "status"] = "ABSTAIN"
-        out.at[i, "stress_ok"] = False
-        out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_status missing")
+        if gate_mode == "hard":
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "stress_ok"] = False
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "stress_status missing (hard)"
+            )
+        else:
+            out.at[i, "stress_ok"] = True
+            out.at[i, "audit_notes"] = _append_note(
+                out.at[i, "audit_notes"], "stress_status missing (note/off)"
+            )
         return
 
     if st == "PASS":
@@ -397,32 +488,40 @@ def _apply_external_stress(
         return
 
     if st == "ABSTAIN":
-        out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
         rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
-        out.at[i, "abstain_reason"] = rs
+        if gate_mode == "hard":
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = rs
         note = "stress=ABSTAIN"
         if rs_raw:
             note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
+        note += f" [{gate_mode}]"
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
     if st == "FAIL":
-        # v1 conservative: stress FAIL -> ABSTAIN unless you add FAIL_* code
-        out.at[i, "status"] = "ABSTAIN"
         out.at[i, "stress_ok"] = False
-        rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
-        out.at[i, "abstain_reason"] = rs
         note = "stress=FAIL"
         if rs_raw:
             note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
+        note += f" [{gate_mode}]"
+
+        if gate_mode == "hard":
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+            return
+
+        # note/off: do not change status, just annotate
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
+    # unknown status => schema violation
     out.at[i, "status"] = "FAIL"
     out.at[i, "stress_ok"] = False
     out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
@@ -652,6 +751,7 @@ def audit_claims(
 
     pass_note_enabled = _get_pass_notes(card, default=True)
     context_gate_mode = _get_context_gate_mode(card, default="abstain")
+    stability_gate_mode = _get_stability_gate_mode(card, default="hard")
 
     # IMPORTANT: default "off" (paper-aligned) unless user explicitly asks otherwise
     stress_gate_mode = _get_stress_gate_mode(card, default="off")
@@ -852,14 +952,32 @@ def audit_claims(
             continue
 
         if agg < float(tau_row):
-            out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "stability_ok"] = False
-            out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
-            out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], f"survival[{scope}]={agg:.3f} < tau={float(tau_row):.2f}"
-            )
-            _enforce_reason_vocab(out, i)
-            continue
+            msg = f"survival[{scope}]={agg:.3f} < tau={float(tau_row):.2f}"
+
+            if stability_gate_mode == "off":
+                # research only: do not change status
+                out.at[i, "stability_ok"] = True
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], f"unstable(off): {msg}"
+                )
+                _enforce_reason_vocab(out, i)
+                # continue audit (do not stop)
+            elif stability_gate_mode == "note":
+                # note: annotate only, keep PASS
+                out.at[i, "stability_ok"] = True
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], f"unstable(note): {msg}"
+                )
+                _enforce_reason_vocab(out, i)
+                # continue audit
+            else:
+                # hard: gate to ABSTAIN
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stability_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
+                out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], msg)
+                _enforce_reason_vocab(out, i)
+                continue
 
         # 3) optional external contradiction
         _apply_external_contradiction(out, i, row)
@@ -923,7 +1041,6 @@ def audit_claims(
 
         # 5) stress gate (single place)
         if not has_stress_any:
-            # User-facing contract: no NA for booleans
             out.at[i, "stress_evaluated"] = False
 
             if stress_gate_mode == "off":
@@ -936,19 +1053,24 @@ def audit_claims(
                 )
 
             else:
-                # abstain mode: missing stress => ABSTAIN
+                # hard: missing stress => ABSTAIN
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
                 out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"], "stress_missing(abstain_mode)"
+                    out.at[i, "audit_notes"], "stress_missing(hard_mode)"
                 )
                 _enforce_reason_vocab(out, i)
                 continue
-
         else:
             out.at[i, "stress_evaluated"] = True
-            _apply_external_stress(out, i, row, external_cols=external_cols)
+            _apply_external_stress(
+                out,
+                i,
+                row,
+                external_cols=external_cols,
+                gate_mode=stress_gate_mode,
+            )
             if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
                 _enforce_reason_vocab(out, i)
                 continue
