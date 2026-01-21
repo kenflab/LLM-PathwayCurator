@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -37,6 +38,49 @@ def _ensure_outdir(outdir: Path, force: bool) -> None:
             pass  # empty OK
 
 
+def _env_int(name: str) -> int | None:
+    """
+    Parse an integer environment variable.
+    Returns None if unset or empty. Raises SystemExit if malformed.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise SystemExit(f"[ERROR] invalid env {name}={raw!r} (expected int)") from e
+
+
+def _resolve_k_claims(cli_value: int | None) -> tuple[int | None, str]:
+    """
+    Resolve k_claims with a clear precedence for debuggability.
+
+    Precedence:
+      1) CLI --k-claims
+      2) env LLMPATH_K_CLAIMS
+      3) None (downstream defaults: sample_card.k_claims() etc.)
+    """
+    if cli_value is not None:
+        return cli_value, "cli"
+
+    env_value = _env_int("LLMPATH_K_CLAIMS")
+    if env_value is not None:
+        return env_value, "env"
+
+    return None, "default"
+
+
+def _validate_positive_int(name: str, value: int | None) -> None:
+    if value is None:
+        return
+    if value < 1:
+        raise SystemExit(f"[ERROR] {name} must be >= 1 (got {value})")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     evidence_table = _p(args.evidence_table)
     sample_card = _p(args.sample_card)
@@ -52,14 +96,25 @@ def cmd_run(args: argparse.Namespace) -> None:
     except Exception as e:
         raise SystemExit(f"[ERROR] invalid --evidence-table (EvidenceTable contract): {e}") from e
 
+    k_claims, k_src = _resolve_k_claims(args.k_claims)
+    _validate_positive_int("--k-claims / LLMPATH_K_CLAIMS", k_claims)
+
+    # Single-line run config echo for reproducibility/debugging (Fig2-friendly)
+    tau_str = "default" if args.tau is None else str(args.tau)
+    seed_str = "default" if args.seed is None else str(args.seed)
+    k_str = "default" if k_claims is None else f"{k_claims} ({k_src})"
+    run_meta_rel = str(args.run_meta)
+    print(f"[INFO] tau={tau_str} seed={seed_str} k_claims={k_str} run_meta={run_meta_rel}")
+
     cfg = RunConfig(
         evidence_table=str(evidence_table),
         sample_card=str(sample_card),
         outdir=str(outdir),
         force=bool(args.force),
         seed=args.seed,
-        run_meta_name=str(args.run_meta),
+        run_meta_name=run_meta_rel,
         tau=args.tau,
+        k_claims=k_claims,
     )
 
     res = run_pipeline(cfg)
@@ -119,6 +174,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Audit stability threshold tau (overrides sample_card.audit_tau() if set)",
+    )
+    p_run.add_argument(
+        "--k-claims",
+        type=int,
+        default=None,
+        help=(
+            "Number of claims to propose before audit "
+            "(CLI overrides env LLMPATH_K_CLAIMS; downstream may fall back to "
+            "sample_card.k_claims())"
+        ),
     )
     p_run.add_argument(
         "--run-meta",

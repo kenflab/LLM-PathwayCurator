@@ -187,7 +187,6 @@ class EvidenceRef(BaseModel):
         if len(self.term_ids) < 1:
             raise ValueError("EvidenceRef.term_ids must contain at least one term_uid")
 
-        # Tool-owned auto-fill for gene_set_hash:
         h = str(self.gene_set_hash or "").strip().lower()
         if not _looks_like_12hex(h):
             if self.gene_ids:
@@ -198,12 +197,9 @@ class EvidenceRef(BaseModel):
         if not _looks_like_12hex(h):
             raise ValueError("EvidenceRef.gene_set_hash must be 12-hex (sha256[:12])")
 
-        try:
-            return self.model_copy(update={"gene_set_hash": h})
-        except Exception:
-            d = self.model_dump()
-            d["gene_set_hash"] = h
-            return EvidenceRef.model_validate(d)
+        # IMPORTANT: return self (not a new object) to avoid pydantic warning
+        self.gene_set_hash = h
+        return self
 
 
 class Claim(BaseModel):
@@ -273,12 +269,9 @@ class Claim(BaseModel):
             context_keys=list(self.context_keys or []),
         )
 
-        try:
-            return self.model_copy(update={"claim_id": cid})
-        except Exception:
-            d = self.model_dump()
-            d["claim_id"] = cid
-            return Claim.model_validate(d)
+        # IMPORTANT: return self (not a new object) to avoid pydantic warning
+        self.claim_id = cid
+        return self
 
 
 class Decision(BaseModel):
