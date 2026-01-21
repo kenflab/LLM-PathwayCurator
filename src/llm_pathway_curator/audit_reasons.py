@@ -49,6 +49,20 @@ ReasonCode = Literal[
     "inconclusive_stress",
 ]
 
+# Optional but useful: strict type for reason codes used in report/audit schema.
+DecisionReasonCode = Literal[
+    "ok",
+    "evidence_drift",
+    "schema_violation",
+    "contradiction",
+    "unstable",
+    "missing_survival",
+    "context_nonspecific",
+    "under_supported",
+    "hub_bridge",
+    "inconclusive_stress",
+]
+
 
 def is_fail_reason(code: str) -> bool:
     return code in FAIL_REASONS
@@ -60,3 +74,7 @@ def is_abstain_reason(code: str) -> bool:
 
 def is_known_reason(code: str) -> bool:
     return code in ALL_REASONS
+
+
+def is_decision_reason(code: str) -> bool:
+    return (code == "ok") or (code in ALL_REASONS)

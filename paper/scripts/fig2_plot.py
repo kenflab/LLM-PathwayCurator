@@ -25,10 +25,34 @@ def apply_pub_style(fontsize: int = 20) -> None:
     )
 
 
+def _canon_method(m: str) -> str:
+    return str(m or "").strip().lower()
+
+
+def method_label(method: str) -> str:
+    m = _canon_method(method)
+    # paper-facing labels (edit as you like)
+    if m in ("ours", "method_ours"):
+        return "Ours"
+    if m in ("shuffled_context", "shuffled-context", "context_shuffled"):
+        return "Shuffled context"
+    if m in ("baseline_qonly", "qonly"):
+        return "Q-only"
+    if m in ("baseline_nonllm_selector", "nonllm_selector"):
+        return "Non-LLM selector"
+    if m in ("shuffled_labels", "shuffled"):
+        return "Shuffled labels"
+    if m in ("no_modules", "ablation_no_modules"):
+        return "No modules"
+    return str(method)
+
+
 def method_style(method: str) -> dict[str, object]:
-    m = method.lower()
+    m = _canon_method(method)
     if m in ("ours", "method_ours"):
         return {"linestyle": "-", "marker": "o"}
+    if m in ("shuffled_context", "shuffled-context", "context_shuffled"):
+        return {"linestyle": ":", "marker": "x"}
     if m in ("baseline_qonly", "qonly"):
         return {"linestyle": "--", "marker": "s"}
     if m in ("baseline_nonllm_selector", "nonllm_selector"):
@@ -58,6 +82,10 @@ def load_and_validate(path: Path) -> pd.DataFrame:
     for c in ["tau", "coverage_pass", "risk_human_reject", "n_pass_labeled"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    df["benchmark_id"] = df["benchmark_id"].astype(str)
+    df["cancer"] = df["cancer"].astype(str)
+    df["method"] = df["method"].astype(str)
+
     df = df.dropna(subset=["coverage_pass", "tau"])
     df = df[(df["coverage_pass"] >= 0) & (df["coverage_pass"] <= 1)]
     df = df[(df["tau"] >= 0) & (df["tau"] <= 1)]
@@ -75,8 +103,8 @@ def main() -> None:
 
     df = load_and_validate(Path(args.inp))
     if args.benchmark_id:
-        df = df[df["benchmark_id"].astype(str) == str(args.benchmark_id)]
-    df = df[df["cancer"].astype(str) == str(args.cancer)]
+        df = df[df["benchmark_id"] == str(args.benchmark_id)]
+    df = df[df["cancer"] == str(args.cancer)]
     if df.empty:
         raise ValueError(f"No rows for cancer={args.cancer}")
 
@@ -85,8 +113,20 @@ def main() -> None:
     fig = plt.figure(figsize=(7.5, 6.5), dpi=150)
     ax = fig.add_subplot(111)
 
-    df = df.sort_values(["method", "tau"], kind="mergesort")
-    for method, g in df.groupby("method", sort=True):
+    # stable order: ours first, then shuffled_context, then others
+    order = [
+        "ours",
+        "shuffled_context",
+        "baseline_qonly",
+        "baseline_nonllm_selector",
+        "no_modules",
+        "shuffled_labels",
+    ]
+    df["_method_key"] = df["method"].map(_canon_method)
+    df["_order"] = df["_method_key"].apply(lambda x: order.index(x) if x in order else 999)
+    df = df.sort_values(["_order", "method", "tau"], kind="mergesort")
+
+    for method, g in df.groupby("method", sort=False):
         g = g.sort_values("tau", kind="mergesort")
         g = g.dropna(subset=["risk_human_reject"])
         g = g[g["n_pass_labeled"] > 0]
@@ -95,8 +135,8 @@ def main() -> None:
         ax.plot(
             g["coverage_pass"],
             g["risk_human_reject"],
-            label=str(method),
-            **method_style(str(method)),
+            label=method_label(method),
+            **method_style(method),
         )
 
     ax.set_xlabel("Coverage (PASS rate)")
@@ -104,7 +144,7 @@ def main() -> None:
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.grid(True, linewidth=0.6, alpha=0.4)
-    ax.set_title("Selective prediction for pathway narratives")
+    ax.set_title(f"Selective prediction for pathway narratives ({args.cancer})")
 
     ax.legend(loc="upper right", frameon=False)
 

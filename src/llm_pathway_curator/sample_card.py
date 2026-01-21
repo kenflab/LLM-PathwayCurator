@@ -22,6 +22,50 @@ AUDIT_KNOBS = {
     "trust_input_survival",
 }
 
+# v1.1 minimal tool knobs understood by the TOOL (not paper scripts).
+# Keep this list minimal and stable.
+TOOL_KNOBS = {
+    # audit knobs
+    "audit_tau",
+    "audit_min_gene_overlap",
+    "hub_term_degree",
+    "hub_frac_thr",
+    "min_union_genes",
+    "trust_input_survival",
+    # select knobs
+    "claim_mode",
+    "k_claims",
+    "max_per_module",
+    "preselect_tau_gate",
+    "enable_context_score_proxy",
+    # stress contract (gate behavior only; generation happens elsewhere)
+    "stress_gate_mode",
+}
+
+# Backward-compat aliases that may appear in older cards
+ALIASES = {
+    # selection
+    "claim_mode": {"mode", "claim_mode_env"},
+    "k_claims": {"k", "n_claims"},
+    "max_per_module": {"module_diversity", "per_module"},
+    "preselect_tau_gate": {"tau_gate", "preselect_gate"},
+    "enable_context_score_proxy": {"context_score_proxy"},
+    # stress
+    "stress_gate_mode": {"stress_mode", "stress", "stress_gate", "context_gate_mode"},
+}
+
+
+def _apply_aliases(flat: dict[str, Any]) -> dict[str, Any]:
+    # If canonical missing but alias exists, hoist alias value to canonical key
+    for canon, aliases in ALIASES.items():
+        if canon in flat and flat.get(canon) is not None:
+            continue
+        for a in aliases:
+            if a in flat and flat.get(a) is not None:
+                flat[canon] = flat.get(a)
+                break
+    return flat
+
 
 def _norm_str(x: Any) -> str:
     if x is None:
@@ -96,16 +140,20 @@ def _find_in_nested_extra(
 
 def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
     """
-    Canonicalize audit knobs into extra[KEY].
-    Does NOT invent values; only hoists existing values.
+    v1.1 contract:
+      - Flatten nested extra wrappers (inner overrides outer).
+      - Apply backward-compat aliases.
+      - Hoist official TOOL_KNOBS if still buried (defensive).
+      - Do NOT delete unknown keys (user notes / future compat).
     """
     if not _is_dict(extra):
         return {}
 
     out = _flatten_extra_recursive(extra)
+    out = _apply_aliases(out)
 
     # Hoist knobs that might still be buried in original (defensive)
-    for k in AUDIT_KNOBS:
+    for k in TOOL_KNOBS:
         if k in out:
             continue
         v = _find_in_nested_extra(extra, k)
@@ -113,6 +161,28 @@ def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
             out[k] = v
 
     return out
+
+
+def _as_bool(x: Any, default: bool) -> bool:
+    if x is None:
+        return bool(default)
+    if isinstance(x, bool):
+        return x
+    s = str(x).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _as_int(x: Any, default: int) -> int:
+    try:
+        if x is None:
+            return int(default)
+        return int(x)
+    except Exception:
+        return int(default)
 
 
 class SampleCard(BaseModel):
@@ -203,3 +273,35 @@ class SampleCard(BaseModel):
                 base.setdefault("extra", {})
                 base["extra"][k] = v
         return SampleCard(**base)
+
+    # ---- select / tool knobs (v1.1 minimal) ----
+    def claim_mode(self, default: str = "deterministic") -> str:
+        v = (self.extra or {}).get("claim_mode", None)
+        s = str(v).strip().lower() if v is not None else ""
+        return s if s in {"deterministic", "llm"} else str(default)
+
+    def k_claims(self, default: int = 3) -> int:
+        return max(1, _as_int((self.extra or {}).get("k_claims", None), default))
+
+    def max_per_module(self, default: int = 1) -> int:
+        return max(1, _as_int((self.extra or {}).get("max_per_module", None), default))
+
+    def preselect_tau_gate(self, default: bool = False) -> bool:
+        return _as_bool((self.extra or {}).get("preselect_tau_gate", None), default)
+
+    def enable_context_score_proxy(self, default: bool = False) -> bool:
+        # Debugging only: string-match proxy. Default OFF.
+        return _as_bool((self.extra or {}).get("enable_context_score_proxy", None), default)
+
+    def stress_gate_mode(self, default: str = "abstain") -> str:
+        v = (self.extra or {}).get("stress_gate_mode", None)
+        s = str(v).strip().lower() if v is not None else ""
+        if not s:
+            return "abstain"
+        if s in {"off", "none", "disable", "disabled"}:
+            return "off"
+        if s in {"note", "warn", "warning"}:
+            return "note"
+        if s in {"abstain", "on", "enable", "enabled"}:
+            return "abstain"
+        return str(default)

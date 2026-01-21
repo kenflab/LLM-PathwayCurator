@@ -1,7 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/report.py
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,12 +9,11 @@ from typing import Any
 import pandas as pd
 
 from .audit_reasons import (
-    ABSTAIN_REASONS,
-    FAIL_CONTRADICTION,
-    FAIL_EVIDENCE_DRIFT,
-    FAIL_REASONS,
+    ABSTAIN_INCONCLUSIVE_STRESS,
+    ALL_REASONS,
     FAIL_SCHEMA_VIOLATION,
 )
+from .claim_schema import Claim, Decision
 from .sample_card import SampleCard
 
 # optional metrics export (report.md only)
@@ -30,7 +28,7 @@ except Exception:  # pragma: no cover
 # Small helpers (stable)
 # -----------------------------
 _NA_TOKENS = {"", "na", "nan", "none", "NA"}
-_ALLOWED_DECISIONS_V1 = {"PASS", "ABSTAIN", "FAIL"}
+_ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
 
 
 def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
@@ -100,6 +98,104 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"{who} missing required columns: {missing}")
+
+
+def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
+    for k in keys:
+        if k in row.index:
+            v = row.get(k)
+            if v is None or _is_na_scalar(v):
+                continue
+            return v
+    return None
+
+
+def _normalize_status(raw: Any) -> str:
+    s = str(raw or "").upper().strip()
+    if s not in _ALLOWED_STATUSES:
+        raise ValueError(f"invalid status='{s}' (allowed: {sorted(_ALLOWED_STATUSES)})")
+    return s
+
+
+def _decision_from_audit_row(row: pd.Series) -> Decision:
+    """
+    Decision is derived mechanically from audit_log row (no free-text generation).
+    - status: PASS/ABSTAIN/FAIL
+    - reason: known reason code (fallbacks are fixed)
+    - details: small structured extras (audit_notes, raw reason if unknown, etc.)
+    """
+    st = _normalize_status(row.get("status", ""))
+
+    reason = "ok"
+    details: dict[str, Any] = {}
+
+    if st == "FAIL":
+        r = str(row.get("fail_reason", "") or "").strip()
+        reason = r if (r in ALL_REASONS) else FAIL_SCHEMA_VIOLATION
+        if r and (r not in ALL_REASONS):
+            details["raw_fail_reason"] = r
+
+    elif st == "ABSTAIN":
+        r = str(row.get("abstain_reason", "") or "").strip()
+        reason = r if (r in ALL_REASONS) else ABSTAIN_INCONCLUSIVE_STRESS
+        if r and (r not in ALL_REASONS):
+            details["raw_abstain_reason"] = r
+
+    note = str(row.get("audit_notes", "") or "").strip()
+    if note:
+        details["audit_notes"] = note
+
+    for k in ["tau_used", "term_survival_agg", "stability_scope", "module_id_effective"]:
+        if k in row.index and (not _is_na_scalar(row.get(k))):
+            details[k] = row.get(k)
+
+    return Decision(status=st, reason=str(reason), details=details)
+
+
+def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
+    if hasattr(card, "audit_tau") and callable(card.audit_tau):
+        try:
+            return float(card.audit_tau())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    v = getattr(card, "audit_tau", None)
+    if v is not None:
+        try:
+            return float(v)
+        except Exception:
+            pass
+
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict) and "audit_tau" in extra:
+            return float(extra["audit_tau"])
+    except Exception:
+        pass
+
+    return float(default)
+
+
+def _get_schema_version(card: SampleCard, default: str = "v1") -> str:
+    """
+    Report JSONL schema contract version (paper artifact).
+    Source of truth: card.extra['schema_version'] if present, else default.
+    """
+    try:
+        extra = getattr(card, "extra", {}) or {}
+        if isinstance(extra, dict):
+            v = extra.get("schema_version", None)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+    except Exception:
+        pass
+    return str(default)
+
+
 def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if "status" not in audit_log.columns:
         return (pd.DataFrame(), pd.DataFrame())
@@ -137,223 +233,20 @@ def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
     return None
 
 
-def _as_list(x: Any) -> list[str]:
-    """
-    Robust list normalization:
-    - list/tuple/set -> list[str]
-    - comma-joined string -> split, strip, drop empties
-    - scalar -> [str(x)]
-    """
-    if x is None or _is_na_scalar(x):
-        return []
-    if isinstance(x, list):
-        items = [str(v).strip() for v in x]
-    elif isinstance(x, (tuple, set)):
-        items = [str(v).strip() for v in list(x)]
-    elif isinstance(x, str):
-        s = x.strip()
-        if not s or s in _NA_TOKENS or s.lower() in _NA_TOKENS:
-            return []
-        items = [t.strip() for t in s.replace(";", ",").split(",")]
-    else:
-        items = [str(x).strip()]
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for t in items:
-        if not t:
-            continue
-        if t in _NA_TOKENS or t.lower() in _NA_TOKENS:
-            continue
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-
-
-def _sorted_list(x: Any) -> list[str]:
-    return sorted(_as_list(x))
-
-
-def _canonical_json(obj: Any) -> str:
-    """
-    Deterministic JSON for hashing.
-    """
-    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-
-
-def _sha1(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
-
-
-def _claim_id_v1(
-    *,
-    entity_id: str,
-    direction: str,
-    context: dict[str, str],
-    context_keys: list[str],
-    gene_set_hash: str,
-    module_ids: list[str],
-    term_ids: list[str],
-) -> str:
-    payload = {
-        "v": 1,
-        "entity_id": (entity_id or "").strip(),
-        "direction": (direction or "").strip(),
-        "context": {
-            k: (context.get(k, "") or "").strip()
-            for k in ["disease", "tissue", "perturbation", "comparison"]
-        },
-        "context_keys": sorted([k.strip() for k in context_keys if k and k.strip()]),
-        "gene_set_hash": (gene_set_hash or "").strip(),
-        "module_ids": sorted([m.strip() for m in module_ids if m and m.strip()]),
-        "term_ids": sorted([t.strip() for t in term_ids if t and t.strip()]),
-    }
-    return _sha1(_canonical_json(payload))
-
-
-def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"{who} missing required columns: {missing}")
-
-
-def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
-    for k in keys:
-        if k in row.index:
-            v = row.get(k)
-            if v is None or _is_na_scalar(v):
-                continue
-            return v
-    return None
-
-
-def _normalize_status_v1(raw: Any) -> str:
-    s = str(raw or "").upper().strip()
-    if s not in _ALLOWED_DECISIONS_V1:
-        raise ValueError(f"v1 contract violation: invalid status/decision='{s}'")
-    return s
-
-
-def _reason_codes_and_details_from_row(row: pd.Series) -> tuple[list[str], dict[str, Any]]:
-    """
-    v1 contract:
-    - PASS    -> ["OK"]
-    - ABSTAIN -> [abstain_reason] (token from ABSTAIN_REASONS) else ["unknown_abstain"] + details
-    - FAIL    -> [fail_reason]    (token from FAIL_REASONS)    else ["unknown_fail"] + details
-    """
-    details: dict[str, Any] = {}
-    status = _normalize_status_v1(row.get("status", ""))
-
-    if status == "FAIL":
-        raw = "" if row.get("fail_reason") is None else str(row.get("fail_reason")).strip()
-        if raw in FAIL_REASONS:
-            return [raw], details
-        details["raw_fail_reason"] = raw
-        return ["unknown_fail"], details
-
-    if status == "ABSTAIN":
-        raw = "" if row.get("abstain_reason") is None else str(row.get("abstain_reason")).strip()
-        if raw in ABSTAIN_REASONS:
-            return [raw], details
-        details["raw_abstain_reason"] = raw
-        return ["unknown_abstain"], details
-
-    # PASS
-    return ["OK"], details
-
-
-def _audit_flags_from_row(row: pd.Series) -> dict[str, bool]:
-    """
-    v1 contract:
-    audit_flags reflect ONLY auditable FAIL reasons (subset).
-    """
-    fr = str(row.get("fail_reason", "") or "").strip()
-    return {
-        "evidence_drift": fr == FAIL_EVIDENCE_DRIFT,
-        "contradiction": fr == FAIL_CONTRADICTION,
-        "schema_violation": fr == FAIL_SCHEMA_VIOLATION,
-    }
-
-
-def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
-    if hasattr(card, "audit_tau") and callable(card.audit_tau):
-        try:
-            return float(card.audit_tau())  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-    v = getattr(card, "audit_tau", None)
-    if v is not None:
-        try:
-            return float(v)
-        except Exception:
-            pass
-
+def _to_float_or_none(x: Any) -> float | None:
+    if _is_na_scalar(x):
+        return None
     try:
-        extra = getattr(card, "extra", {}) or {}
-        if isinstance(extra, dict) and "audit_tau" in extra:
-            return float(extra["audit_tau"])
+        v = float(x)
+        if pd.isna(v):
+            return None
+        return v
     except Exception:
-        pass
-
-    return float(default)
-
-
-def _norm_direction_v1(x: Any) -> str:
-    s = str(x or "").strip().lower()
-    if s in {"up", "down"}:
-        return s
-    if s in {"na", "nan", "none", ""}:
-        return "na"
-    if s in {"upregulated", "increase", "increased", "activated", "pos", "positive", "+", "1"}:
-        return "up"
-    if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
-        return "down"
-    return "na"
-
-
-def _context_keys_from_row_or_card(row: pd.Series, card: SampleCard) -> list[str]:
-    # prefer row-level explicit key
-    keys = _as_list(_get_first_present(row, ["context_keys_used", "context_keys"]) or [])
-    keys = [k.strip() for k in keys if k and k.strip()]
-    if keys:
-        return sorted(set(keys))
-
-    # fallback: infer from card values
-    out: list[str] = []
-    for k in ["disease", "tissue", "perturbation", "comparison"]:
-        v = getattr(card, k, None)
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s and s.lower() not in _NA_TOKENS:
-            out.append(k)
-    return sorted(set(out))
-
-
-def _ensure_audit_notes(row: pd.Series, *, decision: str, tau: float) -> str:
-    note = str(row.get("audit_notes", "") or "").strip()
-    if note:
-        return note
-
-    # deterministic minimal explanation (no free text generation)
-    if decision == "FAIL":
-        fr = str(row.get("fail_reason", "") or "").strip() or "(missing fail_reason)"
-        return f"FAIL: {fr}"
-    if decision == "ABSTAIN":
-        ar = str(row.get("abstain_reason", "") or "").strip() or "(missing abstain_reason)"
-        agg = row.get("term_survival_agg", None)
-        try:
-            agg_f = float(agg)
-            return f"ABSTAIN: {ar} (term_survival_agg={agg_f:.3f} < tau={float(tau):.2f})"
-        except Exception:
-            return f"ABSTAIN: {ar}"
-    return "PASS: ok"
+        return None
 
 
 # -----------------------------
-# v1 JSONL export (Fig2-ready)
+# JSONL export (paper artifact; stable keys)
 # -----------------------------
 def write_report_jsonl(
     audit_log: pd.DataFrame,
@@ -367,21 +260,21 @@ def write_report_jsonl(
     comparison: str | None = None,
 ) -> Path:
     """
-    Fig2-ready JSONL (v1 contract; stable).
+    Writes out/report.jsonl.
 
-    Input requirements (audit_log):
-      Required:
-        - status (PASS/ABSTAIN/FAIL only)
-        - claim_id (optional; if missing/empty we deterministically derive it)
-        - gene_set_hash
-        - term_survival_agg
-        - entity_id OR term_id (fallback)
-      Optional:
-        - context_score, stat
-        - module_id/module_ids, term_ids/term_id(s), gene_ids/gene_id(s)
-        - cancer/cancer_type (row-level)
-        - comparison (row-level)
-        - context_keys_used (row-level)
+    Philosophy:
+      - claim_json is the single source of truth for the claim structure.
+      - decision is derived mechanically from audit_log row.
+      - export does NOT reconstruct claim IDs, evidence refs, term IDs, etc.
+
+    v1 compatibility:
+      - Adds flat alias fields (schema_version, claim_id, decision, survival, etc.)
+        WITHOUT removing the nested 'claim'/'decision'/'metrics' objects.
+
+    Required columns in audit_log:
+      - status
+      - claim_json
+      - term_survival_agg (column must exist; row values may be NA -> null in JSON)
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -389,25 +282,15 @@ def write_report_jsonl(
     if not run_id:
         run_id = datetime.now(timezone.utc).isoformat()
 
-    # strict minimum required for v1
-    _require_columns(audit_log, ["status", "gene_set_hash", "term_survival_agg"], "audit_log")
+    _require_columns(audit_log, ["status", "claim_json", "term_survival_agg"], "audit_log")
 
-    if (
-        ("entity_id" not in audit_log.columns)
-        and ("term_id" not in audit_log.columns)
-        and ("entity" not in audit_log.columns)
-    ):
-        raise ValueError(
-            "audit_log missing required entity identifier (entity_id or term_id/entity)"
-        )
-
-    # stringify list columns for robust I/O (do not use for numerics)
     df = _stringify_list_columns(audit_log)
 
     surv_s = pd.to_numeric(audit_log["term_survival_agg"], errors="coerce")
     if surv_s.isna().all():
-        # do NOT silently convert missing survival to 0.0; that's contract-breaking
-        raise ValueError("audit_log term_survival_agg is all-NA (v1 requires numeric survival)")
+        raise ValueError(
+            "audit_log term_survival_agg is all-NA (upstream survival missing entirely)"
+        )
 
     ctx_s = (
         pd.to_numeric(audit_log.get("context_score"), errors="coerce")
@@ -426,182 +309,82 @@ def write_report_jsonl(
     default_cancer = str(cancer or getattr(card, "cancer", None) or "").strip()
     default_comparison = str(comparison or getattr(card, "comparison", None) or "").strip()
 
+    # v1 contract stamp (paper artifact)
+    schema_version = _get_schema_version(card, default="v1")
+
+    # context VALUES (needed for v1 alias columns)
+    ctx_disease = str(getattr(card, "disease", "") or "").strip()
+    ctx_tissue = str(getattr(card, "tissue", "") or "").strip()
+    ctx_pert = str(getattr(card, "perturbation", "") or "").strip()
+    ctx_comp = str(getattr(card, "comparison", "") or "").strip()
+
     jsonl_path = out_path / "report.jsonl"
     created_at = datetime.now(timezone.utc).isoformat()
 
     with jsonl_path.open("w", encoding="utf-8") as f:
         for i, row in df.iterrows():
-            decision = _normalize_status_v1(row.get("status", ""))
+            _ = _normalize_status(row.get("status", ""))
 
-            entity_id = str(
-                _get_first_present(row, ["entity_id", "entity", "term_id"]) or ""
-            ).strip()
-            if not entity_id:
-                raise ValueError("audit_log has empty entity_id/term_id for a row (v1 requires it)")
+            cj = str(row.get("claim_json", "") or "").strip()
+            if not cj:
+                raise ValueError("audit_log has empty claim_json for a row (required)")
+            claim = Claim.model_validate_json(cj)
 
-            direction = _norm_direction_v1(row.get("direction", ""))
+            decision_obj = _decision_from_audit_row(row)
 
-            ctx = {
-                "comparison": str(default_comparison or row.get("comparison", "") or "").strip(),
-                "disease": str(getattr(card, "disease", "") or "").strip(),
-                "tissue": str(getattr(card, "tissue", "") or "").strip(),
-                "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
-            }
+            surv_val = _to_float_or_none(surv_s.loc[i])
 
-            context_keys = _context_keys_from_row_or_card(row, card)
-
-            gene_set_hash = str(row.get("gene_set_hash", "") or "").strip().lower()
-            if not gene_set_hash:
-                raise ValueError("audit_log has empty gene_set_hash for a row (v1 requires it)")
-            ok_hex = (len(gene_set_hash) >= 8) and all(
-                ch in "0123456789abcdef" for ch in gene_set_hash
-            )
-            if not ok_hex:
-                raise ValueError(
-                    "audit_log gene_set_hash must be hex string (len>=8) for v1 contract"
-                )
-
-            module_ids = _sorted_list(_get_first_present(row, ["module_ids", "module_id"]) or [])
-            term_ids = _sorted_list(
-                _get_first_present(row, ["term_ids", "term_id", "term_id(s)"]) or []
-            )
-            gene_ids = _sorted_list(
-                _get_first_present(row, ["gene_ids", "gene_id", "gene_id(s)"]) or []
-            )
-
-            # fallback: term_uid (most common in pipeline)
-            if not term_ids:
-                tu = str(row.get("term_uid", "") or "").strip()
-                if tu:
-                    term_ids = [tu]
-
-            # last resort fallback: source:term_id if both exist
-            if not term_ids:
-                src = str(row.get("source", "") or "").strip()
-                tid = str(row.get("term_id", "") or "").strip()
-                if src and tid:
-                    term_ids = [f"{src}:{tid}"]
-
-            # ultimate fallback: entity_id (avoid empty evidence refs)
-            if not term_ids and entity_id:
-                term_ids = [entity_id]
-
-            evidence = {
-                "module_ids": module_ids,
-                "term_ids": term_ids,
-                "gene_ids": gene_ids,
-                "gene_set_hash": gene_set_hash,
-            }
-
-            # survival must be present (v1). If NA for this row, treat as schema violation.
-            v = surv_s.loc[i]
-            if pd.isna(v):
-                raise ValueError(
-                    "audit_log term_survival_agg has NA for a row (v1 requires numeric)"
-                )
-            survival_val = float(v)
-
-            context_val = None
+            ctx_val = None
             if ctx_s is not None:
-                v2 = ctx_s.loc[i]
-                context_val = None if pd.isna(v2) else float(v2)
+                ctx_val = _to_float_or_none(ctx_s.loc[i])
 
             stat_val = None
             if stat_s is not None:
-                v3 = stat_s.loc[i]
-                stat_val = None if pd.isna(v3) else float(v3)
-
-            reason_codes, reason_details = _reason_codes_and_details_from_row(row)
-
-            # claim_id: prefer existing; else deterministically derive (v1)
-            claim_id_row = str(row.get("claim_id", "") or "").strip()
-
-            claim_id_v1 = _claim_id_v1(
-                entity_id=entity_id,
-                direction=direction,
-                context=ctx,
-                context_keys=context_keys,
-                gene_set_hash=gene_set_hash,
-                module_ids=module_ids,
-                term_ids=term_ids,
-            )
-
-            claim_id = claim_id_row or claim_id_v1
-
-            # deterministic explanation fallback (keeps paper artifacts informative)
-            reason_details = dict(reason_details)
-            if claim_id_row and (claim_id_row != claim_id_v1):
-                reason_details["claim_id_mismatch_v1"] = {
-                    "row": claim_id_row,
-                    "v1": claim_id_v1,
-                }
-            reason_details["audit_notes"] = _ensure_audit_notes(row, decision=decision, tau=tau_val)
+                stat_val = _to_float_or_none(stat_s.loc[i])
 
             cancer_key = str(
                 _get_first_present(row, ["cancer", "cancer_type"]) or default_cancer
             ).strip()
+            comp_val = str(default_comparison or row.get("comparison", "") or "").strip()
 
-            # claim_id: prefer existing; else deterministically derive (v1)
-            claim_id_row = str(row.get("claim_id", "") or "").strip()
-
-            claim_id_v1 = _claim_id_v1(
-                entity_id=entity_id,
-                direction=direction,
-                context=ctx,
-                context_keys=context_keys,
-                gene_set_hash=gene_set_hash,
-                module_ids=module_ids,
-                term_ids=term_ids,
-            )
-
-            claim_id = claim_id_row or claim_id_v1
-
-            rec = {
-                # provenance (stable)
-                "schema_version": "v1",
+            # -------------------------
+            # V2 nested objects (kept)
+            # -------------------------
+            rec: dict[str, Any] = {
                 "created_at": created_at,
                 "run_id": str(run_id),
-                # fig2 grouping keys (stable)
                 "method": method_val,
                 "cancer": cancer_key,
-                "comparison": str(ctx["comparison"]),
+                "comparison": comp_val,
                 "tau": float(tau_val),
-                # contract keys (stable)
-                "claim_id": claim_id,
-                "decision": decision,
-                "survival": survival_val,
-                "evidence_refs": evidence,
-                "reason_codes": reason_codes,
-                "context_keys": context_keys,
-                # structured claim (typed; no free text required)
-                "claim": {
-                    "entity_type": str(row.get("entity_type", "pathway")),
-                    "entity_id": entity_id,
-                    "entity_name": str(
-                        _get_first_present(row, ["entity_name", "entity", "term_name"]) or ""
-                    ),
-                    "direction": direction,
-                    "context": ctx,
-                },
-                # optional metrics (stable keys; values may be None)
+                "claim": claim.model_dump(),
                 "metrics": {
-                    "survival": survival_val,
-                    "context_score": context_val,
+                    "term_survival_agg": surv_val,
+                    "context_score": ctx_val,
                     "stat": stat_val,
                 },
-                "audit_flags": _audit_flags_from_row(row),
-                # card echo (stable keys)
-                "disease": str(getattr(card, "disease", "") or "").strip(),
-                "tissue": str(getattr(card, "tissue", "") or "").strip(),
-                "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
-                # evidence key (stable)
-                "gene_set_hash": gene_set_hash,
-                # debug (stable key; contents may evolve)
-                "details": reason_details,
+                # -------------------------
+                # v1 compatibility aliases (ADD ONLY)
+                # -------------------------
+                "schema_version": schema_version,
+                "claim_id": str(getattr(claim, "claim_id", "") or "").strip(),
+                "decision_status": str(getattr(decision_obj, "status", "") or "").strip(),
+                # some parsers expect a column named exactly "decision"
+                "decision": str(getattr(decision_obj, "status", "") or "").strip(),
+                "survival": surv_val,
+                "claim.entity_type": "term",
+                "claim.entity_id": str(getattr(claim, "entity", "") or "").strip(),
+                "claim.context.disease": ctx_disease,
+                "claim.context.tissue": ctx_tissue,
+                "claim.context.perturbation": ctx_pert,
+                # prefer card.comparison (context value); fall back to record comparison
+                "claim.context.comparison": ctx_comp or comp_val,
+                "evidence_refs.gene_set_hash": str(
+                    getattr(getattr(claim, "evidence_ref", None), "gene_set_hash", "") or ""
+                )
+                .strip()
+                .lower(),
             }
-
-            if rec["metrics"]["survival"] != rec["survival"]:
-                raise AssertionError("inconsistent survival fields in report.jsonl record")
 
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -660,14 +443,13 @@ def write_report(
             rc_curve_path = None
 
     def _top(df: pd.DataFrame) -> pd.DataFrame:
-        cols = df.columns
-        if "term_survival_agg" in cols:
-            return df.sort_values(
-                ["term_survival_agg", "claim_id"], ascending=[False, True], kind="mergesort"
-            )
-        if "stat" in cols:
-            return df.sort_values(["stat", "claim_id"], ascending=[False, True], kind="mergesort")
-        return df.sort_values(["claim_id"], ascending=[True], kind="mergesort")
+        if "term_survival_agg" in df.columns:
+            return df.sort_values(["term_survival_agg"], ascending=[False], kind="mergesort")
+        if "stat" in df.columns:
+            return df.sort_values(["stat"], ascending=[False], kind="mergesort")
+        if "claim_id" in df.columns:
+            return df.sort_values(["claim_id"], ascending=[True], kind="mergesort")
+        return df
 
     lines: list[str] = []
     lines.append("# LLM-PathwayCurator report")
@@ -804,24 +586,6 @@ def write_report(
     if rc_curve_path is not None:
         lines.append(f"- risk_coverage.tsv: {rc_curve_path.name}")
     lines.append("")
-
-    def _with_notes(df: pd.DataFrame, *, tau: float) -> pd.DataFrame:
-        if df.empty:
-            return df
-        if "audit_notes" not in df.columns:
-            df = df.copy()
-            df["audit_notes"] = ""
-        out = df.copy()
-        out["audit_notes"] = out.apply(
-            lambda r: _ensure_audit_notes(r, decision=str(r.get(status_col, "")).strip(), tau=tau),
-            axis=1,
-        )
-        return out
-
-    tau_disp = _get_tau_default(card, default=0.8)
-    pass_df = _with_notes(pass_df, tau=tau_disp)
-    abs_df = _with_notes(abs_df, tau=tau_disp)
-    fail_df = _with_notes(fail_df, tau=tau_disp)
 
     report_path = out_path / "report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
