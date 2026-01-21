@@ -1,4 +1,3 @@
-# LLM-PathwayCurator/src/llm_pathway_curator/modules.py
 from __future__ import annotations
 
 import hashlib
@@ -31,9 +30,19 @@ def _norm_gene_id(g: str) -> str:
     return _clean_gene_id(g).upper()
 
 
-def _module_hash(terms: list[str], genes: list[str]) -> str:
+def _hash_set_short12(items: list[str]) -> str:
     """
-    Content hash for a module.
+    Set-stable short hash (sha256[:12]).
+    Order invariant, strips whitespace, drops empties.
+    """
+    uniq = sorted({str(x).strip() for x in items if str(x).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
+    """
+    Content hash for a module (terms + genes).
     Deterministic across runs given the same term set + gene set.
     """
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
@@ -208,6 +217,8 @@ def _term_term_components_shared_genes(
     """
     Deterministic CC on term-term graph where edge exists if:
       shared_genes >= min_shared_genes AND jaccard >= jaccard_min
+
+    NOTE: O(n^2) in n_terms. Keep max_terms_for_pairwise guard in caller.
     """
     terms = sorted(term_to_genes.keys())
     if not terms:
@@ -258,6 +269,31 @@ def _term_term_components_shared_genes(
     return comp_map
 
 
+def _pick_rep_genes_by_degree(
+    edges_f: pd.DataFrame, genes: list[str], *, topk: int = 10
+) -> list[str]:
+    """
+    Deterministic representative genes:
+      - prefer genes with high term-degree in the filtered edge graph
+      - tie-break lexicographically
+    """
+    if not genes:
+        return []
+    if edges_f.empty or "gene_id" not in edges_f.columns or "term_uid" not in edges_f.columns:
+        return list(genes)[:topk]
+
+    deg = edges_f.groupby("gene_id")["term_uid"].nunique()
+    scored = []
+    for g in genes:
+        try:
+            d = int(deg.get(g, 0))
+        except Exception:
+            d = 0
+        scored.append((d, str(g)))
+    scored = sorted(scored, key=lambda x: (-x[0], x[1]))
+    return [g for _, g in scored[:topk]]
+
+
 # -------------------------
 # Public API
 # -------------------------
@@ -286,6 +322,10 @@ def factorize_modules_connected_components(
 
     Returns:
       modules_df, term_modules_df, edges_df (filtered)
+
+    modules_df includes identity hashes:
+      - module_terms_hash12, module_genes_hash12, module_content_hash12
+      - module_id uses module_content_hash12 (prefix + hash)
     """
     edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
 
@@ -312,6 +352,9 @@ def factorize_modules_connected_components(
                 "module_method",
                 "module_min_shared_genes",
                 "module_jaccard_min",
+                "module_terms_hash12",
+                "module_genes_hash12",
+                "module_content_hash12",
             ]
         )
         term_modules_df = pd.DataFrame(columns=["term_uid", "module_id"])
@@ -343,7 +386,6 @@ def factorize_modules_connected_components(
                 [str(x) for x in g["gene_id"].dropna().astype(str).tolist() if str(x).strip()]
             )
 
-        # convert to "base buckets" (int keys)
         buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
 
     elif method == "term_jaccard_cc":
@@ -375,7 +417,6 @@ def factorize_modules_connected_components(
 
             buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
 
-            # record fallback provenance, but do NOT overwrite later
             edges_f.attrs.setdefault("modules", {})
             edges_f.attrs["modules"].update(
                 {
@@ -383,6 +424,7 @@ def factorize_modules_connected_components(
                     "reason": f"n_terms>{max_terms_for_pairwise}",
                     "min_shared_genes": int(min_shared_genes),
                     "jaccard_min": float(jaccard_min),
+                    "max_terms_for_pairwise": int(max_terms_for_pairwise),
                 }
             )
         else:
@@ -413,7 +455,6 @@ def factorize_modules_connected_components(
 
     missing_terms = [t for t in all_terms if t not in assigned_terms]
     if missing_terms:
-        # append as deterministic singleton buckets
         next_cid = max([int(x[0]) for x in buckets], default=-1) + 1
         for t in sorted(missing_terms):
             genes = sorted(list(term_to_genes.get(t, set())))
@@ -421,28 +462,31 @@ def factorize_modules_connected_components(
             next_cid += 1
 
     # --- stable module_id by content hash ONLY (no component numbering) ---
-    # sort buckets by (hash, n_terms, n_genes, first_term) for deterministic module_rank
-    hashed: list[tuple[str, list[str], list[str]]] = []
+    hashed: list[tuple[str, list[str], list[str], str, str]] = []
     for _, terms, genes in buckets:
-        h = _module_hash(list(terms), list(genes))
-        hashed.append((h, list(terms), list(genes)))
+        terms_clean = [str(x).strip() for x in terms if str(x).strip()]
+        genes_clean = [str(x).strip() for x in genes if str(x).strip()]
+        terms_hash = _hash_set_short12(terms_clean)
+        genes_hash = _hash_set_short12(genes_clean)
+        content_hash = _module_hash_content12(terms_clean, genes_clean)
+        hashed.append((content_hash, terms_clean, genes_clean, terms_hash, genes_hash))
 
     hashed = sorted(
         hashed,
         key=lambda x: (x[0], len(x[1]), len(x[2]), (x[1][0] if x[1] else "")),
     )
 
-    # term_modules_df
     term_modules_rows: list[tuple[str, str]] = []
     modules_rows: list[dict[str, object]] = []
 
-    for rank, (h, terms, genes) in enumerate(hashed, start=1):
-        mid = f"{module_prefix}{h}"
+    for rank, (content_hash, terms, genes, terms_hash, genes_hash) in enumerate(hashed, start=1):
+        mid = f"{module_prefix}{content_hash}"
 
         for t in terms:
             term_modules_rows.append((str(t), mid))
 
-        rep = list(genes)[:10]
+        rep = _pick_rep_genes_by_degree(edges_f, genes, topk=10)
+
         modules_rows.append(
             {
                 "module_id": mid,
@@ -456,6 +500,9 @@ def factorize_modules_connected_components(
                 "module_method": method,
                 "module_min_shared_genes": int(min_shared_genes),
                 "module_jaccard_min": float(jaccard_min),
+                "module_terms_hash12": terms_hash,
+                "module_genes_hash12": genes_hash,
+                "module_content_hash12": content_hash,
             }
         )
 
@@ -512,3 +559,85 @@ def attach_module_ids(
         validate="m:1",
     )
     return out
+
+
+# -------------------------
+# Stress helpers (evidence identity collapse)
+# -------------------------
+def compute_term_module_drift(
+    baseline_term_modules_df: pd.DataFrame,
+    stressed_term_modules_df: pd.DataFrame,
+    *,
+    term_id_col: str = "term_uid",
+) -> pd.DataFrame:
+    """
+    Compare baseline vs stressed term->module assignments.
+
+    Returns per-term drift table:
+      term_uid, module_id_base, module_id_stress, module_drift (bool)
+
+    This is the core observable for "module re-factorization stress".
+    """
+    for df, name in [
+        (baseline_term_modules_df, "baseline"),
+        (stressed_term_modules_df, "stressed"),
+    ]:
+        if term_id_col not in df.columns or "module_id" not in df.columns:
+            raise ValueError(f"{name} term_modules_df must have columns: {term_id_col}, module_id")
+
+    b = baseline_term_modules_df[[term_id_col, "module_id"]].copy()
+    s = stressed_term_modules_df[[term_id_col, "module_id"]].copy()
+
+    # enforce 1:1 contract defensively
+    if b.groupby(term_id_col)["module_id"].nunique().max() > 1:
+        raise ValueError(
+            "baseline_term_modules_df violates contract (term maps to multiple modules)"
+        )
+    if s.groupby(term_id_col)["module_id"].nunique().max() > 1:
+        raise ValueError(
+            "stressed_term_modules_df violates contract (term maps to multiple modules)"
+        )
+
+    out = b.merge(s, on=term_id_col, how="outer", suffixes=("_base", "_stress"))
+    out["module_id_base"] = out["module_id_base"].astype("string")
+    out["module_id_stress"] = out["module_id_stress"].astype("string")
+
+    out["module_drift"] = out["module_id_base"].fillna("") != out["module_id_stress"].fillna("")
+    out = out.sort_values([term_id_col], kind="mergesort").reset_index(drop=True)
+    return out
+
+
+def summarize_module_drift(drift_df: pd.DataFrame) -> dict[str, object]:
+    """
+    Summarize drift_df from compute_term_module_drift().
+
+    Returns dict:
+      n_terms_total, n_terms_drift, term_drift_rate,
+      n_modules_base, n_modules_stress, n_modules_shared,
+      module_churn_rate (1 - shared/base)
+    """
+    required = {"term_uid", "module_id_base", "module_id_stress", "module_drift"}
+    if not required.issubset(set(drift_df.columns)):
+        raise ValueError(f"drift_df missing columns: {sorted(required - set(drift_df.columns))}")
+
+    n_terms = int(len(drift_df))
+    n_drift = int(drift_df["module_drift"].astype(bool).sum())
+
+    base_mods = set(
+        [str(x) for x in drift_df["module_id_base"].dropna().astype(str).tolist() if str(x)]
+    )
+    stress_mods = set(
+        [str(x) for x in drift_df["module_id_stress"].dropna().astype(str).tolist() if str(x)]
+    )
+
+    shared = base_mods & stress_mods
+
+    return {
+        "n_terms_total": n_terms,
+        "n_terms_drift": n_drift,
+        "term_drift_rate": (n_drift / n_terms) if n_terms > 0 else 0.0,
+        "n_modules_base": int(len(base_mods)),
+        "n_modules_stress": int(len(stress_mods)),
+        "n_modules_shared": int(len(shared)),
+        "module_churn_rate": (1.0 - (len(shared) / len(base_mods))) if base_mods else 0.0,
+    }

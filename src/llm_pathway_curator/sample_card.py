@@ -1,4 +1,3 @@
-# LLM-PathwayCurator/src/llm_pathway_curator/sample_card.py
 from __future__ import annotations
 
 import json
@@ -20,6 +19,9 @@ AUDIT_KNOBS = {
     "hub_frac_thr",
     "min_union_genes",
     "trust_input_survival",
+    # gate behavior
+    "context_gate_mode",
+    "stress_gate_mode",
 }
 
 # v1.1 minimal tool knobs understood by the TOOL (not paper scripts).
@@ -38,11 +40,13 @@ TOOL_KNOBS = {
     "max_per_module",
     "preselect_tau_gate",
     "enable_context_score_proxy",
-    # stress contract (gate behavior only; generation happens elsewhere)
+    # gate behavior only; generation happens elsewhere
+    "context_gate_mode",
     "stress_gate_mode",
 }
 
 # Backward-compat aliases that may appear in older cards
+# IMPORTANT: do NOT mix context vs stress aliases.
 ALIASES = {
     # selection
     "claim_mode": {"mode", "claim_mode_env"},
@@ -50,8 +54,9 @@ ALIASES = {
     "max_per_module": {"module_diversity", "per_module"},
     "preselect_tau_gate": {"tau_gate", "preselect_gate"},
     "enable_context_score_proxy": {"context_score_proxy"},
-    # stress
-    "stress_gate_mode": {"stress_mode", "stress", "stress_gate", "context_gate_mode"},
+    # gates
+    "context_gate_mode": {"context_gate", "context_mode"},
+    "stress_gate_mode": {"stress_mode", "stress", "stress_gate"},
 }
 
 
@@ -185,6 +190,39 @@ def _as_int(x: Any, default: int) -> int:
         return int(default)
 
 
+def _normalize_gate_mode(x: Any, default: str) -> str:
+    """
+    Gate mode contract (tool-facing):
+      - "off": ignore the gate
+      - "note": do not change status, but annotate
+      - "abstain": gate failure/missing -> ABSTAIN
+      - "hard": gate failure -> ABSTAIN/FAIL downstream (policy decided by audit)
+
+    This function only normalizes the vocabulary.
+    """
+    if x is None:
+        s = ""
+    else:
+        s = str(x).strip().lower()
+
+    if not s:
+        s = str(default).strip().lower()
+
+    if s in {"off", "none", "disable", "disabled"}:
+        return "off"
+    if s in {"note", "warn", "warning", "soft"}:
+        return "note"
+    if s in {"abstain", "on", "enable", "enabled"}:
+        return "abstain"
+    if s in {"hard", "strict"}:
+        return "hard"
+
+    # last resort: honor default (already normalized above)
+    if str(default).strip().lower() in {"off", "note", "abstain", "hard"}:
+        return str(default).strip().lower()
+    return "abstain"
+
+
 class SampleCard(BaseModel):
     disease: str = Field(default=NA_TOKEN)
     tissue: str = Field(default=NA_TOKEN)
@@ -212,6 +250,7 @@ class SampleCard(BaseModel):
     def context_dict(self) -> dict[str, str]:
         return {k: getattr(self, k) for k in CORE_KEYS}
 
+    # ---- audit knobs ----
     def audit_tau(self, default: float = 0.8) -> float:
         try:
             v = (self.extra or {}).get("audit_tau", None)
@@ -226,6 +265,7 @@ class SampleCard(BaseModel):
         except Exception:
             return int(default)
 
+    # ---- IO ----
     @classmethod
     def from_json(cls, path: str | Path) -> SampleCard:
         p = Path(path)
@@ -293,15 +333,11 @@ class SampleCard(BaseModel):
         # Debugging only: string-match proxy. Default OFF.
         return _as_bool((self.extra or {}).get("enable_context_score_proxy", None), default)
 
-    def stress_gate_mode(self, default: str = "abstain") -> str:
+    # ---- gate behavior knobs (tool contract) ----
+    def context_gate_mode(self, default: str = "abstain") -> str:
+        v = (self.extra or {}).get("context_gate_mode", None)
+        return _normalize_gate_mode(v, default)
+
+    def stress_gate_mode(self, default: str = "off") -> str:
         v = (self.extra or {}).get("stress_gate_mode", None)
-        s = str(v).strip().lower() if v is not None else ""
-        if not s:
-            return "abstain"
-        if s in {"off", "none", "disable", "disabled"}:
-            return "off"
-        if s in {"note", "warn", "warning"}:
-            return "note"
-        if s in {"abstain", "on", "enable", "enabled"}:
-            return "abstain"
-        return str(default)
+        return _normalize_gate_mode(v, default)

@@ -42,22 +42,21 @@ def method_style(method: str) -> dict[str, object]:
     return {"linestyle": "-", "marker": None}
 
 
-def load_and_validate(path: Path) -> pd.DataFrame:
+def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t")
-    required = {
-        "benchmark_id",
-        "cancer",
-        "method",
-        "tau",
-        "coverage_pass",
-        "risk_human_reject",
-        "n_pass_labeled",
-    }
+
+    required = {"benchmark_id", "cancer", "method", "tau", "coverage_pass", ycol}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"risk_coverage.tsv missing columns: {sorted(missing)}")
 
-    for c in ["tau", "coverage_pass", "risk_human_reject", "n_pass_labeled"]:
+    numeric_cols = ["tau", "coverage_pass", ycol]
+    # Only require these if present/needed (human risk mode)
+    for c in ["n_pass_labeled"]:
+        if c in df.columns:
+            numeric_cols.append(c)
+
+    for c in numeric_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df["benchmark_id"] = df["benchmark_id"].astype(str)
@@ -70,19 +69,39 @@ def load_and_validate(path: Path) -> pd.DataFrame:
     return df
 
 
-def _panel_plot(ax, d: pd.DataFrame, methods: list[str], cancer: str) -> None:
+def _panel_plot(
+    ax,
+    d: pd.DataFrame,
+    methods: list[str],
+    cancer: str,
+    *,
+    ycol: str,
+) -> None:
     d = d.sort_values(["method", "tau"], kind="mergesort")
 
     for method in methods:
         g = d[d["method"] == method].copy()
         if g.empty:
             continue
+
         g = g.sort_values("tau", kind="mergesort")
-        g = g.dropna(subset=["risk_human_reject"])
-        g = g[g["n_pass_labeled"] > 0]
+        g = g.dropna(subset=[ycol])
+
+        # Human-label risk requires labeled PASS count
+        if ycol == "risk_human_reject":
+            if "n_pass_labeled" not in g.columns:
+                continue
+            g = g[g["n_pass_labeled"] > 0]
+
         if g.empty:
             continue
-        ax.plot(g["coverage_pass"], g["risk_human_reject"], label=method, **method_style(method))
+
+        ax.plot(
+            g["coverage_pass"],
+            g[ycol],
+            label=method,
+            **method_style(method),
+        )
 
     ax.set_title(cancer)
     ax.set_xlim(0, 1)
@@ -92,6 +111,12 @@ def _panel_plot(ax, d: pd.DataFrame, methods: list[str], cancer: str) -> None:
     ax.set_yticks([0.0, 0.5, 1.0])
 
 
+def _ylabel_for(ycol: str) -> str:
+    if ycol == "risk_proxy":
+        return "Risk proxy (flagged PASS among PASS)"
+    return "Risk (Human REJECT among PASS)"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Supplement multipanel Fig2 from risk_coverage.tsv")
     ap.add_argument("--in", dest="inp", required=True, help="risk_coverage.tsv")
@@ -99,10 +124,22 @@ def main() -> None:
     ap.add_argument("--benchmark-id", default="", help="optional benchmark_id filter")
     ap.add_argument("--cols", type=int, default=4, help="grid columns (default 4)")
     ap.add_argument("--fontsize", type=int, default=16, help="base font size (default 16)")
-    ap.add_argument("--title", default="Risk–coverage curves across cancers", help="figure title")
+    ap.add_argument(
+        "--title",
+        default="Risk–coverage curves across cancers",
+        help="figure title",
+    )
+    ap.add_argument(
+        "--ycol",
+        default="risk_human_reject",
+        choices=["risk_human_reject", "risk_proxy"],
+        help="y-axis column (default: risk_human_reject)",
+    )
     args = ap.parse_args()
 
-    df = load_and_validate(Path(args.inp))
+    ycol = str(args.ycol).strip()
+    df = load_and_validate(Path(args.inp), ycol=ycol)
+
     if args.benchmark_id:
         df = df[df["benchmark_id"] == str(args.benchmark_id)]
         if df.empty:
@@ -125,12 +162,19 @@ def main() -> None:
 
     for idx, cancer in enumerate(cancers):
         ax = axes_list[idx]
-        _panel_plot(ax, df[df["cancer"] == cancer].copy(), methods, cancer)
+        _panel_plot(
+            ax,
+            df[df["cancer"] == cancer].copy(),
+            methods,
+            cancer,
+            ycol=ycol,
+        )
 
         if idx % cols == 0:
-            ax.set_ylabel("Risk (Human REJECT among PASS)")
+            ax.set_ylabel(_ylabel_for(ycol))
         else:
             ax.set_ylabel("")
+
         if idx // cols == rows - 1:
             ax.set_xlabel("Coverage (PASS rate)")
         else:
@@ -150,7 +194,13 @@ def main() -> None:
     fig.suptitle(str(args.title), y=0.995)
 
     if handles:
-        fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False)
+        fig.legend(
+            handles,
+            labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            frameon=False,
+        )
 
     fig.tight_layout(rect=[0.0, 0.0, 0.86, 0.96])
 

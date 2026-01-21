@@ -218,7 +218,10 @@ def main() -> None:
     # fail-fast inputs
     for cancer in cancers:
         _ensure_file(EVID_DIR / f"{cancer}.evidence_table.tsv", f"evidence_table ({cancer})")
-        _ensure_file(CARD_DIR / f"{cancer}.sample_card.json", f"sample_card ({cancer})")
+
+        # Fig2: we require both note and hard cards
+        _ensure_file(CARD_DIR / f"{cancer}.note.sample_card.json", f"sample_card note ({cancer})")
+        _ensure_file(CARD_DIR / f"{cancer}.hard.sample_card.json", f"sample_card hard ({cancer})")
 
     for cancer in cancers:
         for tau in taus:
@@ -226,23 +229,25 @@ def main() -> None:
                 ev = EVID_DIR / f"{cancer}.evidence_table.tsv"
 
                 if variant == "ours":
-                    src_sc = CARD_DIR / f"{cancer}.sample_card.json"
-                    outdir = OUT_DIR / cancer / "ours" / f"tau_{tau:.2f}"
-                    outdir.mkdir(parents=True, exist_ok=True)
+                    # Fig2: run both context-gate modes
+                    for gate_mode in ["note", "hard"]:
+                        src_sc = CARD_DIR / f"{cancer}.{gate_mode}.sample_card.json"
+                        outdir = OUT_DIR / cancer / f"ours_{gate_mode}" / f"tau_{tau:.2f}"
+                        outdir.mkdir(parents=True, exist_ok=True)
 
-                    tau_card = outdir / "sample_card.tau.json"
-                    _write_card_with_tau(src_sc, tau_card, tau=tau)
+                        tau_card = outdir / "sample_card.tau.json"
+                        _write_card_with_tau(src_sc, tau_card, tau=tau)
 
-                    _run_one(
-                        benchmark_id=benchmark_id,
-                        cancer=cancer,
-                        variant="ours",
-                        tau=tau,
-                        evidence_table=ev,
-                        sample_card=tau_card,
-                        outdir=outdir,
-                        seed=args.seed,
-                    )
+                        _run_one(
+                            benchmark_id=benchmark_id,
+                            cancer=cancer,
+                            variant=f"ours_{gate_mode}",
+                            tau=tau,
+                            evidence_table=ev,
+                            sample_card=tau_card,
+                            outdir=outdir,
+                            seed=args.seed,
+                        )
 
                 elif variant == "shuffled_context":
                     src = _read_json(CARD_DIR / f"{cancer}.sample_card.json")

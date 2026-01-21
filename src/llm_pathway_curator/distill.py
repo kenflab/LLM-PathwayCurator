@@ -135,6 +135,17 @@ def _seed_for_term(seed: int | None, term_uid: str) -> int:
     return int.from_bytes(h.digest(), byteorder="little", signed=False)
 
 
+def _hash_gene_set_short12(genes: list[str]) -> str:
+    """
+    Audit-grade gene_set_hash (12 hex), set-stable:
+      - order invariant
+      - uppercased symbols
+    """
+    uniq = sorted({_clean_gene_symbol(str(g)) for g in genes if str(g).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _get_distill_mode(card: SampleCard) -> str:
     """
     Explicit mode switch. Default keeps v1 semantics (evidence perturbation).
@@ -151,6 +162,33 @@ def _get_distill_mode(card: SampleCard) -> str:
     if s in {"replicates_proxy", "patient_loo", "loo"}:
         return "replicates_proxy"
     return "evidence_perturb"
+
+
+def _get_distill_pre_gate_mode(card: SampleCard, default: str = "off") -> str:
+    """
+    Distill is measurement, audit is decision.
+    pre_gate_mode controls whether distill marks keep_term early.
+
+      - "off" (default): do not change keep_term based on tau
+      - "note": keep_term stays True, but keep_reason annotates low survival
+      - "hard": keep_term=False when term_survival_agg < tau
+
+    Backward compat:
+      - If users already set distill_tau, they likely expected hard.
+        We still keep default off unless explicitly set.
+    """
+    v = _get_distill_knob(card, "pre_gate_mode", None)
+    if v is None:
+        return str(default).strip().lower()
+
+    s = str(v).strip().lower()
+    if s in {"off", "disable", "disabled", "none"}:
+        return "off"
+    if s in {"note", "warn", "warning"}:
+        return "note"
+    if s in {"hard", "abstain"}:
+        return "hard"
+    return str(default).strip().lower()
 
 
 def _compute_similarity_metrics(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
@@ -418,6 +456,9 @@ def distill_evidence(
     r_min = float(_get_distill_knob(card, "evidence_recall_min", 0.80))
     p_min = float(_get_distill_knob(card, "evidence_precision_min", 0.80))
 
+    # identity drift metric (optional, for stress strength)
+    drift_hash = bool(_get_distill_knob(card, "track_hash_drift", True))
+
     # min genes policy (defaults OFF for v1-compat)
     min_keep_frac = float(_get_distill_knob(card, "min_keep_frac", 0.0))
     min_keep_frac = min(max(min_keep_frac, 0.0), 1.0)
@@ -470,6 +511,10 @@ def distill_evidence(
             out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
         ).astype("Float64")
 
+        out["term_gene_set_hash"] = out["evidence_genes"].map(lambda xs: _hash_gene_set_short12(xs))
+        out["term_survival_agg"] = out["term_survival"].astype("Float64")
+        out["term_hash_drift_rate"] = _ensure_float64_na_series(len(out))
+
         out["gene_survival"] = out["term_survival"].astype("Float64")
         out["module_survival"] = _ensure_float64_na_series(len(out))
 
@@ -508,12 +553,19 @@ def distill_evidence(
         mean_p: list[float] = []
         n_ok_list: list[int] = []
         n_total_list: list[int] = []
+        base_hashes: list[str] = []
+        drift_rate_list: list[float] = []
 
         # IMPORTANT: order-invariant RNG per term_uid
         for tu, xs in zip(
             out["term_uid"].astype(str).tolist(), out["evidence_genes"].tolist(), strict=True
         ):
             orig = set(xs)
+
+            base_hash = _hash_gene_set_short12(xs)
+            base_hashes.append(base_hash)
+
+            drift_n = 0
 
             if user_min_genes is None:
                 min_genes_eff = max(1, int(np.ceil(min_keep_frac * max(1, len(xs)))))
@@ -537,6 +589,12 @@ def distill_evidence(
                     min_genes=min_genes_eff,
                     rescue=rescue,
                 )
+
+                if drift_hash:
+                    pert_hash = _hash_gene_set_short12(sorted(list(pert)))
+                    if pert_hash != base_hash:
+                        drift_n += 1
+
                 j, recall, precision = _compute_similarity_metrics(orig, pert)
                 js.append(j)
                 rs.append(recall)
@@ -545,6 +603,7 @@ def distill_evidence(
                     ok += 1
 
             term_surv.append(ok / float(n_reps))
+            drift_rate_list.append(drift_n / float(n_reps) if n_reps > 0 else float("nan"))
             mean_j.append(float(np.mean(js)) if js else float("nan"))
             mean_r.append(float(np.mean(rs)) if rs else float("nan"))
             mean_p.append(float(np.mean(ps)) if ps else float("nan"))
@@ -567,6 +626,15 @@ def distill_evidence(
         out["term_survival"] = (
             out["term_survival_input"] if trust_input_survival else out["term_survival_computed"]
         ).astype("Float64")
+
+        # identity fields (audit-friendly)
+        out["term_gene_set_hash"] = pd.Series(base_hashes, dtype="string")
+        out["term_survival_agg"] = out["term_survival"].astype("Float64")
+
+        if drift_hash:
+            out["term_hash_drift_rate"] = pd.Series(drift_rate_list, dtype="Float64")
+        else:
+            out["term_hash_drift_rate"] = _ensure_float64_na_series(len(out))
 
         out["distill_mode"] = "evidence_perturb"
         out["distill_n_perturb"] = n_reps
@@ -592,14 +660,25 @@ def distill_evidence(
     if "keep_reason" not in out.columns:
         out["keep_reason"] = "ok"
 
-    # Optional gate: mark clearly unstable terms early (still "hygiene", not audit)
+    # Optional pre-gate (explicit): distill measures; audit decides.
+    pre_gate_mode = _get_distill_pre_gate_mode(card, default="off")
+
     tau = _get_distill_knob(card, "tau", None)
     if tau is not None:
         try:
             tau_f = float(tau)
-            unstable = out["term_survival"].astype(float) < tau_f
-            out.loc[unstable, "keep_term"] = False
-            out.loc[unstable, "keep_reason"] = "low_term_survival"
+            surv = pd.to_numeric(out["term_survival_agg"], errors="coerce")
+            unstable = surv < tau_f
+
+            if pre_gate_mode == "hard":
+                out.loc[unstable, "keep_term"] = False
+                out.loc[unstable, "keep_reason"] = "low_term_survival_agg"
+            elif pre_gate_mode == "note":
+                # keep_term stays True; annotate only
+                out.loc[unstable, "keep_reason"] = "low_term_survival_agg(note)"
+            else:
+                # off: do nothing
+                pass
         except Exception:
             pass
 
