@@ -1,4 +1,3 @@
-(.venv) MDACM0CL9004207:LLM-PathwayCurator kfurudate$ cat .gitignore
 __pycache__/
 *.pyc
 *.pyo
@@ -29,4 +28,20 @@ paper/source_data/**/derived/**/.ipynb_checkpoints/
 
 # (optional) ignore notebook checkpoints anywhere
 **/.ipynb_checkpoints/
+
+# -----------------------------
+# gene ID mapping resources
+# -----------------------------
+# raw upstream files
+resources/gene_id_maps/*.gtf
+resources/gene_id_maps/*.gtf.gz
+resources/gene_id_maps/*.gene_info
+resources/gene_id_maps/*.gene_info.gz
+
+# generated maps
+resources/gene_id_maps/*id_map.tsv
+# resources/gene_id_maps/*id_map.tsv.gz
+
+# checksums (regen each time; not source)
+resources/gene_id_maps/checksums.sha256
 

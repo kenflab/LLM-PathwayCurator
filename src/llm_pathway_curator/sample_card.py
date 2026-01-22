@@ -1,3 +1,4 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/sample_card.py
 from __future__ import annotations
 
 import json
@@ -19,6 +20,10 @@ AUDIT_KNOBS = {
     "hub_frac_thr",
     "min_union_genes",
     "trust_input_survival",
+    # audit behavior knobs used by audit.py
+    "pass_notes",
+    "stability_gate_mode",
+    "strict_evidence_check",
     # gate behavior
     "context_gate_mode",
     "stress_gate_mode",
@@ -34,6 +39,10 @@ TOOL_KNOBS = {
     "hub_frac_thr",
     "min_union_genes",
     "trust_input_survival",
+    # audit behavior knobs used by audit.py
+    "pass_notes",
+    "stability_gate_mode",
+    "strict_evidence_check",
     # select knobs
     "claim_mode",
     "k_claims",
@@ -54,6 +63,10 @@ ALIASES = {
     "max_per_module": {"module_diversity", "per_module"},
     "preselect_tau_gate": {"tau_gate", "preselect_gate"},
     "enable_context_score_proxy": {"context_score_proxy"},
+    # audit behavior
+    "pass_notes": {"pass_note", "pass_note_enabled"},
+    "stability_gate_mode": {"stability_gate", "stability_mode"},
+    "strict_evidence_check": {"strict_evidence", "strict_evidence_genes"},
     # gates
     "context_gate_mode": {"context_gate", "context_mode"},
     "stress_gate_mode": {"stress_mode", "stress", "stress_gate"},
@@ -190,21 +203,26 @@ def _as_int(x: Any, default: int) -> int:
         return int(default)
 
 
+def _as_float(x: Any, default: float) -> float:
+    try:
+        if x is None:
+            return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
 def _normalize_gate_mode(x: Any, default: str) -> str:
     """
-    Gate mode contract (tool-facing):
+    Gate mode contract (tool-facing; align with audit.py):
       - "off": ignore the gate
       - "note": do not change status, but annotate
-      - "abstain": gate failure/missing -> ABSTAIN
-      - "hard": gate failure -> ABSTAIN/FAIL downstream (policy decided by audit)
+      - "hard": gate failure/missing -> ABSTAIN/FAIL downstream (policy decided by audit)
 
-    This function only normalizes the vocabulary.
+    Backward compat:
+      - "abstain" (and "on"/"enable") => "hard"
     """
-    if x is None:
-        s = ""
-    else:
-        s = str(x).strip().lower()
-
+    s = "" if x is None else str(x).strip().lower()
     if not s:
         s = str(default).strip().lower()
 
@@ -212,15 +230,15 @@ def _normalize_gate_mode(x: Any, default: str) -> str:
         return "off"
     if s in {"note", "warn", "warning", "soft"}:
         return "note"
-    if s in {"abstain", "on", "enable", "enabled"}:
-        return "abstain"
     if s in {"hard", "strict"}:
         return "hard"
+    if s in {"abstain", "on", "enable", "enabled"}:
+        return "hard"
 
-    # last resort: honor default (already normalized above)
-    if str(default).strip().lower() in {"off", "note", "abstain", "hard"}:
-        return str(default).strip().lower()
-    return "abstain"
+    d = str(default).strip().lower()
+    if d in {"off", "note", "hard"}:
+        return d
+    return "hard"
 
 
 class SampleCard(BaseModel):
@@ -264,6 +282,31 @@ class SampleCard(BaseModel):
             return int(default) if v is None else int(v)
         except Exception:
             return int(default)
+
+    def hub_term_degree(self, default: int = 200) -> int:
+        return max(1, _as_int((self.extra or {}).get("hub_term_degree", None), default))
+
+    def hub_frac_thr(self, default: float = 0.5) -> float:
+        v = _as_float((self.extra or {}).get("hub_frac_thr", None), default)
+        # keep within [0,1]
+        return float(min(max(v, 0.0), 1.0))
+
+    def min_union_genes(self, default: int = 3) -> int:
+        return max(1, _as_int((self.extra or {}).get("min_union_genes", None), default))
+
+    def trust_input_survival(self, default: bool = False) -> bool:
+        return _as_bool((self.extra or {}).get("trust_input_survival", None), default)
+
+    # audit behavior knobs used by audit.py
+    def pass_notes(self, default: bool = True) -> bool:
+        return _as_bool((self.extra or {}).get("pass_notes", None), default)
+
+    def stability_gate_mode(self, default: str = "hard") -> str:
+        v = (self.extra or {}).get("stability_gate_mode", None)
+        return _normalize_gate_mode(v, default)
+
+    def strict_evidence_check(self, default: bool = False) -> bool:
+        return _as_bool((self.extra or {}).get("strict_evidence_check", None), default)
 
     # ---- IO ----
     @classmethod
@@ -333,8 +376,8 @@ class SampleCard(BaseModel):
         # Debugging only: string-match proxy. Default OFF.
         return _as_bool((self.extra or {}).get("enable_context_score_proxy", None), default)
 
-    # ---- gate behavior knobs (tool contract) ----
-    def context_gate_mode(self, default: str = "abstain") -> str:
+    # ---- gate behavior knobs (tool contract; align with audit.py) ----
+    def context_gate_mode(self, default: str = "hard") -> str:
         v = (self.extra or {}).get("context_gate_mode", None)
         return _normalize_gate_mode(v, default)
 
