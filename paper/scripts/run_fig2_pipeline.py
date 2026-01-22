@@ -490,10 +490,8 @@ def main() -> None:
     if forced_dst:
         if forced_dst not in set(all_cancers):
             _die(
-                
-                    "[run_fig2] --shuffled-context-to must be one of cancers with "
-                    f"evidence_tables (got {forced_dst})"
-                
+                "[run_fig2] --shuffled-context-to must be one of cancers with "
+                f"evidence_tables (got {forced_dst})"
             )
 
     plan = {
@@ -624,10 +622,8 @@ def main() -> None:
     print(f"[run_fig2] jobs: {n_total}")
     for i, job in enumerate(jobs, start=1):
         print(
-            
-                f"[run_fig2] ({i}/{n_total}) {job.cancer} {job.variant} "
-                f"gate={job.gate_mode} tau={job.tau:.2f}"
-            
+            f"[run_fig2] ({i}/{n_total}) {job.cancer} {job.variant} "
+            f"gate={job.gate_mode} tau={job.tau:.2f}"
         )
         _run_one(job, force=bool(args.force), plan=plan)
 

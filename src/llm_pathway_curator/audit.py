@@ -534,7 +534,10 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
             tags = [stress_map.get(t, "") for t in term_ids]
             tags = [t for t in tags if t]
             if tags:
-                out2.at[i, "stress_status"] = "FAIL"
+                # IMPORTANT: distilled stress_tag is an annotation/probe,
+                # not a decision-grade FAIL.
+                # Treat as ABSTAIN so audit gate mode can decide how to use it.
+                out2.at[i, "stress_status"] = "ABSTAIN"
                 out2.at[i, "stress_reason"] = "STRESS_TAG"
                 out2.at[i, "stress_notes"] = (
                     f"stress_tag={tags[0]}" if len(tags) == 1 else f"stress_tag={tags}"
@@ -690,6 +693,23 @@ def _apply_external_stress(
         if nt:
             note += f" ({nt})"
         note += f" [{gate_mode}]"
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
+        return
+
+    if st == "WARN":
+        out.at[i, "stress_ok"] = False
+        note = "stress=WARN"
+        if rs_raw:
+            note += f": {rs_raw}"
+        if nt:
+            note += f" ({nt})"
+        note += f" [{gate_mode}]"
+
+        # WARN is a probe result. By default we do not change status.
+        # If caller wants decision-grade gating, use hard mode to ABSTAIN (not FAIL).
+        if gate_mode == "hard":
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
@@ -1203,8 +1223,7 @@ def audit_claims(
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], f"context_missing({tag}): {eval_note}"
                 )
-                _enforce_reason_vocab(out, i)
-                continue
+
         else:
             nonspecific, ns_note = _context_is_nonspecific(row)
             if nonspecific:

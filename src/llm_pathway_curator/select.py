@@ -225,6 +225,19 @@ def _stress_enabled(card: SampleCard) -> bool:
     return _as_bool(ex.get("stress_generate", None), False)
 
 
+def _module_prefix(card: SampleCard) -> str:
+    """
+    Ensure select's module_id fallback matches modules.py prefix behavior.
+    Priority: env > card.extra > default "M"
+    """
+    env = str(os.environ.get("LLMPATH_MODULE_PREFIX", "")).strip()
+    if env:
+        return env
+    ex = _get_extra(card)
+    p = str(ex.get("module_prefix", "")).strip()
+    return p or "M"
+
+
 def _seed_for_claim(seed: int | None, claim_id: str) -> int:
     base = 0 if seed is None else int(seed)
     h = hashlib.blake2b(digest_size=8)
@@ -361,7 +374,16 @@ def _evaluate_stress_for_claim(
 ) -> dict[str, Any]:
     """
     Stress suite (identity collapse) for a single claim.
-    Emits: stress_status, stress_ok, stress_reason, stress_notes
+
+    IMPORTANT:
+      - This is a PROBE (measurement), not the mechanical DECIDER.
+      - We therefore avoid "FAIL" vocabulary here; audit.py may turn WARN into FAIL/ABSTAIN.
+
+    Emits:
+      stress_status: PASS | WARN | ABSTAIN
+      stress_ok: bool
+      stress_reason: str
+      stress_notes: str
     """
     ex = _get_extra(card)
 
@@ -387,8 +409,8 @@ def _evaluate_stress_for_claim(
             "stress_notes": "no baseline evidence genes for referenced term_ids",
         }
 
-    base_hash = str(gene_set_hash).strip().lower()
-    if not base_hash or base_hash.lower() in _NA_TOKENS_L:
+    base_hash_claim = str(gene_set_hash).strip()
+    if not base_hash_claim or base_hash_claim.lower() in _NA_TOKENS_L:
         return {
             "stress_status": "ABSTAIN",
             "stress_ok": False,
@@ -396,7 +418,19 @@ def _evaluate_stress_for_claim(
             "stress_notes": "claim gene_set_hash missing",
         }
 
-    rng = np.random.default_rng(_seed_for_claim(seed, claim_id))
+    # Consistency check: claim hash should match baseline genes hash (set-stable)
+    base_hash_calc = _hash_gene_set_audit(sorted(list(base_genes)))
+    if base_hash_calc != base_hash_claim:
+        return {
+            "stress_status": "WARN",
+            "stress_ok": False,
+            "stress_reason": "stress_gene_set_hash_mismatch",
+            "stress_notes": f"claim_hash={base_hash_claim} != baseline_hash={base_hash_calc}",
+        }
+
+    # Separate RNG streams to reduce unwanted correlation.
+    rng_term = np.random.default_rng(_seed_for_claim(seed, claim_id))
+    rng_mod = np.random.default_rng(_seed_for_claim(seed, claim_id) + 1)
 
     ok = 0
     js: list[float] = []
@@ -406,7 +440,7 @@ def _evaluate_stress_for_claim(
     base_list = sorted(list(base_genes))
     for _ in range(int(n)):
         pert = _perturb_gene_set(
-            base_list, gene_pool=gene_pool, rng=rng, p_drop=p_drop, p_add=p_add
+            base_list, gene_pool=gene_pool, rng=rng_term, p_drop=p_drop, p_add=p_add
         )
         j, rr, pp = _similarity(base_genes, pert)
         js.append(j)
@@ -428,7 +462,7 @@ def _evaluate_stress_for_claim(
                 pert_m = _perturb_gene_set(
                     genes_m_list,
                     gene_pool=gene_pool,
-                    rng=rng,
+                    rng=rng_mod,
                     p_drop=p_drop,
                     p_add=p_add,
                 )
@@ -462,12 +496,11 @@ def _evaluate_stress_for_claim(
         f"mean_r={float(np.mean(rs)):.3f} "
         f"mean_p={float(np.mean(ps)):.3f}"
     )
-
     if module_note:
         note += f"; {module_note}"
 
     return {
-        "stress_status": "FAIL",
+        "stress_status": "WARN",
         "stress_ok": False,
         "stress_reason": reason,
         "stress_notes": note,
@@ -494,11 +527,11 @@ def _select_claims_deterministic(
         i = int(df.index[df["stat"].isna()][0])
         raise ValueError(f"select_claims: non-numeric stat at row index={i}")
 
-    df["term_uid"] = (
-        df["term_uid"].astype(str).str.strip()
-        if "term_uid" in df.columns
-        else (df["source"] + ":" + df["term_id"])
-    )
+    # Stable term_uid (single source of truth)
+    if "term_uid" in df.columns:
+        df["term_uid"] = df["term_uid"].astype(str).str.strip()
+    else:
+        df["term_uid"] = (df["source"] + ":" + df["term_id"]).astype(str).str.strip()
 
     # ---- context proxy: default OFF (must be enabled explicitly) ----
     try:
@@ -568,6 +601,7 @@ def _select_claims_deterministic(
     # ---- pick with module diversity (deterministic scan) ----
     picked_idx: list[int] = []
     per_module_count: dict[str, int] = {}
+    blocked_by_module_cap = 0
 
     for idx, r in df_ranked.iterrows():
         if len(picked_idx) >= int(k):
@@ -583,6 +617,7 @@ def _select_claims_deterministic(
 
         c = per_module_count.get(mid, 0)
         if c >= max_per_module:
+            blocked_by_module_cap += 1
             continue
 
         per_module_count[mid] = c + 1
@@ -605,14 +640,19 @@ def _select_claims_deterministic(
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
 
-    # selection notes (helps explain "k=100 but only 3")
+    # selection diagnostics (helps explain "k=100 but only 3")
     n_total = int(df_ranked.shape[0])
     n_eligible = int(df_ranked["eligible"].sum()) if "eligible" in df_ranked.columns else n_total
+    n_ineligible = int(n_total - n_eligible)
+    n_picked = int(len(picked_idx))
 
     notes_common = (
-        f"ranked={n_total}; eligible={n_eligible}; picked={len(picked_idx)}; "
-        f"k={int(k)}; max_per_module={int(max_per_module)}"
+        f"ranked={n_total}; eligible={n_eligible}; ineligible={n_ineligible}; "
+        f"picked={n_picked}; k={int(k)}; max_per_module={int(max_per_module)}; "
+        f"blocked_by_module_cap={int(blocked_by_module_cap)}"
     )
+
+    mprefix = _module_prefix(card)
 
     for _, r in df_pick.iterrows():
         term_id = str(r["term_id"]).strip()
@@ -633,10 +673,10 @@ def _select_claims_deterministic(
             module_id = str(r.get("module_id")).strip()
 
         if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
-            # Deterministic fallback that matches modules.py identity shape: M{content_hash12}
-            # Use singleton module content: terms=[term_uid], genes=genes_full
+            # Deterministic fallback that matches modules.py identity shape:
+            # {prefix}{content_hash12}
             content_hash = _module_hash_like_modules_py([term_uid], genes_full)
-            module_id = f"M{content_hash}"
+            module_id = f"{mprefix}{content_hash}"
             module_reason = "missing_module_id"
             module_missing = True
 
@@ -669,6 +709,7 @@ def _select_claims_deterministic(
             "module_id": claim.evidence_ref.module_id,
             "module_missing": bool(module_missing),
             "module_reason": module_reason,
+            "module_prefix_effective": mprefix,
             "gene_ids": ",".join(claim.evidence_ref.gene_ids),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
@@ -683,6 +724,14 @@ def _select_claims_deterministic(
             "preselect_tau_gate": bool(preselect_tau_gate),
             "context_score_proxy": bool(enable_ctx_proxy),
             "select_notes": notes_common,
+            # machine-readable diagnostics
+            "select_diag_n_total": n_total,
+            "select_diag_n_eligible": n_eligible,
+            "select_diag_n_ineligible": n_ineligible,
+            "select_diag_n_picked": n_picked,
+            "select_diag_blocked_by_module_cap": int(blocked_by_module_cap),
+            "select_diag_k": int(k),
+            "select_diag_max_per_module": int(max_per_module),
         }
 
         if do_stress:
@@ -726,6 +775,9 @@ def select_claims(
     - mode="llm": LLM selects from top candidates but is post-validated against
       candidates (term_uid/entity/gene_set_hash) and MUST emit JSON; otherwise
       we fall back to deterministic output.
+
+    NOTE: stress_* columns emitted by deterministic mode are PROBES (measurements),
+    not final decisions. audit.py may convert WARN->ABSTAIN/FAIL depending on policy.
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
