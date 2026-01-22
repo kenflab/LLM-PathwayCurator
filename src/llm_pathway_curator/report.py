@@ -312,7 +312,7 @@ def write_report_jsonl(
 
     v1 compatibility:
       - Adds flat alias fields (schema_version, claim_id, decision, survival, etc.)
-        WITHOUT removing the nested 'claim'/'decision'/'metrics' objects.
+        WITHOUT removing the nested 'claim'/'decision_obj'/'metrics' objects.
 
     Required columns in audit_log:
       - status
@@ -327,9 +327,11 @@ def write_report_jsonl(
 
     _require_columns(audit_log, ["status", "claim_json", "term_survival_agg"], "audit_log")
 
-    df = _stringify_list_columns(audit_log)
+    # Make row-wise access stable even if audit_log index is non-consecutive.
+    audit0 = audit_log.reset_index(drop=True)
+    df = _stringify_list_columns(audit0)
 
-    surv_s = pd.to_numeric(audit_log["term_survival_agg"], errors="coerce")
+    surv_s = pd.to_numeric(audit0["term_survival_agg"], errors="coerce")
     if surv_s.isna().all():
         raise ValueError(
             "audit_log term_survival_agg is all-NA (upstream survival missing entirely; "
@@ -342,9 +344,7 @@ def write_report_jsonl(
         else None
     )
     stat_s = (
-        pd.to_numeric(audit_log.get("stat"), errors="coerce")
-        if "stat" in audit_log.columns
-        else None
+        pd.to_numeric(audit0.get("stat"), errors="coerce") if "stat" in audit0.columns else None
     )
 
     method_val = "llm-pathway-curator" if method is None else str(method).strip()
@@ -375,7 +375,7 @@ def write_report_jsonl(
         for i, row in df.iterrows():
             _ = _normalize_status(row.get("status", ""))
 
-            row_raw = audit_log.loc[i]
+            row_raw = audit0.loc[i]
             decision_obj = _decision_from_audit_row(row_raw)
 
             cj = str(row.get("claim_json", "") or "").strip()
@@ -411,6 +411,8 @@ def write_report_jsonl(
                 "tau": float(tau_val),
                 "species": species,
                 "claim": claim.model_dump(),
+                # Contract: nested decision object exists (stable for paper artifacts).
+                # Flat aliases still exist below for v1 compatibility.
                 "decision_obj": decision_obj.model_dump(),
                 "metrics": {
                     "term_survival_agg": surv_val,
@@ -660,7 +662,9 @@ def write_report(
                     "abstain_reason",
                     "gene_ids",
                     "gene_symbols",
-                    "gene_set_hash",
+                    "gene_set_hash_effective",
+                    "stress_evaluated",
+                    "stress_ok",
                     "term_survival_agg",
                     "context_score",
                     "audit_notes",
@@ -688,7 +692,7 @@ def write_report(
                     "fail_reason",
                     "gene_ids",
                     "gene_symbols",
-                    "gene_set_hash",
+                    "gene_set_hash_effective",
                     "audit_notes",
                 ],
             ),

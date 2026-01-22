@@ -129,16 +129,24 @@ def _ensure_float64_na_series(n: int) -> pd.Series:
     return pd.Series([pd.NA] * n, dtype="Float64")
 
 
-def _seed_for_term(seed: int | None, term_uid: str) -> int:
+def _ensure_int64_na_series(n: int) -> pd.Series:
+    """Int64 (nullable) NA-capable series of length n."""
+    return pd.Series([pd.NA] * n, dtype="Int64")
+
+
+def _seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = None) -> int:
     """
-    Order-invariant deterministic seed derived from (seed, term_uid).
-    Prevents dependence on row order / number of terms.
+    Order-invariant deterministic seed derived from (seed, term_uid, term_row_id).
+    term_row_id is included to avoid collisions when term_uid duplicates exist.
     """
     base = 0 if seed is None else int(seed)
     h = hashlib.blake2b(digest_size=8)
     h.update(str(base).encode("utf-8"))
     h.update(b"|")
     h.update(str(term_uid).encode("utf-8"))
+    if term_row_id is not None:
+        h.update(b"|")
+        h.update(str(int(term_row_id)).encode("utf-8"))
     return int.from_bytes(h.digest(), byteorder="little", signed=False)
 
 
@@ -179,10 +187,6 @@ def _get_distill_pre_gate_mode(card: SampleCard, default: str = "off") -> str:
       - "off" (default): do not change keep_term based on tau
       - "note": keep_term stays True, but keep_reason annotates low survival
       - "hard": keep_term=False when term_survival_agg < tau
-
-    Backward compat:
-      - If users already set distill_tau, they likely expected hard.
-        We still keep default off unless explicitly set.
     """
     v = _get_distill_knob(card, "pre_gate_mode", None)
     if v is None:
@@ -230,14 +234,13 @@ def _perturb_genes(
 
     rescue:
       - if True, enforce at least min_genes kept by adding back from originals
-      - if False, allow full dropout (stress is harsher; helps tau sweep)
+      - if False, allow full dropout
     """
     if not genes:
         return set()
 
     g_arr = np.array(genes, dtype=object)
 
-    # dropout
     keep_mask = rng.random(len(g_arr)) >= p_drop
     kept = g_arr[keep_mask].tolist()
 
@@ -255,7 +258,6 @@ def _perturb_genes(
 
     out = set([str(g) for g in kept if str(g).strip()])
 
-    # jitter/add: add genes NOT already in the original set, to actually model drift
     if p_add > 0.0 and gene_pool.size > 0:
         k_add = int(round(p_add * max(1, len(genes))))
         if k_add > 0:
@@ -267,7 +269,6 @@ def _perturb_genes(
                 add_genes = rng.choice(candidates, size=min(k_add, candidates.size), replace=False)
                 out.update([str(g) for g in add_genes.tolist()])
 
-    # normalize symbols
     out = set([_clean_gene_symbol(g) for g in out if str(g).strip()])
     return out
 
@@ -289,9 +290,6 @@ def _loo_survival_from_replicates(
         - term exists (same term_uid), and
         - direction matches baseline (optional), and
         - evidence_genes similarity to baseline passes gates (jaccard/recall/precision).
-
-    Returns a per-term_uid summary table with:
-      term_uid, term_survival_loo, loo_n_total, loo_n_ok
     """
     if "replicate_id" not in df.columns:
         raise ValueError("replicate_id column is required for replicates_proxy survival")
@@ -407,6 +405,10 @@ def distill_evidence(
 
     out = evidence.copy()
 
+    # Preserve raw index for error messages / provenance
+    if "raw_index" not in out.columns:
+        out = out.reset_index(drop=False).rename(columns={"index": "raw_index"})
+
     # If schema.py provided validity flags, respect them.
     if "is_valid" in out.columns:
         out = out[out["is_valid"].astype(bool)].copy()
@@ -422,33 +424,31 @@ def distill_evidence(
     out["qval"] = pd.to_numeric(out["qval"], errors="coerce")
 
     # Robust evidence_genes: prefer list-like, tolerate scalar strings
-    # Record provenance so downstream/report can show what happened.
     out["evidence_genes_was_list"] = out["evidence_genes"].map(
         lambda x: isinstance(x, (list, tuple, set))
     )
     out["evidence_genes"] = out["evidence_genes"].map(_split_genes_loose)
     out["n_evidence_genes"] = out["evidence_genes"].map(len)
 
-    # Validate core (distill should be strict by default; schema is expected to drop invalid rows)
+    # Validate core (distill should be strict by default)
     if out["stat"].isna().any():
         i = int(out.index[out["stat"].isna()][0])
-        bad = out.loc[i, ["term_id", "term_name", "source"]].to_dict()
-        raw_stat = evidence.loc[out.index[out["stat"].isna()][0], "stat"]
+        bad = out.loc[i, ["term_id", "term_name", "source", "raw_index"]].to_dict()
         raise ValueError(
-            f"distill_evidence: non-numeric stat at row index={i} (row={bad}, stat={raw_stat}). "
+            f"distill_evidence: non-numeric stat at row index={i} (row={bad}). "
             "Upstream must supply numeric stat (NES / -log10(q) / LogP)."
         )
 
     empty = out["n_evidence_genes"].eq(0)
     if empty.any():
         i = int(out.index[empty][0])
-        bad = out.loc[i, ["term_id", "term_name", "source"]].to_dict()
+        bad = out.loc[i, ["term_id", "term_name", "source", "raw_index"]].to_dict()
         raise ValueError(
             f"distill_evidence: empty evidence_genes at row index={i} (row={bad}). "
             "Upstream adapter/schema must supply overlap genes / leadingEdge, or drop invalid rows."
         )
 
-    # Optional masking (deterministic if masking is deterministic for a given seed)
+    # Optional masking
     masked = apply_gene_masking(out, genes_col="evidence_genes", seed=seed)
     out = masked.masked_distilled.copy()
 
@@ -492,7 +492,7 @@ def distill_evidence(
     p_min = min(max(float(p_min), 0.0), 1.0)
 
     # Always export knob provenance (report/audit can cite this)
-    out["distill_mode"] = distill_mode
+    out["distill_semantics"] = distill_mode
     out["distill_track_hash_drift"] = bool(drift_hash)
 
     # ===========================
@@ -518,7 +518,6 @@ def distill_evidence(
         out = out[out["replicate_id"].astype(str) == baseline_id].copy()
         out = out.reset_index(drop=True)
 
-        # survival provenance: input vs computed
         trust_input_survival = bool(_get_distill_knob(card, "trust_input_survival", False))
         out["distill_trust_input_survival"] = bool(trust_input_survival)
 
@@ -551,13 +550,14 @@ def distill_evidence(
         out["distill_loo_baseline_id"] = baseline_id
         out["distill_loo_direction_match"] = bool(direction_match)
 
-        out["distill_n_perturb"] = pd.NA
-        out["distill_gene_dropout_p"] = pd.NA
-        out["distill_gene_jitter_p"] = pd.NA
+        # use nullable ints/floats to avoid downstream type traps
+        out["distill_n_perturb"] = _ensure_int64_na_series(len(out))
+        out["distill_gene_dropout_p"] = _ensure_float64_na_series(len(out))
+        out["distill_gene_jitter_p"] = _ensure_float64_na_series(len(out))
 
-        out["distill_evidence_jaccard_min"] = j_min
-        out["distill_evidence_recall_min"] = r_min
-        out["distill_evidence_precision_min"] = p_min
+        out["distill_evidence_jaccard_min"] = float(j_min)
+        out["distill_evidence_recall_min"] = float(r_min)
+        out["distill_evidence_precision_min"] = float(p_min)
 
     else:
         # ===========================
@@ -568,7 +568,6 @@ def distill_evidence(
             all_genes.extend(xs)
         gene_pool = np.array(sorted(set(all_genes)), dtype=object)
 
-        # resolve fixed min genes once (do not re-read knobs inside loop)
         user_min_genes: int | None = None
         if user_min_genes_raw is not None:
             try:
@@ -585,8 +584,9 @@ def distill_evidence(
         base_hashes: list[str] = []
         drift_rate_list: list[float] = []
 
-        for tu, xs in zip(
+        for tu, rid, xs in zip(
             out["term_uid"].astype(str).tolist(),
+            out["term_row_id"].astype(int).tolist(),
             out["evidence_genes"].tolist(),
             strict=False,
         ):
@@ -602,7 +602,7 @@ def distill_evidence(
             else:
                 min_genes_eff = user_min_genes
 
-            rng_term = np.random.default_rng(_seed_for_term(seed, tu))
+            rng_term = np.random.default_rng(_seed_for_term(seed, tu, term_row_id=rid))
 
             ok = 0
             js: list[float] = []
@@ -621,7 +621,7 @@ def distill_evidence(
                 )
 
                 if drift_hash:
-                    pert_hash = _hash_gene_set_short12(sorted(list(pert)))
+                    pert_hash = _hash_gene_set_short12(list(pert))
                     if pert_hash != base_hash:
                         drift_n += 1
 
@@ -671,13 +671,13 @@ def distill_evidence(
             out["term_hash_drift_rate"] = _ensure_float64_na_series(len(out))
 
         out["distill_loo_is_proxy"] = False
-        out["distill_n_perturb"] = n_reps
-        out["distill_gene_dropout_p"] = p_drop
-        out["distill_gene_jitter_p"] = p_add
-        out["distill_evidence_jaccard_min"] = j_min
-        out["distill_evidence_recall_min"] = r_min
-        out["distill_evidence_precision_min"] = p_min
-        out["distill_min_keep_frac"] = min_keep_frac
+        out["distill_n_perturb"] = pd.Series([n_reps] * len(out), dtype="Int64")
+        out["distill_gene_dropout_p"] = pd.Series([p_drop] * len(out), dtype="Float64")
+        out["distill_gene_jitter_p"] = pd.Series([p_add] * len(out), dtype="Float64")
+        out["distill_evidence_jaccard_min"] = float(j_min)
+        out["distill_evidence_recall_min"] = float(r_min)
+        out["distill_evidence_precision_min"] = float(p_min)
+        out["distill_min_keep_frac"] = float(min_keep_frac)
         out["distill_min_evidence_genes_effective"] = (
             pd.NA if user_min_genes is None else int(user_min_genes)
         )
@@ -712,10 +712,7 @@ def distill_evidence(
                 out.loc[unstable, "keep_reason"] = "low_term_survival_agg"
             elif pre_gate_mode == "note":
                 out.loc[unstable, "keep_reason"] = "low_term_survival_agg(note)"
-            else:
-                pass
         except Exception:
-            # do not explode on tau parse errors; keep distill deterministic and safe
             pass
 
     return out

@@ -30,7 +30,12 @@ NORMALIZED_COLS = [
     "evidence_genes",
 ]
 
+# Gene-like token heuristic for whitespace-separated lists (fallback path).
+# Keep conservative to avoid destructive split.
+_GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
 # Keep aliases conservative but cover common real-world headers.
+# IMPORTANT: keys should be in the post-normalized form (lower, spaces/hyphens -> underscores).
 ALIASES = {
     # -------------------------
     # term id/name
@@ -39,10 +44,6 @@ ALIASES = {
     "termid": "term_id",
     "term_id": "term_id",
     "id": "term_id",
-    # "pathway": "term_id",
-    # "geneset": "term_id",
-    # "gene_set": "term_id",
-    # "set": "term_id",
     "term_identifier": "term_id",
     "termid_": "term_id",
     # names/descriptions
@@ -70,12 +71,12 @@ ALIASES = {
     "logp": "stat",
     "log_p": "stat",
     "log(p)": "stat",
-    "-log10p": "stat",
-    "-log10_p": "stat",
-    "-log10(p)": "stat",
-    "-log10q": "stat",
-    "-log10_q": "stat",
-    "-log10(q)": "stat",
+    "_log10p": "stat",
+    "_log10_p": "stat",
+    "_log10(p)": "stat",
+    "_log10q": "stat",
+    "_log10_q": "stat",
+    "_log10(q)": "stat",
     "logq": "stat",
     "log(q)": "stat",
     "log_q": "stat",
@@ -84,7 +85,6 @@ ALIASES = {
     # -------------------------
     "qval": "qval",
     "q_value": "qval",
-    "q-value": "qval",
     "qvalue": "qval",
     "fdr": "qval",
     "fdr_q": "qval",
@@ -96,7 +96,7 @@ ALIASES = {
     # some tools only export p-value; we map to pval then (optionally) to qval
     "pval": "pval",
     "p_value": "pval",
-    "p-value": "pval",
+    "pvalue": "pval",
     "p": "pval",
     # -------------------------
     # direction
@@ -105,20 +105,17 @@ ALIASES = {
     "dir": "direction",
     "sign": "direction",
     # -------------------------
-    # evidence genes
+    # evidence genes (common EA exports)
     # -------------------------
     "leadingedge": "evidence_genes",
     "leading_edge": "evidence_genes",
-    "leading edge": "evidence_genes",
     "leadingedgegenes": "evidence_genes",
     "core_enrichment": "evidence_genes",
-    "core enrichment": "evidence_genes",
     "genes": "evidence_genes",
     "gene": "evidence_genes",
     "symbols": "evidence_genes",
     "overlap": "evidence_genes",
     "overlap_genes": "evidence_genes",
-    "overlap genes": "evidence_genes",
     # -------------------------
     # optional flags (not required; used to tolerate summary rows)
     # -------------------------
@@ -235,10 +232,10 @@ class EvidenceTable:
                 parts = s.split(",")
             else:
                 # Space-separated fallback ONLY if all tokens look gene-like.
-                parts0 = s.split(" ")
                 import re
 
-                gene_tok = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+                gene_tok = re.compile(_GENE_TOKEN_RE)
+                parts0 = s.split(" ")
                 if parts0 and all(bool(gene_tok.match(tok)) for tok in parts0):
                     parts = parts0
                 else:
@@ -298,8 +295,8 @@ class EvidenceTable:
         Read an evidence table and normalize it to the tool-facing contract.
 
         strict:
-          - if True, any invalid row triggers ValueError (old behavior).
-          - if False (default), invalid rows are optionally dropped with provenance.
+          - if True, any invalid row triggers ValueError.
+          - if False (default), invalid rows are optionally dropped or marked.
 
         drop_invalid:
           - if True (default), drop rows that violate term×gene (empty evidence_genes),
@@ -331,8 +328,8 @@ class EvidenceTable:
             df["source"] = "unknown"
 
         # qval / pval (best-effort)
-        qval_in_input = "qval" in cols_mapped
-        pval_in_input = "pval" in cols_mapped
+        qval_in_input = "qval" in df.columns
+        pval_in_input = "pval" in df.columns
 
         if "qval" not in df.columns:
             df["qval"] = pd.NA
@@ -397,7 +394,7 @@ class EvidenceTable:
         #   - "missing": neither qval nor pval available
         df["qval_source"] = "missing"
 
-        # mark provided qvals
+        # mark provided qvals (row-wise)
         if qval_in_input:
             df.loc[~df["qval"].isna(), "qval_source"] = "qval"
 
@@ -408,12 +405,12 @@ class EvidenceTable:
             if m == 0:
                 return pd.Series([pd.NA] * len(p), index=p.index, dtype="float64")
 
-            # ranks among non-NA
             p_non = p.dropna()
             order = p_non.sort_values().index
-            ranks = pd.Series(range(1, len(order) + 1), index=order, dtype="float64")
 
+            ranks = pd.Series(range(1, len(order) + 1), index=order, dtype="float64")
             q_non = p_non.loc[order] * (m / ranks.loc[order])
+
             # enforce monotonicity
             q_non = q_non.iloc[::-1].cummin().iloc[::-1]
             q_non = q_non.clip(lower=0.0, upper=1.0)
@@ -429,7 +426,6 @@ class EvidenceTable:
         needs_q = needs_q & (df["source"].astype(str).str.strip() != "unknown")
 
         if needs_q.any():
-            # conservative grouping: source × direction
             group_cols = ["source", "direction"]
             for _, idx in df.loc[needs_q].groupby(group_cols).groups.items():
                 idx = list(idx)
@@ -437,18 +433,25 @@ class EvidenceTable:
                 df.loc[idx, "qval"] = q_calc
                 df.loc[idx, "qval_source"] = "bh(pval)"
 
-        # provenance flags (stable, downstream-friendly)
+        # provenance flags (row-wise, downstream-friendly)
         df["qval_provided"] = df["qval_source"].eq("qval")
-        df["pval_provided"] = pval_in_input
+
+        # pval provenance: whether pval was present in input AND non-missing per row
+        df["pval_source"] = "missing"
+        if pval_in_input:
+            df.loc[~df["pval"].isna(), "pval_source"] = "pval"
+        df["pval_provided"] = df["pval_source"].eq("pval")
 
         # ---- required sanity checks ----
         bad_required = df["term_id"].eq("") | df["term_name"].eq("")
         if bad_required.any():
             i = int(df.index[bad_required][0])
+            bad = df.loc[i].to_dict()
             raise ValueError(
                 f"EvidenceTable has empty required fields at row index={i}. "
                 f"read_mode={rr.read_mode}. "
-                "Fix: ensure term_id/term_name are non-empty."
+                "Fix: ensure term_id/term_name are non-empty. "
+                f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
             )
 
         if df["stat"].isna().any():
@@ -457,7 +460,8 @@ class EvidenceTable:
             raise ValueError(
                 f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
                 f"read_mode={rr.read_mode}. "
-                "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP)."
+                "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP). "
+                "Tip: check your input column mapped to 'stat'."
             )
 
         # ---- enforce term×gene contract (tolerate + drop/mark invalid) ----
@@ -467,8 +471,9 @@ class EvidenceTable:
         empty_ev = df["evidence_genes"].map(len).eq(0)
 
         # Summary rows are common in ORA exports; they often have no gene list.
-        # We never pass empty gene evidence downstream; we either drop or mark invalid.
         invalid_mask = empty_ev
+        n_invalid_empty_ev = int(invalid_mask.sum())
+
         if invalid_mask.any():
             df.loc[invalid_mask, "is_valid"] = False
             df.loc[invalid_mask, "invalid_reason"] = "EMPTY_EVIDENCE_GENES"
@@ -489,19 +494,18 @@ class EvidenceTable:
         # provenance
         df.attrs["read_mode"] = rr.read_mode
 
-        # provenance / health hints (paper-facing)
-        genes_n = (
-            df["evidence_genes"].map(len)
-            if "evidence_genes" in df.columns
-            else pd.Series([], dtype=int)
-        )
+        # provenance / health hints (tool-facing; stable)
+        genes_n = df["evidence_genes"].map(len)
         df.attrs["health"] = {
             "n_terms": int(df.shape[0]),
-            "n_terms_genes_le1": int((genes_n <= 1).sum()) if len(genes_n) else 0,
+            "n_terms_genes_le1": int((genes_n <= 1).sum()),
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
             "qval_source_counts": df["qval_source"].value_counts(dropna=False).to_dict()
             if "qval_source" in df.columns
             else {},
+            "n_invalid_empty_evidence_genes": int(n_invalid_empty_ev),
+            "drop_invalid": bool(drop_invalid),
+            "strict": bool(strict),
         }
 
         return cls(df=df)
@@ -522,6 +526,7 @@ class EvidenceTable:
             "qval_source_counts": df["qval_source"].value_counts(dropna=False).to_dict()
             if "qval_source" in df.columns
             else {},
+            "health": df.attrs.get("health", {}),
         }
 
     def write_tsv(self, path: str) -> None:
@@ -529,7 +534,7 @@ class EvidenceTable:
 
         # robust stringify: handle both list-like and scalar strings
         if "evidence_genes_str" in out.columns:
-            ev_str = out["evidence_genes_str"]
+            ev_str = out["evidence_genes_str"].astype(str)
         else:
 
             def _stringify(x: object) -> str:
@@ -539,9 +544,10 @@ class EvidenceTable:
                     return ",".join([str(g) for g in x])
                 return str(x)
 
-            ev_str = (
-                out["evidence_genes"].map(_stringify) if "evidence_genes" in out.columns else ""
-            )
+            if "evidence_genes" in out.columns:
+                ev_str = out["evidence_genes"].map(_stringify)
+            else:
+                ev_str = pd.Series([""] * len(out), index=out.index)
 
         out = out.drop(columns=["evidence_genes"], errors="ignore")
         out["evidence_genes"] = ev_str

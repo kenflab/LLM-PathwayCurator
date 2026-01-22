@@ -103,33 +103,44 @@ def build_term_gene_edges(
     term_id_col: str = "term_uid",
     genes_col: str = "evidence_genes",
 ) -> pd.DataFrame:
+    """
+    Build (term_uid, gene_id, weight) edges from evidence_df.
+
+    Performance policy:
+      - Prefer vectorized explode for list-like evidence_genes.
+      - Fall back to tolerant parsing for scalar strings (legacy inputs).
+    """
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col} (hint: run distill first to add term_uid)")
     if genes_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {genes_col}")
 
-    rows: list[tuple[str, str, float]] = []
+    df = evidence_df[[term_id_col, genes_col]].copy()
+    df[term_id_col] = df[term_id_col].astype(str).str.strip()
+    df = df[df[term_id_col].ne("")].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
 
-    for _, r in evidence_df[[term_id_col, genes_col]].iterrows():
-        term_uid = str(r[term_id_col]).strip()
-        if not term_uid:
-            continue
+    # Normalize genes to list[str] (vectorized for list-like, fallback for scalars)
+    def _to_list(x: object) -> list[str]:
+        if isinstance(x, (list, tuple, set)):
+            genes = [_norm_gene_id(g) for g in x]
+            return [g for g in genes if g]
+        return _parse_genes_fallback(x)
 
-        genes = r[genes_col]
+    df["_genes_list"] = df[genes_col].map(_to_list)
+    df = df[df["_genes_list"].map(len).gt(0)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
 
-        # Preferred contract: list-like (post-schema/post-distill)
-        if isinstance(genes, (list, tuple, set)):
-            genes_list = [_norm_gene_id(g) for g in genes]
-            genes_list = [g for g in genes_list if g]
-        else:
-            genes_list = _parse_genes_fallback(genes)
-
-        for g in genes_list:
-            rows.append((term_uid, g, 1.0))
-
-    edges = pd.DataFrame(rows, columns=["term_uid", "gene_id", "weight"])
+    edges = df[[term_id_col, "_genes_list"]].explode("_genes_list", ignore_index=True)
+    edges = edges.rename(columns={term_id_col: "term_uid", "_genes_list": "gene_id"})
+    edges["gene_id"] = edges["gene_id"].astype(str).map(_norm_gene_id)
+    edges = edges[edges["gene_id"].ne("")].copy()
     if edges.empty:
         return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+
+    edges["weight"] = 1.0
 
     edges = (
         edges.groupby(["term_uid", "gene_id"], as_index=False)["weight"]
@@ -160,7 +171,11 @@ def filter_hub_genes(
         max_gene_term_degree = max_term_degree
 
     if edges.empty or max_gene_term_degree is None:
-        return edges
+        out = edges.reset_index(drop=True)
+        out.attrs.setdefault(
+            "hub_filter", {"max_gene_term_degree": max_gene_term_degree, "n_hubs": 0}
+        )
+        return out
 
     if "gene_id" not in edges.columns or "term_uid" not in edges.columns:
         raise ValueError("filter_hub_genes: edges must have columns term_uid, gene_id")
@@ -365,20 +380,38 @@ def factorize_modules_connected_components(
       - module_terms_hash12, module_genes_hash12, module_content_hash12
       - module_id uses module_content_hash12 (prefix + hash)
     """
-    edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
+    if module_prefix is None:
+        module_prefix = "M"
+    module_prefix = str(module_prefix).strip() or "M"
 
-    if not edges.empty:
-        edges = edges.copy()
-        edges["gene_term_degree"] = edges.groupby("gene_id")["term_uid"].transform("nunique")
-        edges["term_gene_degree"] = edges.groupby("term_uid")["gene_id"].transform("nunique")
+    requested_method: str = str(method)
+
+    edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
 
     edges_f = filter_hub_genes(
         edges, max_gene_term_degree=max_gene_term_degree, max_term_degree=max_term_degree
     )
 
+    # recompute degrees on FILTERED edges for consistency/debuggability
+    if not edges_f.empty:
+        edges_f = edges_f.copy()
+        edges_f["gene_term_degree"] = edges_f.groupby("gene_id")["term_uid"].transform("nunique")
+        edges_f["term_gene_degree"] = edges_f.groupby("term_uid")["gene_id"].transform("nunique")
+
     hub_meta = edges_f.attrs.get("hub_filter", {}) if hasattr(edges_f, "attrs") else {}
     hub_max = hub_meta.get("max_gene_term_degree", max_gene_term_degree)
     hub_n = hub_meta.get("n_hubs", 0)
+
+    # initialize provenance early
+    edges_f.attrs.setdefault("modules", {})
+    edges_f.attrs["modules"].update(
+        {
+            "requested_method": requested_method,
+            "effective_method": None,
+            "min_shared_genes": int(min_shared_genes),
+            "jaccard_min": float(jaccard_min),
+        }
+    )
 
     if edges_f.empty:
         modules_df = pd.DataFrame(
@@ -402,11 +435,20 @@ def factorize_modules_connected_components(
             ]
         )
         term_modules_df = pd.DataFrame(columns=["term_uid", "module_id"])
+        edges_f.attrs["modules"]["effective_method"] = "none_empty_edges"
         return ModuleOutputs(
             modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f
         )
 
     term_to_genes = _build_term_gene_sets(edges_f)
+
+    # record pairwise safety info (even if we don't use it)
+    n_terms = int(len(term_to_genes))
+    n_pairs_est = int(n_terms * (n_terms - 1) / 2)
+    edges_f.attrs["modules"].update({"n_terms": n_terms, "n_pairs_est": n_pairs_est})
+
+    effective_method: str = requested_method
+    buckets: list[tuple[int, list[str], list[str]]] = []
 
     if method == "bipartite_cc":
         nodes = _connected_components_from_bipartite_edges(edges_f)
@@ -428,10 +470,9 @@ def factorize_modules_connected_components(
             )
 
         buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
+        effective_method = "bipartite_cc"
 
     elif method == "term_jaccard_cc":
-        # Conservative default guard (paper+tool safety).
-        # 1200 -> ~720k pairs, still heavy but less likely to timeout.
         max_terms_for_pairwise = 1200
         try:
             max_terms_for_pairwise = int(
@@ -439,13 +480,15 @@ def factorize_modules_connected_components(
             )
         except Exception:
             pass
+        edges_f.attrs["modules"]["max_terms_for_pairwise"] = int(max_terms_for_pairwise)
 
-        if len(term_to_genes) > max_terms_for_pairwise:
+        if n_terms > int(max_terms_for_pairwise):
+            # fallback to bipartite CC and RECORD it truthfully
             nodes = _connected_components_from_bipartite_edges(edges_f)
             comp_ids = sorted(nodes["component"].unique().tolist())
 
-            term_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
-            gene_lists: dict[int, list[str]] = {c: [] for c in comp_ids}
+            term_lists = {c: [] for c in comp_ids}
+            gene_lists = {c: [] for c in comp_ids}
 
             tdf = nodes[nodes["kind"].eq("term")].copy()
             for cid, g in tdf.groupby("component"):
@@ -460,15 +503,13 @@ def factorize_modules_connected_components(
                 )
 
             buckets = [(cid, term_lists.get(cid, []), gene_lists.get(cid, [])) for cid in comp_ids]
+            effective_method = "bipartite_cc"
 
-            edges_f.attrs.setdefault("modules", {})
             edges_f.attrs["modules"].update(
                 {
-                    "method": "term_jaccard_cc_fallback_bipartite_cc",
-                    "reason": f"n_terms>{max_terms_for_pairwise}",
-                    "min_shared_genes": int(min_shared_genes),
-                    "jaccard_min": float(jaccard_min),
-                    "max_terms_for_pairwise": int(max_terms_for_pairwise),
+                    "effective_method": "bipartite_cc",
+                    "fallback_from": "term_jaccard_cc",
+                    "fallback_reason": f"n_terms>{max_terms_for_pairwise}",
                 }
             )
         else:
@@ -479,7 +520,6 @@ def factorize_modules_connected_components(
             )
             comp_ids = sorted(set(comp_map.values()))
 
-            buckets = []
             for cid in comp_ids:
                 terms = sorted([t for t, c in comp_map.items() if c == cid])
                 genes_union: set[str] = set()
@@ -487,8 +527,15 @@ def factorize_modules_connected_components(
                     genes_union |= set(term_to_genes.get(t, set()))
                 genes = sorted([g for g in genes_union if str(g).strip()])
                 buckets.append((cid, terms, genes))
+
+            effective_method = "term_jaccard_cc"
+            edges_f.attrs["modules"]["effective_method"] = "term_jaccard_cc"
     else:
         raise ValueError(f"Unknown method: {method}")
+
+    # If we didn't set effective_method above (non-fallback path), set it now.
+    if edges_f.attrs["modules"].get("effective_method") is None:
+        edges_f.attrs["modules"]["effective_method"] = str(effective_method)
 
     # --- ensure every term gets a module (singleton for isolated terms) ---
     all_terms = sorted(set(edges_f["term_uid"].astype(str).tolist()))
@@ -509,7 +556,6 @@ def factorize_modules_connected_components(
     hashed: list[tuple[str, list[str], list[str], str, str]] = []
     for _, terms, genes in buckets:
         terms_clean = [str(x).strip() for x in terms if str(x).strip()]
-        # normalize genes for stable identity
         genes_clean = [_norm_gene_id(x) for x in genes if str(x).strip()]
         genes_clean = [g for g in genes_clean if g]
 
@@ -544,7 +590,9 @@ def factorize_modules_connected_components(
                 "term_ids": terms,
                 "rep_gene_ids_str": ",".join(rep),
                 "term_ids_str": ",".join(terms),
-                "module_method": method,
+                "module_method": str(
+                    edges_f.attrs["modules"].get("effective_method", effective_method)
+                ),
                 "module_min_shared_genes": int(min_shared_genes),
                 "module_jaccard_min": float(jaccard_min),
                 "hub_filter_max_gene_term_degree": int(hub_max) if hub_max is not None else pd.NA,
@@ -575,16 +623,6 @@ def factorize_modules_connected_components(
         pd.DataFrame(modules_rows)
         .sort_values(["module_rank", "module_id"], kind="mergesort")
         .reset_index(drop=True)
-    )
-
-    # record provenance (do not clobber fallback provenance)
-    edges_f.attrs.setdefault("modules", {})
-    edges_f.attrs["modules"].update(
-        {
-            "method": method,
-            "min_shared_genes": int(min_shared_genes),
-            "jaccard_min": float(jaccard_min),
-        }
     )
 
     return ModuleOutputs(modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f)
