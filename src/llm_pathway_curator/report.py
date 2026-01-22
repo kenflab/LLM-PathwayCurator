@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover
     risk_coverage_curve = None
     risk_coverage_from_status = None
 
+from .utils import build_id_to_symbol_from_distilled, load_id_map_tsv, map_ids_to_symbols
 
 # -----------------------------
 # Small helpers (stable)
@@ -71,9 +72,14 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     TSV-safe conversion for list-like columns.
     - If a <col>_str already exists, prefer it.
-    - Otherwise stringify list/tuple/set as comma-joined.
+    - Otherwise stringify list/tuple/set as separator-joined.
     - Scalar NA -> "" to stabilize artifacts.
+
+    IMPORTANT:
+      Use ';' as the list separator to reduce Excel auto-formatting risk.
     """
+    LIST_SEP = ";"
+
     out = df.copy()
     for c in list(out.columns):
         if c.endswith("_str"):
@@ -87,7 +93,7 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
             sample = s.dropna().head(20).tolist()
             if any(isinstance(x, (list, tuple, set)) for x in sample):
                 out[c_str] = s.map(
-                    lambda x: ",".join(map(str, x))
+                    lambda x: LIST_SEP.join(map(str, x))
                     if isinstance(x, (list, tuple, set))
                     else ("" if _is_na_scalar(x) else str(x))
                 )
@@ -96,6 +102,43 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
         else:
             out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
     return out
+
+
+def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
+    """
+    Make an ID field safe for Excel:
+      - Accept list-like or scalar.
+      - Treat ',', ';', '|', whitespace as separators.
+      - Normalize to list_sep.
+      - Prefix with a single quote to force Text in Excel.
+    """
+    if _is_na_scalar(x):
+        return ""
+
+    # If already list-like, join directly.
+    if isinstance(x, (list, tuple, set)):
+        parts = [str(t).strip() for t in x if str(t).strip()]
+        s = list_sep.join(parts)
+        return s if not s else ("'" + s if not s.startswith("'") else s)
+
+    s0 = str(x).strip()
+    if not s0 or s0.lower() in {t.lower() for t in _NA_TOKENS}:
+        return ""
+
+    # Normalize all common separators to ';'
+    s = (
+        s0.replace("|", ";")
+        .replace(",", ";")
+        .replace("\t", ";")
+        .replace("\n", ";")
+        .replace(" ", ";")
+    )
+    parts = [p.strip() for p in s.split(";") if p.strip()]
+    s_norm = list_sep.join(parts)
+
+    if not s_norm:
+        return ""
+    return s_norm if s_norm.startswith("'") else ("'" + s_norm)
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
@@ -310,16 +353,13 @@ def write_report_jsonl(
     default_cancer = str(cancer or getattr(card, "cancer", None) or "").strip()
     default_comparison = str(comparison or getattr(card, "comparison", None) or "").strip()
 
-    # v1 contract stamp (paper artifact)
     schema_version = _get_schema_version(card, default="v1")
 
-    # context VALUES (needed for v1 alias columns)
     ctx_disease = str(getattr(card, "disease", "") or "").strip()
     ctx_tissue = str(getattr(card, "tissue", "") or "").strip()
     ctx_pert = str(getattr(card, "perturbation", "") or "").strip()
     ctx_comp = str(getattr(card, "comparison", "") or "").strip()
 
-    # optional species stamp (non-breaking)
     species = ""
     try:
         extra = getattr(card, "extra", {}) or {}
@@ -335,7 +375,6 @@ def write_report_jsonl(
         for i, row in df.iterrows():
             _ = _normalize_status(row.get("status", ""))
 
-            # IMPORTANT: decision is derived from RAW audit_log row (preserve NA semantics)
             row_raw = audit_log.loc[i]
             decision_obj = _decision_from_audit_row(row_raw)
 
@@ -353,7 +392,6 @@ def write_report_jsonl(
             if stat_s is not None:
                 stat_val = _to_float_or_none(stat_s.loc[i])
 
-            # prefer explicit disease fields; keep cancer as alias for backward compatibility
             disease_key = str(
                 _get_first_present(row, ["disease"])
                 or ctx_disease
@@ -363,14 +401,11 @@ def write_report_jsonl(
 
             comp_val = str(default_comparison or row.get("comparison", "") or "").strip()
 
-            # -------------------------
-            # V2 nested objects (kept)
-            # -------------------------
             rec: dict[str, Any] = {
                 "created_at": created_at,
                 "run_id": str(run_id),
                 "method": method_val,
-                "disease": disease_key,  # v2 official
+                "disease": disease_key,
                 "cancer": disease_key,  # v1 alias
                 "comparison": comp_val,
                 "tau": float(tau_val),
@@ -381,7 +416,6 @@ def write_report_jsonl(
                     "term_survival_agg": surv_val,
                     "context_score": ctx_val,
                     "stat": stat_val,
-                    # ADD: audit-derived effective fields (stable + useful for Fig2)
                     "tau_used": _to_float_or_none(row_raw.get("tau_used")),
                     "stability_scope": str(row_raw.get("stability_scope") or "").strip(),
                     "module_id_effective": str(row_raw.get("module_id_effective") or "").strip(),
@@ -389,13 +423,9 @@ def write_report_jsonl(
                         row_raw.get("gene_set_hash_effective") or ""
                     ).strip(),
                 },
-                # -------------------------
-                # v1 compatibility aliases (ADD ONLY)
-                # -------------------------
                 "schema_version": schema_version,
                 "claim_id": str(getattr(claim, "claim_id", "") or "").strip(),
                 "decision_status": str(getattr(decision_obj, "status", "") or "").strip(),
-                # some parsers expect a column named exactly "decision"
                 "decision": str(getattr(decision_obj, "status", "") or "").strip(),
                 "survival": surv_val,
                 "claim.entity_type": "term",
@@ -403,7 +433,6 @@ def write_report_jsonl(
                 "claim.context.disease": ctx_disease,
                 "claim.context.tissue": ctx_tissue,
                 "claim.context.perturbation": ctx_pert,
-                # prefer card.comparison (context value); fall back to record comparison
                 "claim.context.comparison": ctx_comp or comp_val,
                 "evidence_refs.gene_set_hash": str(
                     getattr(getattr(claim, "evidence_ref", None), "gene_set_hash", "") or ""
@@ -425,14 +454,73 @@ def write_report(
 ) -> None:
     """
     Human-facing report.md + TSV artifacts.
+
     Note:
       - This function does NOT write report.jsonl.
       - JSONL export is explicit via write_report_jsonl(...).
+      - gene symbol mapping here is DISPLAY-ONLY and does not affect auditing.
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    audit_out = _stringify_list_columns(audit_log)
+    # -------------------------
+    # Display-only symbol mapping (best-effort, reproducible, no network)
+    # -------------------------
+    id2sym_distilled = build_id_to_symbol_from_distilled(distilled)
+
+    id2sym_user: dict[str, str] = {}
+    try:
+        ex = getattr(card, "extra", {}) or {}
+        map_path = ex.get("gene_id_map_tsv", None) if isinstance(ex, dict) else None
+        if map_path:
+            id2sym_user = load_id_map_tsv(map_path)
+    except Exception:
+        id2sym_user = {}
+
+    id2sym = {**id2sym_distilled, **id2sym_user}
+
+    audit_out = audit_log.copy()
+
+    # -------------------------
+    # Make ID columns Excel-safe BEFORE exporting
+    # -------------------------
+    # This prevents Excel from interpreting "4033,7062,..." as a huge number
+    # (or scientific notation).
+    if "gene_ids" in audit_out.columns:
+        audit_out["gene_ids"] = audit_out["gene_ids"].map(_excel_safe_ids)
+        audit_out["gene_ids_str"] = audit_out["gene_ids"]
+
+    if "gene_ids_str" in audit_out.columns:
+        audit_out["gene_ids_str"] = audit_out["gene_ids_str"].map(_excel_safe_ids)
+        audit_out["gene_ids"] = audit_out.get("gene_ids", audit_out["gene_ids_str"]).map(
+            _excel_safe_ids
+        )
+
+    # Optional: term_ids can also look like structured tokens; keep safe anyway
+    if "term_ids" in audit_out.columns:
+        audit_out["term_ids"] = audit_out["term_ids"].map(_excel_safe_ids)
+        audit_out["term_ids_str"] = audit_out["term_ids"]
+
+    if "term_ids_str" in audit_out.columns:
+        audit_out["term_ids_str"] = audit_out["term_ids_str"].map(_excel_safe_ids)
+        audit_out["term_ids"] = audit_out.get("term_ids", audit_out["term_ids_str"]).map(
+            _excel_safe_ids
+        )
+
+    # -------------------------
+    # Add display-only gene symbols
+    # -------------------------
+    if ("gene_ids" in audit_out.columns) or ("gene_ids_str" in audit_out.columns):
+        src = "gene_ids_str" if "gene_ids_str" in audit_out.columns else "gene_ids"
+        s = audit_out[src].map(lambda x: "" if _is_na_scalar(x) else str(x))
+        syms = s.map(lambda x: map_ids_to_symbols(x, id2sym))
+        audit_out["gene_symbols"] = syms
+        audit_out["gene_symbols_str"] = syms.map(
+            lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
+        )
+
+    # stringify after we create *_str columns
+    audit_out = _stringify_list_columns(audit_out)
     dist_out = _stringify_list_columns(distilled)
 
     audit_tsv = out_path / "audit_log.tsv"
@@ -538,6 +626,7 @@ def write_report(
                     "module_id_effective",
                     "term_ids",
                     "gene_ids",
+                    "gene_symbols",
                     "gene_set_hash_effective",
                     "evidence_key",
                     "term_ids_set_hash",
@@ -569,6 +658,8 @@ def write_report(
                     "direction",
                     "module_id_effective",
                     "abstain_reason",
+                    "gene_ids",
+                    "gene_symbols",
                     "gene_set_hash",
                     "term_survival_agg",
                     "context_score",
@@ -595,6 +686,8 @@ def write_report(
                     "direction",
                     "module_id_effective",
                     "fail_reason",
+                    "gene_ids",
+                    "gene_symbols",
                     "gene_set_hash",
                     "audit_notes",
                 ],

@@ -509,8 +509,14 @@ def _select_claims_deterministic(
     if enable_ctx_proxy:
         toks = _context_tokens(card)
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
+        df["context_evaluated"] = True
     else:
-        df["context_score"] = 0
+        # IMPORTANT: OFF => NOT evaluated. Use NA (not 0) to avoid hard-gate collapse downstream.
+        df["context_score"] = pd.NA
+        df["context_evaluated"] = False
+
+    # sorting helper (stable rank even with NA)
+    df["context_score_sort"] = pd.to_numeric(df["context_score"], errors="coerce").fillna(-1)
 
     # ---- Evidence hygiene gates ----
     if "keep_term" in df.columns:
@@ -553,7 +559,7 @@ def _select_claims_deterministic(
 
     # ---- rank all candidates first ----
     df_ranked = df.sort_values(
-        ["eligible", "term_survival_sort", "stat", "context_score", "term_uid"],
+        ["eligible", "term_survival_sort", "stat", "context_score_sort", "term_uid"],
         ascending=[False, False, False, False, True],
     ).copy()
 
@@ -666,7 +672,9 @@ def _select_claims_deterministic(
             "gene_ids": ",".join(claim.evidence_ref.gene_ids),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
-            "context_score": int(r.get("context_score", 0)),
+            # context fields (evaluation-aware; used by audit.py)
+            "context_score": r.get("context_score", pd.NA),
+            "context_evaluated": bool(r.get("context_evaluated", False)),
             "eligible": bool(r.get("eligible", True)),
             "term_survival": r.get("term_survival", pd.NA),
             "keep_term": bool(r.get("keep_term", True)),

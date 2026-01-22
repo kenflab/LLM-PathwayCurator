@@ -206,7 +206,7 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
     return _as_bool(v, default=bool(default))
 
 
-def _get_context_gate_mode(card: SampleCard, default: str = "hard") -> str:
+def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
     Tool contract (user-facing):
       - "off": ignore context gate
@@ -214,6 +214,10 @@ def _get_context_gate_mode(card: SampleCard, default: str = "hard") -> str:
       - "hard": context nonspecific => ABSTAIN_CONTEXT_NONSPECIFIC
     Backward compat:
       - "abstain" => "hard"
+
+    NOTE:
+      Default is "note" (safe). "hard" as default can zero-out coverage
+      when context is not evaluated upstream.
     """
     if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
         try:
@@ -230,7 +234,13 @@ def _get_context_gate_mode(card: SampleCard, default: str = "hard") -> str:
         return "note"
     if s in {"abstain"}:
         return "hard"
-    return "hard"
+    if s in {"hard"}:
+        return "hard"
+    # unknown -> default
+    d = str(default).strip().lower()
+    if d in {"off", "note", "hard"}:
+        return d
+    return "note"
 
 
 def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
@@ -289,6 +299,11 @@ def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
         return "note"
     if s in {"abstain"}:
         return "hard"
+    if s in {"hard"}:
+        return "hard"
+    d = str(default).strip().lower()
+    if d in {"off", "note", "hard"}:
+        return d
     return "hard"
 
 
@@ -357,6 +372,74 @@ def _extract_direction_from_claim_json(cj: str) -> str:
     if s in {"up", "down"}:
         return s
     return "na"
+
+
+def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
+    """
+    Determine whether context was evaluated upstream.
+
+    Priority:
+      1) explicit boolean column: context_evaluated
+      2) explicit status column: context_status in {PASS,ABSTAIN,FAIL}
+      3) numeric context_score present and not NA => evaluated
+    Returns: (evaluated, note)
+    """
+    if "context_evaluated" in row.index:
+        v = row.get("context_evaluated")
+        if _is_na_scalar(v):
+            return (False, "context_evaluated=NA")
+        try:
+            return (bool(v), f"context_evaluated={bool(v)}")
+        except Exception:
+            return (False, "context_evaluated invalid")
+
+    if "context_status" in row.index:
+        st = _norm_status(row.get("context_status"))
+        if st in {"PASS", "ABSTAIN", "FAIL"}:
+            return (True, f"context_status={st}")
+        if not st:
+            return (False, "context_status missing")
+        return (False, f"context_status unknown={st}")
+
+    if "context_score" in row.index:
+        cs_raw = row.get("context_score")
+        try:
+            cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
+        except Exception:
+            cs = None
+        if cs is None:
+            return (False, "context_score missing")
+        return (True, "context_score present")
+
+    return (False, "no context fields")
+
+
+def _context_is_nonspecific(row: pd.Series) -> tuple[bool, str]:
+    """
+    Determine nonspecificity only when evaluated.
+
+    Rules:
+      - context_score == 0.0 => nonspecific
+      - context_status == ABSTAIN with reason hint in context_reason => nonspecific (optional)
+    """
+    if "context_score" in row.index:
+        cs_raw = row.get("context_score")
+        try:
+            cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
+        except Exception:
+            cs = None
+        if cs is not None and cs == 0.0:
+            return (True, "context_score=0")
+
+    if "context_status" in row.index:
+        st = _norm_status(row.get("context_status"))
+        if st == "ABSTAIN":
+            rs = str(row.get("context_reason", "")).strip()
+            if rs:
+                return (True, f"context_status=ABSTAIN:{rs}")
+            return (True, "context_status=ABSTAIN")
+
+    return (False, "context_specific_or_unknown")
 
 
 def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) -> pd.DataFrame:
@@ -857,7 +940,7 @@ def audit_claims(
     hub_genes = {g for g, deg in gene_to_term_degree.items() if deg > int(hub_thr)}
 
     pass_note_enabled = _get_pass_notes(card, default=True)
-    context_gate_mode = _get_context_gate_mode(card, default="hard")
+    context_gate_mode = _get_context_gate_mode(card, default="note")
     stability_gate_mode = _get_stability_gate_mode(card, default="hard")
 
     stress_gate_mode = _get_stress_gate_mode(card, default="off")
@@ -1107,27 +1190,37 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        if "context_score" in out.columns:
-            cs_raw = row.get("context_score")
-            try:
-                cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
-            except Exception:
-                cs = None
-
-            if cs is not None and cs == 0.0:
+        # 4.5) context gate (decision-grade, evaluation-aware)
+        # Only enforce nonspecificity when context is evaluated upstream.
+        evaluated, eval_note = _context_eval_from_row(row)
+        if not evaluated:
+            if context_gate_mode == "off":
+                pass
+            else:
+                # IMPORTANT: do NOT gate on missing context evaluation.
+                # "hard" applies only when context was evaluated and found nonspecific.
+                tag = "note" if context_gate_mode == "note" else "hard"
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], f"context_missing({tag}): {eval_note}"
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+        else:
+            nonspecific, ns_note = _context_is_nonspecific(row)
+            if nonspecific:
                 if context_gate_mode == "off":
                     out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], "context_score=0 (context gate off)"
+                        out.at[i, "audit_notes"], f"context_nonspecific(off): {ns_note}"
                     )
                 elif context_gate_mode == "note":
                     out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], "context_nonspecific: context_score=0"
+                        out.at[i, "audit_notes"], f"context_nonspecific(note): {ns_note}"
                     )
                 else:
                     out.at[i, "status"] = "ABSTAIN"
                     out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
                     out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], "context_nonspecific: context_score=0"
+                        out.at[i, "audit_notes"], f"context_nonspecific(hard): {ns_note}"
                     )
                     _enforce_reason_vocab(out, i)
                     continue
