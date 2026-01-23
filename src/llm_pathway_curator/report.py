@@ -383,7 +383,7 @@ def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
-    for c in ["term_survival_agg", "context_score", "stat"]:
+    for c in ["term_survival_agg", "term_survival", "context_score", "stat"]:
         if c in audit_log.columns:
             return c
     return None
@@ -644,6 +644,10 @@ def write_report_jsonl(
     # Optional metric series (all-null if missing)
     if "term_survival_agg" in audit0.columns:
         surv_s = pd.to_numeric(audit0["term_survival_agg"], errors="coerce")
+    elif "term_survival" in audit0.columns:
+        surv_s = pd.to_numeric(audit0["term_survival"], errors="coerce")
+    elif "module_survival" in audit0.columns:
+        surv_s = pd.to_numeric(audit0["module_survival"], errors="coerce")
     else:
         surv_s = pd.Series([pd.NA] * len(audit0))
 
@@ -787,6 +791,58 @@ def write_report_jsonl(
     return jsonl_path
 
 
+def _ensure_canonical_audit_cols(audit_log: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
+    out = audit_log.copy()
+
+    # ---- score / stability (canonical) ----
+    if "term_survival_agg" not in out.columns:
+        if "term_survival" in out.columns:
+            out["term_survival_agg"] = out["term_survival"]
+            out["stability_scope"] = out.get("stability_scope", "term")
+        elif "module_survival" in out.columns:
+            out["term_survival_agg"] = out["module_survival"]
+            out["stability_scope"] = out.get("stability_scope", "module")
+        else:
+            out["term_survival_agg"] = pd.NA
+            out["stability_scope"] = out.get("stability_scope", "")
+
+    if "tau_used" not in out.columns:
+        try:
+            out["tau_used"] = float(_get_tau_default(card, default=0.8))
+        except Exception:
+            out["tau_used"] = pd.NA
+
+    # ---- effective IDs (canonical) ----
+    if "module_id_effective" not in out.columns:
+        if "module_id" in out.columns:
+            out["module_id_effective"] = out["module_id"]
+        else:
+            out["module_id_effective"] = ""
+
+    if "gene_set_hash_effective" not in out.columns:
+        if "gene_set_hash" in out.columns:
+            out["gene_set_hash_effective"] = out["gene_set_hash"]
+        else:
+            out["gene_set_hash_effective"] = ""
+
+    # ---- stress columns (exist even if empty) ----
+    for c in ["stress_status", "stress_reason", "stress_notes"]:
+        if c not in out.columns:
+            out[c] = ""
+
+    # ---- context review columns (exist even if UNEVALUATED) ----
+    for c in ["context_status", "context_reason", "context_confidence"]:
+        if c not in out.columns:
+            out[c] = ""
+
+    # ---- basic decision columns (exist even if empty) ----
+    for c in ["abstain_reason", "fail_reason", "audit_notes"]:
+        if c not in out.columns:
+            out[c] = ""
+
+    return out
+
+
 # -----------------------------
 # Markdown report (human-facing)
 # -----------------------------
@@ -804,7 +860,7 @@ def write_report(
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    audit_out = audit_log.copy()
+    audit_out = _ensure_canonical_audit_cols(audit_log.copy(), card)
     dist_out = distilled.copy()
 
     # -------------------------
@@ -873,7 +929,7 @@ def write_report(
     # -------------------------
     # If audit_log has no status, write a minimal report and exit safely.
     # -------------------------
-    status_col = "status" if "status" in audit_log.columns else None
+    status_col = "status" if "status" in audit_out.columns else None
     ctx = _get_card_context(card)
 
     lines: list[str] = []
@@ -901,7 +957,7 @@ def write_report(
         lines.append("")
         lines.append("## Audit log (top)")
         lines.append("")
-        lines.append(_safe_table_md(_stringify_list_columns(audit_log), n=20))
+        lines.append(_safe_table_md(_stringify_list_columns(audit_out), n=20))
         lines.append("")
         lines.append("## Reproducible artifacts")
         lines.append("")
@@ -912,29 +968,32 @@ def write_report(
         return
 
     # Normal case
-    n_pass = int((audit_log[status_col] == "PASS").sum())
-    n_abs = int((audit_log[status_col] == "ABSTAIN").sum())
-    n_fail = int((audit_log[status_col] == "FAIL").sum())
+    n_pass = int((audit_out[status_col] == "PASS").sum())
+    n_abs = int((audit_out[status_col] == "ABSTAIN").sum())
+    n_fail = int((audit_out[status_col] == "FAIL").sum())
 
-    abs_sum, fail_sum = _reason_summary(audit_log)
+    abs_sum, fail_sum = _reason_summary(audit_out)
 
     rc_summary: dict[str, float] | None = None
     rc_curve_path: Path | None = None
-    score_col = _pick_score_col(audit_log)
+    score_col = _pick_score_col(audit_out)
 
     if risk_coverage_from_status is not None:
         try:
-            rc_summary = risk_coverage_from_status(audit_log[status_col])
+            rc_summary = risk_coverage_from_status(audit_out[status_col])
         except Exception:
             rc_summary = None
 
     if score_col and (risk_coverage_curve is not None):
         try:
-            curve = risk_coverage_curve(audit_log, score_col=score_col, status_col=status_col)
+            curve = risk_coverage_curve(audit_out, score_col=score_col, status_col=status_col)
             rc_curve_path = out_path / "risk_coverage.tsv"
             curve.to_csv(rc_curve_path, sep="\t", index=False)
         except Exception:
-            rc_curve_path = None
+            rc_curve_path = out_path / "risk_coverage.tsv"
+            pd.DataFrame(
+                columns=["threshold", "coverage", "risk_fail_given_decided", "n_decided"]
+            ).to_csv(rc_curve_path, sep="\t", index=False)
 
     def _top(df: pd.DataFrame) -> pd.DataFrame:
         if "term_survival_agg" in df.columns:

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
+import math
 import os
 import re
 import sys
@@ -23,6 +25,11 @@ _NA_TOKENS = {"na", "nan", "none", "", "NA"}
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
+
+# Keep claim JSON payload bounded to avoid pathological TSV/JSON bloat.
+# IMPORTANT: gene_set_hash MUST be computed from the SAME gene list stored in claim_json,
+# otherwise downstream post-validate / stress scoring may delete good selections.
+_DEFAULT_MAX_GENE_IDS_IN_CLAIM = 512
 
 
 # -------------------------
@@ -219,6 +226,23 @@ def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> s
     return s
 
 
+def _max_gene_ids_in_claim(card: SampleCard) -> int:
+    """
+    Bound the number of evidence genes embedded in claim_json.
+    This must remain >=1 to keep EvidenceRef meaningful.
+    """
+    ex = _get_extra(card)
+    env = str(os.environ.get("LLMPATH_MAX_GENE_IDS_IN_CLAIM", "")).strip()
+    if env:
+        try:
+            v = int(env)
+            return max(1, min(5000, v))
+        except Exception:
+            pass
+    v2 = _as_int(ex.get("max_gene_ids_in_claim", None), _DEFAULT_MAX_GENE_IDS_IN_CLAIM)
+    return max(1, min(5000, int(v2)))
+
+
 # -------------------------
 # Context proxy (deterministic)
 # -------------------------
@@ -275,6 +299,59 @@ def _context_keys(card: SampleCard) -> list[str]:
 
 
 # -------------------------
+# Context selection mode (deterministic, explicit)
+# -------------------------
+_SELECT_CONTEXT_ENV = "LLMPATH_SELECT_CONTEXT_MODE"  # off|proxy (default off)
+
+
+def _select_context_mode(card: SampleCard) -> str:
+    """
+    Selection-time context usage (deterministic proxy).
+    Priority: env > card.extra > legacy knob.
+
+    Accepted values:
+      - off
+      - proxy
+      - on/true/yes (treated as proxy)
+    """
+    env = str(os.environ.get(_SELECT_CONTEXT_ENV, "")).strip().lower()
+    if env:
+        if env in {"proxy", "on", "true", "yes", "y", "1"}:
+            return "proxy"
+        return "off"
+
+    ex = _get_extra(card)
+    v = str(ex.get("select_context_mode", "")).strip().lower()
+    if v in {"proxy", "on", "true", "yes", "y", "1"}:
+        return "proxy"
+    if v in {"off", "disable", "disabled", "none"}:
+        return "off"
+
+    # legacy knob: enable_context_score_proxy(default=False)
+    try:
+        legacy = bool(card.enable_context_score_proxy(default=False))
+        return "proxy" if legacy else "off"
+    except Exception:
+        return "off"
+
+
+def _context_tiebreak_int(card: SampleCard, term_uid: str) -> int:
+    """
+    Deterministic tie-breaker that MUST change when condition changes.
+    This guarantees context_swap causes rank order changes even if context_score ties at 0.
+
+    NOTE:
+      - Keep it deterministic (no RNG)
+      - Use condition (fallback disease) only; do NOT include tissue/etc to keep swap effect focused
+    """
+    cond = _card_text(card, "condition", "disease").strip().lower()
+    tu = str(term_uid).strip()
+    payload = f"{cond}|{tu}".encode()
+    h = hashlib.sha256(payload).hexdigest()[:8]  # 32-bit is enough
+    return int(h, 16)
+
+
+# -------------------------
 # Mode resolution
 # -------------------------
 def _resolve_mode(card: SampleCard, mode: str | None) -> str:
@@ -313,6 +390,7 @@ def _context_review_mode(card: SampleCard) -> str:
 
 
 def _context_review_cache_path(outdir: str | None) -> Path | None:
+    # IMPORTANT: avoid any filesystem work unless explicitly enabled by ctx_review==llm
     if not outdir:
         return None
     p = Path(str(outdir)).resolve() / "context_review_cache.jsonl"
@@ -320,8 +398,75 @@ def _context_review_cache_path(outdir: str | None) -> Path | None:
     return p
 
 
+def _json_sanitize(obj: Any) -> Any:
+    """
+    Convert obj into a JSON-serializable structure with deterministic handling.
+
+    Key goals:
+      - Never raise "Object of type X is not JSON serializable"
+      - Preserve determinism (sets -> sorted lists)
+      - Be conservative about NaN/Inf/NA (convert to None)
+    """
+    # Fast-path for common JSON primitives
+    if obj is None:
+        return None
+    if isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, float):
+        # JSON can't represent NaN/Inf safely; be conservative
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+
+    # pandas NA / numpy-ish scalars
+    try:
+        # pd.isna(True/False) is False; safe
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+
+    # Path-like
+    if isinstance(obj, Path):
+        return str(obj)
+
+    # dict-like
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            ks = str(k)
+            out[ks] = _json_sanitize(v)
+        return out
+
+    # set -> sorted list (deterministic)
+    if isinstance(obj, set):
+        items = [_json_sanitize(x) for x in obj]
+        # Ensure deterministic ordering even if mixed types:
+        # sort by a stable string key
+        return sorted(items, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True))
+
+    # list/tuple
+    if isinstance(obj, (list, tuple)):
+        return [_json_sanitize(x) for x in obj]
+
+    # pandas Series/DataFrame (avoid huge dumps; but don't crash)
+    if isinstance(obj, pd.Series):
+        return _json_sanitize(obj.to_dict())
+    if isinstance(obj, pd.DataFrame):
+        return _json_sanitize(obj.to_dict(orient="records"))
+
+    # Anything else: fallback to string (last resort, but never crash)
+    return str(obj)
+
+
 def _stable_json_dumps(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    """
+    Deterministic, JSON-safe dumps.
+    - Converts sets/tuples/etc. into JSON-friendly structures
+    - sort_keys=True ensures stable output for caching/reproducibility
+    """
+    safe = _json_sanitize(obj)
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _context_review_key(
@@ -331,6 +476,7 @@ def _context_review_key(
     term_name: str,
     source: str,
     gene_ids: list[str],
+    direction: str = "na",
 ) -> str:
     """
     Cache key (internal). Not emitted to user outputs by default.
@@ -343,6 +489,7 @@ def _context_review_key(
         "term_uid": str(term_uid).strip(),
         "term_name": str(term_name).strip().lower(),
         "source": str(source).strip().lower(),
+        "direction": str(direction).strip().lower(),
         "gene_ids": [str(g).strip().upper() for g in gene_ids if str(g).strip()],
         "version": _CONTEXT_REVIEW_VERSION,
     }
@@ -379,12 +526,160 @@ def _append_context_cache(path: Path | None, *, key: str, value: dict[str, Any])
         return
 
 
+def _extract_json_obj_from_text(text: str) -> Any:
+    """
+    Robust JSON extraction from a model string.
+    Accepts:
+      - pure JSON
+      - text that contains a single JSON object/array somewhere inside
+    Strategy:
+      1) try full-string json.loads
+      2) scan for first '{' or '[' and find matching closing brace/bracket with
+         string/escape awareness; then json.loads on the slice
+    """
+    s = (text or "").strip()
+    if not s:
+        raise ValueError("empty model output")
+
+    # fast path
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+
+    # find first JSON start
+    start = -1
+    open_ch = ""
+    for i, ch in enumerate(s):
+        if ch == "{":
+            start = i
+            open_ch = "{"
+            break
+        if ch == "[":
+            start = i
+            open_ch = "["
+            break
+    if start < 0:
+        raise ValueError(f"no JSON object/array start found (first 200 chars): {s[:200]!r}")
+
+    close_ch = "}" if open_ch == "{" else "]"
+
+    # scan with nesting + string handling
+    depth = 0
+    in_str = False
+    esc = False
+    for j in range(start, len(s)):
+        ch = s[j]
+        if in_str:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+
+        # not in string
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == open_ch:
+            depth += 1
+            continue
+        if ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                cand = s[start : j + 1].strip()
+                return json.loads(cand)
+
+    raise ValueError("unterminated JSON (no matching closing brace/bracket found)")
+
+
+def _call_backend_text(
+    fn: Any, *, prompt: str, seed: int | None, json_mode: bool | None = None
+) -> str:
+    """
+    Best-effort call for string-returning backend methods.
+    We keep this tiny to avoid tight coupling to backend signatures.
+
+    json_mode is optional; some backends accept it (e.g., generate(prompt, json_mode=True)).
+    seed is optional; many backends do not accept it.
+    """
+    if json_mode is not None:
+        try:
+            return str(fn(prompt=prompt, seed=seed, json_mode=bool(json_mode)))
+        except TypeError:
+            pass
+        try:
+            return str(fn(prompt=prompt, json_mode=bool(json_mode)))
+        except TypeError:
+            pass
+
+    try:
+        return str(fn(prompt=prompt, seed=seed))
+    except TypeError:
+        pass
+    try:
+        return str(fn(prompt=prompt))
+    except TypeError:
+        pass
+
+    if json_mode is not None:
+        try:
+            return str(fn(prompt, bool(json_mode)))
+        except TypeError:
+            pass
+    try:
+        return str(fn(prompt))
+    except TypeError as e:
+        raise e
+
+
+def _is_soft_error_obj(obj: Any) -> tuple[bool, str]:
+    """
+    Detect standardized soft error JSON payloads:
+      {"error": {"message": "...", "type": "...", "retryable": true/false}}
+    """
+    if not isinstance(obj, dict):
+        return (False, "")
+    err = obj.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message", "")
+        if isinstance(msg, str) and msg.strip():
+            return (True, msg.strip())
+    return (False, "")
+
+
 def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
     """
     Best-effort JSON call across backends.
-    Tries common method names; accepts dict return or JSON string return.
+
+    IMPORTANT:
+      - BaseLLMBackend contract is generate(prompt, json_mode=bool). Prefer this.
+      - Some backends return standardized "soft error" JSON; that must NOT be treated as success.
+      - If JSON is not an object, raise.
     """
-    candidates = [
+    last_err: Exception | None = None
+
+    gen = getattr(backend, "generate", None)
+    if callable(gen):
+        try:
+            raw = _call_backend_text(gen, prompt=prompt, seed=seed, json_mode=True)
+            obj0 = _extract_json_obj_from_text(raw)
+            if isinstance(obj0, dict):
+                is_err, msg = _is_soft_error_obj(obj0)
+                if is_err:
+                    raise RuntimeError(f"backend soft-error JSON: {msg}")
+                return obj0
+            raise ValueError(
+                f"backend generate(json_mode=True) returned non-object type={type(obj0).__name__}"
+            )
+        except Exception as e:
+            last_err = e
+
+    candidates_json = [
         "complete_json",
         "chat_json",
         "generate_json",
@@ -392,22 +687,61 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
         "run_json",
         "json",
     ]
-    last_err: Exception | None = None
-    for name in candidates:
+    for name in candidates_json:
         fn = getattr(backend, name, None)
         if fn is None or (not callable(fn)):
             continue
         try:
             out = fn(prompt=prompt, seed=seed)  # type: ignore[misc]
             if isinstance(out, dict):
+                is_err, msg = _is_soft_error_obj(out)
+                if is_err:
+                    raise RuntimeError(f"backend soft-error JSON: {msg}")
                 return out
             if isinstance(out, str):
-                return json.loads(out)
+                obj = _extract_json_obj_from_text(out)
+                if isinstance(obj, dict):
+                    is_err, msg = _is_soft_error_obj(obj)
+                    if is_err:
+                        raise RuntimeError(f"backend soft-error JSON: {msg}")
+                    return obj
+                raise ValueError(f"backend JSON returned non-object type={type(obj).__name__}")
+            obj2 = _extract_json_obj_from_text(str(out))
+            if isinstance(obj2, dict):
+                is_err, msg = _is_soft_error_obj(obj2)
+                if is_err:
+                    raise RuntimeError(f"backend soft-error JSON: {msg}")
+                return obj2
+            raise ValueError(f"backend JSON returned non-object type={type(obj2).__name__}")
         except Exception as e:
             last_err = e
             continue
+
+    candidates_text = ["chat", "complete", "call", "run", "__call__"]
+    for name in candidates_text:
+        fn = getattr(backend, name, None)
+        if fn is None or (not callable(fn)):
+            continue
+        try:
+            raw = _call_backend_text(fn, prompt=prompt, seed=seed, json_mode=True)
+            obj = _extract_json_obj_from_text(raw)
+            if isinstance(obj, dict):
+                is_err, msg = _is_soft_error_obj(obj)
+                if is_err:
+                    raise RuntimeError(f"backend soft-error JSON: {msg}")
+                return obj
+            raise ValueError(f"backend text parsed non-object type={type(obj).__name__}")
+        except Exception as e:
+            last_err = e
+            continue
+
+    err_msg = ""
+    if last_err is not None:
+        err_msg = f"{type(last_err).__name__}: {str(last_err)[:200]}"
     raise RuntimeError(
-        f"context_review: backend has no usable JSON method (tried {candidates})"
+        "context_review: backend JSON call failed "
+        f"(tried generate(json_mode=True), json={candidates_json}, text={candidates_text}). "
+        f"last_error={err_msg}"
     ) from last_err
 
 
@@ -418,6 +752,8 @@ def _context_review_prompt(
     term_id: str,
     source: str,
     gene_ids: list[str],
+    direction: str = "na",
+    comparison: str = "",
 ) -> str:
     """
     Keep prompt short and schema-locked (auditable).
@@ -432,16 +768,21 @@ def _context_review_prompt(
     g = [str(x).strip().upper() for x in gene_ids if str(x).strip()]
     payload = {
         "context": ctx,
-        "pathway": {
+        "pathway_term": {
             "term_name": str(term_name).strip(),
             "term_id": str(term_id).strip(),
             "source": str(source).strip(),
         },
+        "claim": {
+            "direction": str(direction).strip().lower(),
+            "comparison": str(comparison).strip(),
+        },
         "evidence_gene_ids": g[:10],
         "task": (
-            "Judge whether this pathway term is a plausible, context-relevant pathway "
-            "for the given context, given only the term name/ID/source and a small list "
-            "of evidence genes. Return JSON ONLY with keys: context_status (PASS|WARN|FAIL), "
+            "Judge whether this pathway term is context-relevant AND whether the claimed "
+            "direction (up/down/na) seems consistent with the evidence genes and the comparison. "
+            "Do NOT use external knowledge. If direction cannot be assessed from the given inputs, "
+            "use WARN (not FAIL). Return JSON ONLY with keys: context_status (PASS|WARN|FAIL), "
             "context_reason (short code), context_notes (<=200 chars), confidence (0-1)."
         ),
         "output_schema": {
@@ -461,7 +802,7 @@ def _context_review_prompt(
 def _normalize_context_review(obj: dict[str, Any]) -> dict[str, Any]:
     st = str(obj.get("context_status", "")).strip().upper()
     if st not in _CONTEXT_ALLOWED:
-        st = "WARN"  # safe default
+        st = "WARN"
     reason = str(obj.get("context_reason", "")).strip()
     notes = str(obj.get("context_notes", "")).strip()
     try:
@@ -492,7 +833,7 @@ def _patch_claim_json_with_context(
 
     Source-of-truth is claim_json for audit/report.
 
-    IMPORTANT (user-facing cleanliness):
+    IMPORTANT:
       - Do NOT emit internal versioning/keys by default.
       - Optionally attach developer metadata only when explicitly enabled.
     """
@@ -529,11 +870,8 @@ def _apply_context_review_llm(
     outdir: str | None,
 ) -> pd.DataFrame:
     """
-    Adds user-facing columns (stable, no internal versions):
-      context_evaluated, context_status, context_reason, context_notes,
-      context_confidence, context_review_mode
-
-    Cache: outdir/context_review_cache.jsonl (best-effort)
+    Context relevance review (LLM probe).
+    Failure policy: MUST NOT crash the pipeline.
     """
     cache_path = _context_review_cache_path(outdir)
     cache = _load_context_cache(cache_path)
@@ -542,12 +880,13 @@ def _apply_context_review_llm(
     out = df_claims.copy()
 
     for col, default in [
-        ("context_evaluated", False),
-        ("context_status", pd.NA),
-        ("context_reason", pd.NA),
-        ("context_notes", pd.NA),
-        ("context_confidence", pd.NA),
+        ("context_review_evaluated", False),
+        ("context_review_status", pd.NA),
+        ("context_review_reason", pd.NA),
+        ("context_review_notes", pd.NA),
+        ("context_review_confidence", pd.NA),
         ("context_review_mode", "off"),
+        ("context_review_method", pd.NA),
     ]:
         if col not in out.columns:
             out[col] = default
@@ -556,6 +895,7 @@ def _apply_context_review_llm(
         for col, default in [
             ("context_review_key", pd.NA),
             ("context_review_version", _CONTEXT_REVIEW_VERSION),
+            ("context_review_error", pd.NA),
         ]:
             if col not in out.columns:
                 out[col] = default
@@ -568,25 +908,55 @@ def _apply_context_review_llm(
 
         genes = _as_gene_list(r.get("gene_ids", ""))
         genes = [str(g).strip().upper() for g in genes if str(g).strip()]
+        direction = str(r.get("direction", "na")).strip().lower()
 
         key = _context_review_key(
-            card=card, term_uid=term_uid, term_name=term_name, source=source, gene_ids=genes[:10]
+            card=card,
+            term_uid=term_uid,
+            term_name=term_name,
+            source=source,
+            gene_ids=genes[:10],
+            direction=direction,
         )
+
         out.at[idx, "context_review_mode"] = "llm"
+        out.at[idx, "context_review_method"] = "llm"
         if emit_dev:
             out.at[idx, "context_review_key"] = key
             out.at[idx, "context_review_version"] = _CONTEXT_REVIEW_VERSION
+            out.at[idx, "context_review_error"] = pd.NA
 
-        if key in cache:
+        norm: dict[str, Any] | None = None
+        from_cache = False
+        if key in cache and isinstance(cache.get(key), dict):
             norm = cache[key]
-        else:
+            from_cache = True
+
+        if norm is None:
             prompt = _context_review_prompt(
-                card=card, term_name=term_name, term_id=term_id, source=source, gene_ids=genes[:10]
+                card=card,
+                term_name=term_name,
+                term_id=term_id,
+                source=source,
+                gene_ids=genes[:10],
+                direction=direction,
+                comparison=_card_text(card, "comparison", None),
             )
-            raw = _backend_call_json(backend, prompt=prompt, seed=seed)
-            norm = _normalize_context_review(raw)
-            cache[key] = norm
-            _append_context_cache(cache_path, key=key, value=norm)
+            try:
+                raw = _backend_call_json(backend, prompt=prompt, seed=seed)
+                norm = _normalize_context_review(raw)
+                cache[key] = norm
+                _append_context_cache(cache_path, key=key, value=norm)
+            except Exception as e:
+                msg = f"{type(e).__name__}: {str(e)[:180]}"
+                norm = {
+                    "context_status": "WARN",
+                    "context_reason": "backend_error",
+                    "context_notes": msg,
+                    "context_confidence": 0.0,
+                }
+                if emit_dev:
+                    out.at[idx, "context_review_error"] = msg
 
         st = str(norm.get("context_status", "WARN")).strip().upper()
         rsn = str(norm.get("context_reason", "uncertain")).strip()
@@ -596,11 +966,11 @@ def _apply_context_review_llm(
         except Exception:
             conf = 0.0
 
-        out.at[idx, "context_evaluated"] = True
-        out.at[idx, "context_status"] = st
-        out.at[idx, "context_reason"] = rsn
-        out.at[idx, "context_notes"] = nts
-        out.at[idx, "context_confidence"] = conf
+        out.at[idx, "context_review_evaluated"] = True
+        out.at[idx, "context_review_status"] = st
+        out.at[idx, "context_review_reason"] = rsn
+        out.at[idx, "context_review_notes"] = nts
+        out.at[idx, "context_review_confidence"] = conf
 
         if "claim_json" in out.columns:
             cj = out.at[idx, "claim_json"]
@@ -610,6 +980,7 @@ def _apply_context_review_llm(
                     dev_meta = {
                         "context_review_key": str(key),
                         "context_review_version": _CONTEXT_REVIEW_VERSION,
+                        "context_review_cache_hit": bool(from_cache),
                     }
                 out.at[idx, "claim_json"] = _patch_claim_json_with_context(
                     cj,
@@ -921,19 +1292,24 @@ def _select_claims_deterministic(
     else:
         df["term_uid"] = (df["source"] + ":" + df["term_id"]).astype(str).str.strip()
 
-    # ---- context proxy: default OFF (must be enabled explicitly) ----
-    try:
-        enable_ctx_proxy = bool(card.enable_context_score_proxy(default=False))
-    except Exception:
-        enable_ctx_proxy = False
+    # ---- context selection: explicit OFF/PROXY ----
+    sel_ctx_mode = _select_context_mode(card)
 
-    if enable_ctx_proxy:
+    if sel_ctx_mode == "proxy":
         toks = _context_tokens(card)
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
         df["context_evaluated"] = True
+
+        # Always compute condition-dependent deterministic tiebreak
+        df["context_tiebreak"] = df["term_uid"].map(lambda tu: _context_tiebreak_int(card, str(tu)))
+        df["context_tiebreak_sort"] = pd.to_numeric(df["context_tiebreak"], errors="coerce").fillna(
+            2**31 - 1
+        )
     else:
         df["context_score"] = pd.NA
         df["context_evaluated"] = False
+        df["context_tiebreak"] = pd.NA
+        df["context_tiebreak_sort"] = 2**31 - 1  # neutral (worst)
 
     df["context_score_sort"] = pd.to_numeric(df["context_score"], errors="coerce").fillna(-1)
 
@@ -975,10 +1351,20 @@ def _select_claims_deterministic(
         max_per_module = 1
     max_per_module = max(1, max_per_module)
 
-    # ---- rank all candidates first ----
+    # - When sel_ctx_mode=proxy, we want context to have a visible effect.
+    #   Minimal policy:
+    #     eligible -> term_survival -> context_score -> stat -> tiebreak -> term_uid
+    #   This keeps stability primary while allowing context_swap to change representatives.
     df_ranked = df.sort_values(
-        ["eligible", "term_survival_sort", "stat", "context_score_sort", "term_uid"],
-        ascending=[False, False, False, False, True],
+        [
+            "eligible",
+            "term_survival_sort",
+            "context_score_sort",
+            "stat",
+            "context_tiebreak_sort",
+            "term_uid",
+        ],
+        ascending=[False, False, False, False, True, True],
     ).copy()
 
     has_module = "module_id" in df_ranked.columns
@@ -988,7 +1374,6 @@ def _select_claims_deterministic(
         if has_module and (not _is_na_scalar(r.get("module_id"))):
             mid = str(r.get("module_id")).strip()
         if (not mid) or (mid.lower() in _NA_TOKENS_L):
-            # treat missing module as unique bucket per term_uid
             mid = f"M_missing::{str(r.get('term_uid'))}"
         return mid
 
@@ -1015,7 +1400,6 @@ def _select_claims_deterministic(
         remaining = [i for i in df_ranked.index.tolist() if i not in set(picked_idx)]
         if remaining:
             relaxed = True
-            # progressively raise cap until filled or exhausted
             cap = max_per_module
             while len(picked_idx) < int(k) and remaining and cap < 10:
                 cap += 1
@@ -1032,8 +1416,6 @@ def _select_claims_deterministic(
                     picked_idx.append(idx)
                 remaining = [i for i in remaining if i not in set(picked_idx)]
 
-            # final fallback: if still short, just take next by rank
-            # (rare; e.g., cap loop exhausted)
             if len(picked_idx) < int(k) and remaining:
                 need = int(k) - len(picked_idx)
                 picked_idx.extend(remaining[:need])
@@ -1055,7 +1437,6 @@ def _select_claims_deterministic(
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
 
-    # selection diagnostics
     n_total = int(df_ranked.shape[0])
     n_eligible = int(df_ranked["eligible"].sum()) if "eligible" in df_ranked.columns else n_total
     n_ineligible = int(n_total - n_eligible)
@@ -1069,6 +1450,7 @@ def _select_claims_deterministic(
     )
 
     mprefix = _module_prefix(card)
+    max_gene_ids = _max_gene_ids_in_claim(card)
 
     for _, r in df_pick.iterrows():
         term_id = str(r["term_id"]).strip()
@@ -1078,9 +1460,14 @@ def _select_claims_deterministic(
 
         term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
+        # FULL genes for claim_json contract (bounded, deduped, normalized)
         genes_full_raw = _as_gene_list(r.get("evidence_genes"))
-        genes_full = [_norm_gene_id(g) for g in genes_full_raw]
-        genes_full = [g for g in genes_full if str(g).strip()]
+        genes_full_norm = [_norm_gene_id(g) for g in genes_full_raw]
+        genes_full_norm = [g for g in genes_full_norm if str(g).strip()]
+        genes_full_norm = _dedup_preserve_order(genes_full_norm)
+
+        genes_claim = genes_full_norm[:max_gene_ids]
+        genes_suggest = genes_claim[:10]
 
         module_id = ""
         module_reason = ""
@@ -1090,23 +1477,25 @@ def _select_claims_deterministic(
             module_id = str(r.get("module_id")).strip()
 
         if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
-            content_hash = _module_hash_like_modules_py([term_uid], genes_full)
+            content_hash = _module_hash_like_modules_py([term_uid], genes_claim)
             module_id = f"{mprefix}{content_hash}"
             module_reason = "missing_module_id"
             module_missing = True
 
-        if genes_full:
-            gene_set_hash = _hash_gene_set_audit(genes_full)
+        # IMPORTANT: gene_set_hash must match genes_claim stored in claim_json
+        if genes_claim:
+            gene_set_hash = _hash_gene_set_audit(genes_claim)
         else:
             gene_set_hash = _hash_term_set_fallback([term_uid])
 
+        # Use term_name as semantic entity (term_id kept as separate column)
         claim = Claim(
-            entity=term_id,
+            entity=term_name if term_name else term_id,
             direction=direction,
             context_keys=ctx_keys,
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                gene_ids=genes_full[:10],
+                gene_ids=genes_claim,  # contract: hash computed from SAME list
                 term_ids=[term_uid],
                 gene_set_hash=gene_set_hash,
             ),
@@ -1125,7 +1514,11 @@ def _select_claims_deterministic(
             "module_missing": bool(module_missing),
             "module_reason": module_reason,
             "module_prefix_effective": mprefix,
-            "gene_ids": ",".join(claim.evidence_ref.gene_ids),
+            # user-facing (light) lists
+            "gene_ids": ",".join([str(g) for g in genes_suggest]),
+            "gene_ids_suggest": ",".join([str(g) for g in genes_suggest]),
+            "gene_ids_n_total": int(len(genes_full_norm)),
+            "gene_ids_n_in_claim": int(len(genes_claim)),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
             "context_score": r.get("context_score", pd.NA),
@@ -1136,7 +1529,10 @@ def _select_claims_deterministic(
             "keep_reason": str(r.get("keep_reason", "ok")),
             "claim_json": claim.model_dump_json(),
             "preselect_tau_gate": bool(preselect_tau_gate),
-            "context_score_proxy": bool(enable_ctx_proxy),
+            # "context_score_proxy": bool(enable_ctx_proxy),
+            "context_score_proxy": bool(sel_ctx_mode == "proxy"),
+            "select_context_mode": str(sel_ctx_mode),
+            "context_tiebreak": r.get("context_tiebreak", pd.NA),
             "select_notes": notes_common,
             "select_diag_n_total": n_total,
             "select_diag_n_eligible": n_eligible,
@@ -1171,44 +1567,20 @@ def _select_claims_deterministic(
 # ===========================
 # LLM mode compatibility wrapper
 # ===========================
-def _try_call(fn: Callable[..., Any], **kwargs: Any) -> Any:
+def _call_compat(fn: Callable[..., Any], **kwargs: Any) -> Any:
     """
-    Try calling a function with a subset of kwargs.
-    This avoids brittle signature coupling across refactors.
+    Call fn(**kwargs) but drop kwargs not accepted by fn signature.
+    This avoids brittle signature coupling across refactors and avoids
+    the slow/fragile "keep dropping more and more keys" behavior.
     """
     try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
         return fn(**kwargs)
-    except TypeError:
-        pass
 
-    drop_orders = [
-        ["outdir"],
-        ["seed"],
-        ["k"],
-        ["backend"],
-        ["card"],
-        ["distilled"],
-    ]
-    keys = dict(kwargs)
-    for drop in drop_orders:
-        for d in drop:
-            keys.pop(d, None)
-        try:
-            return fn(**keys)
-        except TypeError:
-            continue
-
-    try:
-        return fn(
-            kwargs.get("distilled"),
-            kwargs.get("card"),
-            kwargs.get("backend"),
-            kwargs.get("k"),
-            kwargs.get("seed"),
-            kwargs.get("outdir"),
-        )
-    except Exception as e:
-        raise RuntimeError(f"LLM call failed for {getattr(fn, '__name__', 'fn')}") from e
+    allowed = set(sig.parameters.keys())
+    filt = {k: v for k, v in kwargs.items() if k in allowed}
+    return fn(**filt)
 
 
 # ===========================
@@ -1242,9 +1614,9 @@ def select_claims(
     NOTE: context review (LLM) is also a PROBE and is opt-in (off by default).
     The review result is persisted into claim_json as the audit/report source-of-truth.
 
-    IMPORTANT (user-facing cleanliness):
-      - Internal version labels/keys are not emitted by default (including in claim_json).
-      - Enable explicitly via LLMPATH_DEV_META=1 or card.extra["emit_developer_meta"]=true.
+    IMPORTANT:
+      - claim_json embeds evidence_ref.gene_ids and gene_set_hash; they MUST be consistent.
+      - user-facing columns may show a compact gene snippet (gene_ids_suggest) for readability.
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
@@ -1266,7 +1638,7 @@ def select_claims(
         res = None
         notes = ""
         try:
-            res = _try_call(
+            res = _call_compat(
                 propose_claims_llm,
                 distilled_with_modules=distilled,
                 card=card,
@@ -1276,7 +1648,8 @@ def select_claims(
                 outdir=outdir,
             )
         except Exception as e:
-            notes = f"LLM propose failed: {type(e).__name__}"
+            msg = f"{type(e).__name__}: {str(e)[:200]}"
+            notes = f"LLM propose failed: {msg}"
             res = None
 
         out_llm: pd.DataFrame | None = None
@@ -1293,14 +1666,16 @@ def select_claims(
 
             if claims_obj is not None:
                 try:
-                    out_llm = _try_call(
+                    out_llm = _call_compat(
                         claims_to_proposed_tsv,
                         claims=claims_obj,
                         distilled_with_modules=distilled,
                         card=card,
                     )
                     used_fallback = False
-                except Exception:
+                except Exception as e:
+                    msg = f"{type(e).__name__}: {str(e)[:200]}"
+                    notes = notes or f"claims_to_proposed_tsv failed: {msg}"
                     out_llm = None
                     used_fallback = True
 

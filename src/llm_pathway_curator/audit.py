@@ -237,6 +237,21 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
     return _as_bool(v, default=bool(default))
 
 
+def _get_context_proxy_pass_min(card: SampleCard, default: int = 1) -> int:
+    """
+    If proxy context_score is present (no LLM review), convert it into:
+      - score >= pass_min => PASS
+      - score <  pass_min => WARN
+    This is ONLY used when claim_json has no context review fields.
+    """
+    ex = _get_extra(card)
+    v = ex.get("context_proxy_pass_min", None)
+    try:
+        return int(default) if v is None else int(v)
+    except Exception:
+        return int(default)
+
+
 def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
     Tool contract (user-facing):
@@ -456,27 +471,86 @@ def _extract_context_review_from_claim_json(cj: str) -> tuple[bool, str, str]:
     return (evaluated, status, note)
 
 
-def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
+def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
     """
-    Legacy/compat context fields on the row (pre-schema).
-    Returns: (evaluated, note)
+    Row-level context fields (compat).
+    Returns: (evaluated, status, note)
+
+    Priority (most specific first):
+      1) context_review_* (from select.py LLM probe)
+      2) legacy context_* (pre-schema)
+      3) context_score presence
     """
+    # --- v1.1+ probe columns emitted by select._apply_context_review_llm ---
+    if "context_review_evaluated" in row.index:
+        v = row.get("context_review_evaluated")
+        if not _is_na_scalar(v):
+            try:
+                ev = bool(v)
+            except Exception:
+                ev = False
+
+            st = ""
+            if "context_review_status" in row.index:
+                st = _norm_status(row.get("context_review_status"))
+                if st == "ABSTAIN":
+                    st = "WARN"
+                if st and st not in {"PASS", "WARN", "FAIL"}:
+                    st = ""
+
+            rsn = ""
+            if "context_review_reason" in row.index:
+                rsn = (
+                    ""
+                    if _is_na_scalar(row.get("context_review_reason"))
+                    else str(row.get("context_review_reason")).strip()
+                )
+
+            # Critical compat: if a status exists, treat as evaluated
+            # even if evaluated flag is False
+            if (not ev) and st in {"PASS", "WARN", "FAIL"}:
+                ev = True
+
+            note = f"context_review_evaluated={ev}"
+            if st:
+                note += f" status={st}"
+            if rsn:
+                note += f" reason={rsn}"
+            return (ev, st, note)
+
+    # --- legacy/older caller columns ---
     if "context_evaluated" in row.index:
         v = row.get("context_evaluated")
         if _is_na_scalar(v):
-            return (False, "context_evaluated=NA")
+            return (False, "", "context_evaluated=NA")
         try:
-            return (bool(v), f"context_evaluated={bool(v)}")
+            ev = bool(v)
         except Exception:
-            return (False, "context_evaluated invalid")
+            return (False, "", "context_evaluated invalid")
+
+        st = ""
+        if "context_status" in row.index:
+            st = _norm_status(row.get("context_status"))
+            if st == "ABSTAIN":
+                st = "WARN"
+            if st and st not in {"PASS", "WARN", "FAIL"}:
+                st = ""
+
+        # Critical compat: if a status exists, treat as evaluated even if legacy flag is False
+        if (not ev) and st in {"PASS", "WARN", "FAIL"}:
+            ev = True
+
+        return (ev, st, f"context_evaluated={ev}" + (f" status={st}" if st else ""))
 
     if "context_status" in row.index:
         st = _norm_status(row.get("context_status"))
         if st in {"PASS", "WARN", "FAIL", "ABSTAIN"}:
-            return (True, f"context_status={st}")
+            if st == "ABSTAIN":
+                st = "WARN"
+            return (True, st, f"context_status={st}")
         if not st:
-            return (False, "context_status missing")
-        return (False, f"context_status unknown={st}")
+            return (False, "", "context_status missing")
+        return (False, "", f"context_status unknown={st}")
 
     if "context_score" in row.index:
         cs_raw = row.get("context_score")
@@ -485,10 +559,10 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
         except Exception:
             cs = None
         if cs is None:
-            return (False, "context_score missing")
-        return (True, "context_score present")
+            return (False, "", "context_score missing")
+        return (True, "WARN", "context_score present (proxy)")
 
-    return (False, "no context fields")
+    return (False, "", "no context fields")
 
 
 def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) -> pd.DataFrame:
@@ -975,7 +1049,7 @@ def audit_claims(
     if "gene_set_hash_match_mode" not in out.columns:
         out["gene_set_hash_match_mode"] = ""
 
-    # always log parsed context review fields from claim_json (even if caller didn't provide)
+    # always log parsed context review fields (even if caller didn't provide)
     if "context_evaluated" not in out.columns:
         out["context_evaluated"] = False
     if "context_method" not in out.columns:
@@ -1393,12 +1467,48 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        # 4.5) context gate (PRIMARY = claim_json fields; safe-side semantics)
+        # 4.5) context gate
+        # PRIMARY = claim_json fields;
+        # FALLBACK = row context_review_* (LLM probe) or legacy row fields.
         c_eval, c_status, c_note = _extract_context_review_from_claim_json(cj_str)
 
-        # Always materialize context review fields into columns for audit_log.tsv
+        # --- proxy promotion: if we only have context_score (no LLM review),
+        # turn it into PASS/WARN deterministically ---
+        if (not c_eval) and (not str(c_status or "").strip()):
+            if "context_score" in row.index:
+                cs_raw = row.get("context_score")
+                try:
+                    cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
+                except Exception:
+                    cs = None
+
+                if cs is not None:
+                    pass_min = _get_context_proxy_pass_min(card, default=1)
+                    if cs >= float(pass_min):
+                        c_eval = True
+                        c_status = "PASS"
+                        c_note = f"proxy_context: context_score={cs:g} >= pass_min={pass_min}"
+                    else:
+                        c_eval = True
+                        c_status = "WARN"
+                        c_note = f"proxy_context: context_score={cs:g} < pass_min={pass_min}"
+
+        # Row fallback (covers select._apply_context_review_llm output
+        # even when claim_json not patched)
+        if (not c_eval) and (not str(c_status or "").strip()):
+            ev2, st2, note2 = _context_eval_from_row(row)
+            if ev2 or st2:
+                c_eval, c_status, c_note = ev2, st2, f"row_fallback: {note2}"
+
+        # Final normalization (CRITICAL): if we have a decision status, it is evaluated.
+        st_norm = str(c_status or "").strip().upper()
+        if (not c_eval) and st_norm in {"PASS", "WARN", "FAIL"}:
+            c_eval = True
+
+        # Always materialize context columns into audit log
+        # Prefer claim_json if present; else fill from resolved c_eval/c_status/c_note.
         try:
-            out.at[i, "context_evaluated"] = bool(c_eval)
+            out.at[i, "context_evaluated"] = bool(getattr(cobj, "context_evaluated", False))
             out.at[i, "context_method"] = str(getattr(cobj, "context_method", "none") or "none")
             out.at[i, "context_status"] = str(getattr(cobj, "context_status", "") or "")
             out.at[i, "context_reason"] = str(getattr(cobj, "context_reason", "") or "")
@@ -1406,20 +1516,28 @@ def audit_claims(
         except Exception:
             pass
 
-        # Legacy fallback (row fields), only if claim_json did not provide evaluated/status
-        if (not c_eval) and (not c_status):
-            evaluated_row, eval_note_row = _context_eval_from_row(row)
-            c_eval = evaluated_row
-            c_note = f"legacy: {eval_note_row}"
-            if "context_status" in row.index:
-                st = _norm_status(row.get("context_status"))
-                if st == "ABSTAIN":
-                    c_status = "WARN"
-                elif st in {"PASS", "WARN", "FAIL"}:
-                    c_status = st
+        if str(out.at[i, "context_status"]).strip() == "":
+            if c_eval or st_norm:
+                out.at[i, "context_evaluated"] = bool(c_eval)
+                out.at[i, "context_method"] = (
+                    "proxy"
+                    if "proxy_context" in str(c_note)
+                    else ("llm" if "context_review_" in str(c_note) else "row")
+                )
+                out.at[i, "context_status"] = st_norm
+                out.at[i, "context_reason"] = (
+                    "proxy_context_score"
+                    if "proxy_context" in str(c_note)
+                    else (
+                        ""
+                        if _is_na_scalar(out.at[i, "context_reason"])
+                        else str(out.at[i, "context_reason"])
+                    )
+                )
+                out.at[i, "context_notes"] = str(c_note)
 
         if context_gate_mode != "off":
-            if not c_eval:
+            if not bool(c_eval):
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], f"context_missing({context_gate_mode}): {c_note}"
                 )
@@ -1429,11 +1547,9 @@ def audit_claims(
                     _enforce_reason_vocab(out, i)
                     continue
             else:
-                st = str(c_status or "").strip().upper()
-
-                if st == "PASS":
+                if st_norm == "PASS":
                     pass
-                elif st == "WARN":
+                elif st_norm == "WARN":
                     if context_gate_mode == "note":
                         out.at[i, "audit_notes"] = _append_note(
                             out.at[i, "audit_notes"], f"context_warn(note): {c_note}"
@@ -1446,7 +1562,7 @@ def audit_claims(
                         )
                         _enforce_reason_vocab(out, i)
                         continue
-                elif st == "FAIL":
+                elif st_norm == "FAIL":
                     if context_gate_mode == "note":
                         out.at[i, "audit_notes"] = _append_note(
                             out.at[i, "audit_notes"], f"context_fail(note): {c_note}"

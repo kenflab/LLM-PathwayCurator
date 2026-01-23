@@ -17,16 +17,14 @@ def _die(msg: str) -> None:
 
 
 def make_card(cancer: str, *, context_gate_mode: str) -> dict:
-    # minimal v1 sample card for Fig2 (audit knobs live under extra)
     return {
-        "disease": cancer,
+        "condition": cancer,
         "tissue": "tumor",
         "perturbation": "genotype",
         "comparison": "TP53_mut_vs_TP53_wt",
         "k_claims": 100,
         "notes": "TCGA Pan-Cancer; groups defined from MC3 TP53 PASS mutations.",
         "extra": {
-            "schema_version": "v1",
             "benchmark_id": "PANCAN_TP53_v1",
             "goal": "context-conditioned pathway claim selection with calibrated abstention",
             # knobs (Fig2 needs these)
@@ -35,6 +33,7 @@ def make_card(cancer: str, *, context_gate_mode: str) -> dict:
             #   note  -> PASS + annotate context nonspecificity
             #   hard  -> ABSTAIN_CONTEXT_NONSPECIFIC
             "context_gate_mode": context_gate_mode,
+            # "select_context_mode": "proxy",
             "gene_id_map_tsv": "resources/gene_id_maps/id_map.tsv.gz",
             # "gene_id_map_tsv": "resources/gene_id_maps/ensembl_id_map.tsv.gz"
         },

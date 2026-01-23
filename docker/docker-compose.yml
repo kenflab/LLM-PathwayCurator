@@ -12,12 +12,16 @@ services:
       - ..:/work
       - ../paper/msbio_data:/data
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # local LLM(ollama in compose network)
+      LLMPATH_BACKEND: ollama
+      LLMPATH_OLLAMA_HOST: http://ollama:11434
+      LLMPATH_OLLAMA_MODEL: llama3.1:8b
+      LLMPATH_OLLAMA_TEMPERATURE: "0.0"
+      LLMPATH_OLLAMA_TIMEOUT: "120"
 
-      # local LLM
-      LPC_OLLAMA_HOST: http://ollama:11434
-      LPC_OLLAMA_MODEL: llama3.1:8b
+      # remote LLMs (optional)
+      LLMPATH_OPENAI_API_KEY: ${LLMPATH_OPENAI_API_KEY:-${OPENAI_API_KEY:-}}
+      LLMPATH_GEMINI_API_KEY: ${LLMPATH_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}
 
       # deterministic-ish runs (recommended)
       OMP_NUM_THREADS: "1"
