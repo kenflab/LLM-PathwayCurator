@@ -89,18 +89,42 @@ def _parse_ids(x: Any) -> list[str]:
     return uniq
 
 
-def _norm_gene_id(g: str) -> str:
-    """Minimal normalization to reduce spurious drift (HGNC-like)."""
-    return str(g).strip().upper()
+# -------------------------
+# Gene canonicalization + hashing (compat-safe)
+# -------------------------
+def _clean_gene_id(g: Any) -> str:
+    s = str(g).strip().strip('"').strip("'")
+    s = " ".join(s.split())
+    s = s.strip(",;|")
+    return s
 
 
-def _hash_gene_set(genes: list[str]) -> str:
+def _norm_gene_id(g: Any) -> str:
     """
-    Audit-grade gene_set_hash should be SET-stable:
-      - same gene set -> same hash, regardless of order
-      - normalize IDs to reduce casing drift
+    Canonical gene token for audit comparisons.
+
+    IMPORTANT:
+      - Do NOT force uppercasing here (align with schema/distill/modules trim-only).
+      - We still provide a legacy upper hash path for backward compatibility.
     """
+    return _clean_gene_id(g)
+
+
+def _norm_gene_id_upper(g: Any) -> str:
+    """Legacy HGNC-like normalization (deprecated; used only for backward-compat hash matching)."""
+    return _clean_gene_id(g).upper()
+
+
+def _hash_gene_set_trim12(genes: list[str]) -> str:
+    """Set-stable hash over trim-only canonicalization."""
     uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
+    payload = ",".join(uniq)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _hash_gene_set_upper12(genes: list[str]) -> str:
+    """Set-stable hash over legacy uppercasing canonicalization."""
+    uniq = sorted({_norm_gene_id_upper(g) for g in genes if str(g).strip()})
     payload = ",".join(uniq)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -945,6 +969,12 @@ def audit_claims(
     if "direction_norm" not in out.columns:
         out["direction_norm"] = "na"
 
+    # Optional debug columns (kept minimal; safe for TSV export)
+    if "gene_set_hash_computed" not in out.columns:
+        out["gene_set_hash_computed"] = ""
+    if "gene_set_hash_match_mode" not in out.columns:
+        out["gene_set_hash_match_mode"] = ""
+
     # always log parsed context review fields from claim_json (even if caller didn't provide)
     if "context_evaluated" not in out.columns:
         out["context_evaluated"] = False
@@ -1037,7 +1067,7 @@ def audit_claims(
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
 
-    # Hub gene heuristic
+    # Hub gene heuristic (degree on canonical tokens)
     gene_to_term_degree: dict[str, int] = {}
     for _tk, gs in term_to_gene_set.items():
         for g in gs:
@@ -1119,7 +1149,9 @@ def audit_claims(
         module_id = "" if module_id is None else str(module_id).strip()
         out.at[i, "module_id_effective"] = module_id
 
-        gene_ids = [_norm_gene_id(g) for g in gene_ids]
+        # canonicalize gene_ids (trim-only) + also prepare upper for overlap fallback
+        gene_ids_trim = [_norm_gene_id(g) for g in gene_ids if str(g).strip()]
+        gene_ids_upper = [_norm_gene_id_upper(g) for g in gene_ids if str(g).strip()]
 
         if not term_ids_raw:
             out.at[i, "status"] = "FAIL"
@@ -1150,16 +1182,20 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        # union evidence genes across referenced terms
+        # union evidence genes across referenced terms (deterministic order)
         ev_union: list[str] = []
-        ev_seen: set[str] = set()
+        ev_seen_trim: set[str] = set()
         for t in term_ids:
             for g in sorted(term_to_gene_set.get(t, set())):
-                if g not in ev_seen:
-                    ev_seen.add(g)
+                if g not in ev_seen_trim:
+                    ev_seen_trim.add(g)
                     ev_union.append(g)
 
-        computed_gsh = _hash_gene_set(ev_union) if ev_union else ""
+        # also keep an upper view for overlap/backward-compat comparisons
+        ev_seen_upper: set[str] = {_norm_gene_id_upper(g) for g in ev_seen_trim if str(g).strip()}
+
+        computed_gsh_trim = _hash_gene_set_trim12(ev_union) if ev_union else ""
+        computed_gsh_upper = _hash_gene_set_upper12(ev_union) if ev_union else ""
         out.at[i, "term_ids_set_hash"] = _hash_term_ids(term_ids)
 
         gsh_norm = "" if _is_na_scalar(gsh) else str(gsh).strip().lower()
@@ -1187,26 +1223,43 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        if computed_gsh.lower() != gsh_norm:
+        # Backward-compat: accept either trim-hash or upper-hash match
+        match_mode = ""
+        if computed_gsh_trim.lower() == gsh_norm:
+            match_mode = "trim"
+            out.at[i, "gene_set_hash_computed"] = computed_gsh_trim.lower()
+        elif computed_gsh_upper.lower() == gsh_norm:
+            match_mode = "upper_compat"
+            out.at[i, "gene_set_hash_computed"] = computed_gsh_upper.lower()
+        else:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
             out.at[i, "audit_notes"] = (
-                f"gene_set_hash mismatch: {computed_gsh.lower()} != {gsh_norm}"
+                "gene_set_hash mismatch: "
+                f"trim={computed_gsh_trim.lower()} "
+                f"upper={computed_gsh_upper.lower()} "
+                f"!= claim={gsh_norm}"
             )
             _enforce_reason_vocab(out, i)
             continue
 
+        out.at[i, "gene_set_hash_match_mode"] = match_mode
         out.at[i, "gene_set_hash_effective"] = gsh_norm
 
-        if gene_ids:
-            n_hit = sum(1 for g in gene_ids if g in ev_seen)
+        # Optional gene_ids overlap check (min_overlap). Allow case-insensitive fallback.
+        if gene_ids_trim:
+            hits_trim = sum(1 for g in gene_ids_trim if g in ev_seen_trim)
+            hits_upper = sum(1 for g in gene_ids_upper if g in ev_seen_upper)
+            n_hit = max(hits_trim, hits_upper)
+
             if n_hit < int(min_overlap):
                 out.at[i, "status"] = "FAIL"
                 out.at[i, "link_ok"] = False
                 out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
                 out.at[i, "audit_notes"] = (
-                    f"gene_ids drift: hits={n_hit} < min_overlap={min_overlap}"
+                    f"gene_ids drift: hits={n_hit} < min_overlap={min_overlap} "
+                    f"(hits_trim={hits_trim}, hits_upper={hits_upper})"
                 )
                 _enforce_reason_vocab(out, i)
                 continue
@@ -1257,7 +1310,6 @@ def audit_claims(
         if scope == "module":
             out.at[i, "module_reason"] = f"module_survival_used(module_id={module_id})"
         else:
-            # if module_id existed but not found in module_surv, note it
             if module_id and (
                 module_surv is None or module_id not in getattr(module_surv, "index", [])
             ):
@@ -1438,16 +1490,23 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-            gsh_after = _hash_gene_set(list(kept))
-            if (
-                str(gsh_after).strip().lower()
-                != str(out.at[i, "gene_set_hash_effective"]).strip().lower()
+            gsh_after_trim = _hash_gene_set_trim12(list(kept))
+            gsh_after_upper = _hash_gene_set_upper12(list(kept))
+            gsh_eff = str(out.at[i, "gene_set_hash_effective"]).strip().lower()
+
+            # Backward-compat: accept either trim/upper stability in the hash space
+            if (gsh_after_trim.strip().lower() != gsh_eff) and (
+                gsh_after_upper.strip().lower() != gsh_eff
             ):
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
                 out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"], f"dropout_hash_change: {note} gsh_after={gsh_after}"
+                    out.at[i, "audit_notes"],
+                    (
+                        f"dropout_hash_change: {note} "
+                        f"after(trim={gsh_after_trim}, upper={gsh_after_upper})"
+                    ),
                 )
                 _enforce_reason_vocab(out, i)
                 continue

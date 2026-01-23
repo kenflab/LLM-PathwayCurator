@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 import numpy as np
@@ -11,6 +12,10 @@ from .masking import apply_gene_masking
 from .sample_card import SampleCard
 
 _NA_TOKENS_L = {"", "na", "nan", "none"}
+
+# Keep conservative to avoid destructive whitespace splitting.
+_GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+_GENE_TOKEN = re.compile(_GENE_TOKEN_RE)
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -80,18 +85,22 @@ def _normalize_direction(x: Any) -> str:
     return "na"
 
 
-def _clean_gene_symbol(g: str) -> str:
+def _clean_gene_token(g: str) -> str:
+    """
+    Conservative token cleanup (NO forced uppercasing).
+    Canonicalization beyond trimming should be done explicitly via ID maps.
+    """
     s = str(g).strip().strip('"').strip("'")
     s = " ".join(s.split())
     s = s.strip(",;|")
-    return s.upper()
+    return s
 
 
 def _split_genes_loose(x: Any) -> list[str]:
     """
     Tolerant parsing for evidence_genes:
       - list/tuple/set -> unique, preserve order
-      - string -> split on , ; | (fallback: whitespace) -> unique, preserve order
+      - string -> split on , ; | (fallback: whitespace ONLY if all tokens are gene-like)
       - NA/empty -> []
     """
     if _is_na_scalar(x):
@@ -107,15 +116,21 @@ def _split_genes_loose(x: Any) -> list[str]:
         s = " ".join(s.split()).strip()
         if not s or s.lower() in _NA_TOKENS_L:
             return []
-        if "," not in s and " " in s:
-            parts = s.split()
-        else:
+
+        if "," in s:
             parts = s.split(",")
+        else:
+            # whitespace fallback only if tokens look gene-like (avoid destructive split)
+            toks = s.split()
+            if toks and all(bool(_GENE_TOKEN.match(tok)) for tok in toks):
+                parts = toks
+            else:
+                parts = [s]
 
     out: list[str] = []
     seen: set[str] = set()
     for p in parts:
-        g = _clean_gene_symbol(p)
+        g = _clean_gene_token(p)
         if not g:
             continue
         if g not in seen:
@@ -154,9 +169,9 @@ def _hash_gene_set_short12(genes: list[str]) -> str:
     """
     Audit-grade gene_set_hash (12 hex), set-stable:
       - order invariant
-      - uppercased symbols
+      - token-trimmed (NO forced uppercasing)
     """
-    uniq = sorted({_clean_gene_symbol(g) for g in genes if str(g).strip()})
+    uniq = sorted({_clean_gene_token(g) for g in genes if str(g).strip()})
     payload = ",".join(uniq)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -269,7 +284,7 @@ def _perturb_genes(
                 add_genes = rng.choice(candidates, size=min(k_add, candidates.size), replace=False)
                 out.update([str(g) for g in add_genes.tolist()])
 
-    out = set([_clean_gene_symbol(g) for g in out if str(g).strip()])
+    out = set([_clean_gene_token(g) for g in out if str(g).strip()])
     return out
 
 
@@ -313,7 +328,7 @@ def _loo_survival_from_replicates(
             continue
         genes = r["evidence_genes"]
         gset = set(genes) if isinstance(genes, list) else set(_split_genes_loose(genes))
-        g_clean = set([_clean_gene_symbol(g) for g in gset if str(g).strip()])
+        g_clean = set([_clean_gene_token(g) for g in gset if str(g).strip()])
         base_map_genes.setdefault(tu, set()).update(g_clean)
         if tu not in base_map_dir:
             base_map_dir[tu] = _normalize_direction(r.get("direction"))
@@ -330,6 +345,7 @@ def _loo_survival_from_replicates(
             }
         )
 
+    # For each non-baseline replicate, build tu -> (dir, geneset) with union semantics.
     rep_lookup: dict[str, dict[str, tuple[str, set[str]]]] = {}
     for rid in reps_nb:
         sub = df[df["replicate_id"].astype(str) == rid]
@@ -341,7 +357,15 @@ def _loo_survival_from_replicates(
             d = _normalize_direction(r.get("direction"))
             genes = r["evidence_genes"]
             gset = set(genes) if isinstance(genes, list) else set(_split_genes_loose(genes))
-            m[tu] = (d, set([_clean_gene_symbol(g) for g in gset if str(g).strip()]))
+            g_clean = set([_clean_gene_token(g) for g in gset if str(g).strip()])
+
+            if tu in m:
+                d0, g0 = m[tu]
+                # keep direction if already informative; otherwise take current
+                d_eff = d0 if d0 in {"up", "down"} else d
+                m[tu] = (d_eff, set(g0) | set(g_clean))
+            else:
+                m[tu] = (d, set(g_clean))
         rep_lookup[rid] = m
 
     rows = []
@@ -586,13 +610,13 @@ def distill_evidence(
         base_hashes: list[str] = []
         drift_rate_list: list[float] = []
 
-        for tu, rid, xs in zip(
-            out["term_uid"].astype(str).tolist(),
-            out["term_row_id"].astype(int).tolist(),
-            out["evidence_genes"].tolist(),
-            strict=False,
-        ):
-            orig = set([_clean_gene_symbol(g) for g in xs if str(g).strip()])
+        # Avoid zip(strict=...) portability concerns; iterate by index explicitly.
+        for i in range(len(out)):
+            tu = str(out.loc[i, "term_uid"])
+            rid = int(out.loc[i, "term_row_id"])
+            xs = out.loc[i, "evidence_genes"]
+
+            orig = set([_clean_gene_token(g) for g in xs if str(g).strip()])
 
             base_hash = _hash_gene_set_short12(xs)
             base_hashes.append(base_hash)
