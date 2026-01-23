@@ -1,4 +1,3 @@
-# LLM-PathwayCurator/src/llm_pathway_curator/sample_card.py
 from __future__ import annotations
 
 import json
@@ -6,10 +5,13 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 NA_TOKEN = "NA"
-CORE_KEYS = ("disease", "tissue", "perturbation", "comparison")
+
+# Tool-facing core context keys:
+# - Use neutral "condition" (not disease/cancer) for generality.
+CORE_KEYS = ("condition", "tissue", "perturbation", "comparison")
 
 MAX_EXTRA_NESTING = 8
 
@@ -54,7 +56,7 @@ TOOL_KNOBS = {
     "stress_gate_mode",
 }
 
-# Backward-compat aliases that may appear in older cards
+# Backward-compat aliases that may appear in older cards.
 # IMPORTANT: do NOT mix context vs stress aliases.
 ALIASES = {
     # selection
@@ -70,6 +72,16 @@ ALIASES = {
     # gates
     "context_gate_mode": {"context_gate", "context_mode"},
     "stress_gate_mode": {"stress_mode", "stress", "stress_gate"},
+}
+
+# Backward-compat aliases for CORE context keys.
+# Input may use disease/cancer/tumor; tool normalizes to "condition".
+CTX_ALIASES = {
+    "condition": {"condition"},
+    "tissue": {"tissue"},
+    "perturbation": {"perturbation"},
+    "comparison": {"comparison"},
+    "disease": {"disease", "cancer", "tumor"},
 }
 
 
@@ -163,6 +175,10 @@ def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
       - Apply backward-compat aliases.
       - Hoist official TOOL_KNOBS if still buried (defensive).
       - Do NOT delete unknown keys (user notes / future compat).
+
+    IMPORTANT:
+      - k_claims MUST be top-level (SampleCard field). Do not keep it in extra.
+        (We drop canonical + aliases here as a last line of defense.)
     """
     if not _is_dict(extra):
         return {}
@@ -177,6 +193,11 @@ def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
         v = _find_in_nested_extra(extra, k)
         if v is not None:
             out[k] = v
+
+    # Enforce contract: k_claims is TOP-LEVEL ONLY
+    out.pop("k_claims", None)
+    for a in ALIASES.get("k_claims", set()):
+        out.pop(a, None)
 
     return out
 
@@ -241,19 +262,56 @@ def _normalize_gate_mode(x: Any, default: str) -> str:
     return "hard"
 
 
+def _hoist_context_aliases(obj: dict[str, Any]) -> dict[str, Any]:
+    """
+    Back-compat:
+      - If "condition" is missing, accept "disease"/"cancer"/"tumor" and hoist to "condition".
+      - Keep the *original* keys in obj (we don't delete here); SampleCard ignores unknown keys.
+    """
+    if not isinstance(obj, dict):
+        return obj
+
+    if obj.get("condition") is None:
+        for k in ("disease", "cancer", "tumor"):
+            if obj.get(k) is not None:
+                obj["condition"] = obj.get(k)
+                break
+    return obj
+
+
 class SampleCard(BaseModel):
-    disease: str = Field(default=NA_TOKEN)
+    """
+    Tool-facing contract:
+      - Core context keys are normalized strings.
+      - The neutral key is "condition" (legacy disease/cancer/tumor accepted on input).
+      - k_claims is TOP-LEVEL ONLY (not inside extra).
+      - extra is flattened + alias-canonicalized (but keeps unknown keys).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    condition: str = Field(default=NA_TOKEN)
     tissue: str = Field(default=NA_TOKEN)
     perturbation: str = Field(default=NA_TOKEN)
     comparison: str = Field(default=NA_TOKEN)
 
     notes: str | None = None
+
+    # IMPORTANT: keep JSON key "k_claims" but avoid clashing with method name k_claims()
+    k_claims_value: int = Field(default=3, alias="k_claims")
+
     extra: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("disease", "tissue", "perturbation", "comparison", mode="before")
+    @field_validator("condition", "tissue", "perturbation", "comparison", mode="before")
     @classmethod
     def _normalize_core(cls, v: Any) -> str:
         return _norm_str(v)
+
+    @field_validator("k_claims_value", mode="before")
+    @classmethod
+    def _normalize_k_claims_value(cls, v: Any) -> int:
+        # be forgiving; enforce >=1 downstream
+        return _as_int(v, 3)
 
     @field_validator("extra", mode="before")
     @classmethod
@@ -263,7 +321,7 @@ class SampleCard(BaseModel):
         return _canonicalize_audit_knobs(dict(v))
 
     def context_key(self) -> str:
-        return "|".join([self.disease, self.tissue, self.perturbation, self.comparison])
+        return "|".join([self.condition, self.tissue, self.perturbation, self.comparison])
 
     def context_dict(self) -> dict[str, str]:
         return {k: getattr(self, k) for k in CORE_KEYS}
@@ -288,7 +346,6 @@ class SampleCard(BaseModel):
 
     def hub_frac_thr(self, default: float = 0.5) -> float:
         v = _as_float((self.extra or {}).get("hub_frac_thr", None), default)
-        # keep within [0,1]
         return float(min(max(v, 0.0), 1.0))
 
     def min_union_genes(self, default: int = 3) -> int:
@@ -322,7 +379,9 @@ class SampleCard(BaseModel):
         if not isinstance(obj, dict):
             raise ValueError(f"SampleCard JSON must be an object/dict: {p}")
 
-        core_keys = ["disease", "tissue", "perturbation", "comparison", "notes"]
+        obj = _hoist_context_aliases(obj)
+
+        core_keys = ["condition", "tissue", "perturbation", "comparison", "notes", "k_claims"]
         known = {k: obj.get(k) for k in core_keys}
 
         extra: dict[str, Any] = {}
@@ -330,10 +389,27 @@ class SampleCard(BaseModel):
         if isinstance(top_extra, dict):
             extra.update(top_extra)
 
+        # Any non-core top-level keys -> extra (back-compat)
         for k, v in obj.items():
             if k in core_keys or k == "extra":
                 continue
             extra[k] = v
+
+        # Backward-compat: allow k_claims buried in extra or via aliases, but HOIST to top-level.
+        # This prevents "extra.k_claims resurrection" on round-trips.
+        if known.get("k_claims") is None:
+            if "k_claims" in extra and extra.get("k_claims") is not None:
+                known["k_claims"] = extra.get("k_claims")
+            else:
+                for a in ALIASES.get("k_claims", set()):
+                    if a in extra and extra.get(a) is not None:
+                        known["k_claims"] = extra.get(a)
+                        break
+
+        # Always remove k_claims + aliases from extra (contract)
+        extra.pop("k_claims", None)
+        for a in ALIASES.get("k_claims", set()):
+            extra.pop(a, None)
 
         known["extra"] = extra
         return cls(**known)
@@ -341,20 +417,30 @@ class SampleCard(BaseModel):
     def to_json(self, path: str | Path, *, indent: int = 2) -> None:
         p = Path(path)
         p.write_text(
-            json.dumps(self.model_dump(), ensure_ascii=False, indent=indent) + "\n",
+            json.dumps(self.model_dump(by_alias=True), ensure_ascii=False, indent=indent) + "\n",
             encoding="utf-8",
         )
 
     def apply_patch(self, patch: dict[str, Any]) -> SampleCard:
-        base = self.model_dump()
+        base = self.model_dump(by_alias=True)
         for k, v in patch.items():
-            if k in {"disease", "tissue", "perturbation", "comparison", "notes"}:
+            if k in {"condition", "tissue", "perturbation", "comparison", "notes", "k_claims"}:
                 base[k] = v
+            # Back-compat: allow patch using "disease" too
+            elif k in {"disease", "cancer", "tumor"} and base.get("condition") in {None, NA_TOKEN}:
+                base["condition"] = v
             elif k == "extra" and isinstance(v, dict):
                 base["extra"] = {**base.get("extra", {}), **v}
             else:
                 base.setdefault("extra", {})
                 base["extra"][k] = v
+
+        # Enforce contract: never keep k_claims in extra
+        if isinstance(base.get("extra"), dict):
+            base["extra"].pop("k_claims", None)
+            for a in ALIASES.get("k_claims", set()):
+                base["extra"].pop(a, None)
+
         return SampleCard(**base)
 
     # ---- select / tool knobs (v1.1 minimal) ----
@@ -364,6 +450,10 @@ class SampleCard(BaseModel):
         return s if s in {"deterministic", "llm"} else str(default)
 
     def k_claims(self, default: int = 3) -> int:
+        # TOP-LEVEL has priority; extra is fallback only (should be absent).
+        v_top = getattr(self, "k_claims_value", None)
+        if v_top is not None:
+            return max(1, _as_int(v_top, default))
         return max(1, _as_int((self.extra or {}).get("k_claims", None), default))
 
     def max_per_module(self, default: int = 1) -> int:
@@ -373,7 +463,6 @@ class SampleCard(BaseModel):
         return _as_bool((self.extra or {}).get("preselect_tau_gate", None), default)
 
     def enable_context_score_proxy(self, default: bool = False) -> bool:
-        # Debugging only: string-match proxy. Default OFF.
         return _as_bool((self.extra or {}).get("enable_context_score_proxy", None), default)
 
     # ---- gate behavior knobs (tool contract; align with audit.py) ----

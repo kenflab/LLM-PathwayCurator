@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import deque
 from dataclasses import dataclass
 from typing import Literal
@@ -16,19 +17,34 @@ class ModuleOutputs:
     edges_df: pd.DataFrame
 
 
+_NA_TOKENS = {"", "na", "nan", "none"}
+# Conservative gene-like token heuristic (align with schema.py spirit)
+_GENE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 # -------------------------
 # Normalization (align with audit/select)
 # -------------------------
-def _clean_gene_id(g: str) -> str:
+def _clean_gene_id(g: object) -> str:
     s = str(g).strip().strip('"').strip("'")
     s = " ".join(s.split())
     s = s.strip(",;|")
     return s
 
 
-def _norm_gene_id(g: str) -> str:
+def _norm_gene_id(g: object) -> str:
     # match audit.py (_norm_gene_id) to avoid spurious drift
     return _clean_gene_id(g).upper()
+
+
+def _dedup_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
 def _hash_set_short12(items: list[str]) -> str:
@@ -65,36 +81,38 @@ def _parse_genes_fallback(x: object) -> list[str]:
     """
     Last-resort parser for legacy string inputs.
     Matches schema/distill tolerant behavior:
+
       - delimiters: , ; |
-      - whitespace fallback if no commas present
+      - whitespace fallback ONLY if all tokens look gene-like
+        (avoid destructive split for free text)
     """
     if x is None:
         return []
     s = str(x).strip()
-    if not s or s.lower() in {"na", "nan", "none"}:
+    if not s or s.lower() in _NA_TOKENS:
         return []
 
     s = s.replace(";", ",").replace("|", ",")
     s = s.replace("\n", " ").replace("\t", " ")
     s = " ".join(s.split()).strip()
-    if not s or s.lower() in {"na", "nan", "none"}:
+    if not s or s.lower() in _NA_TOKENS:
         return []
 
     if "," in s:
-        parts = s.split(",")
+        parts = [p.strip() for p in s.split(",") if p.strip()]
     else:
-        parts = s.split()
+        parts0 = [p.strip() for p in s.split(" ") if p.strip()]
+        if parts0 and all(bool(_GENE_TOKEN_RE.match(tok)) for tok in parts0):
+            parts = parts0
+        else:
+            # Avoid destructive split: treat as single field (likely not a gene list)
+            parts = [s]
 
     genes = [_norm_gene_id(p) for p in parts]
     genes = [g for g in genes if g]
+
     # de-duplicate while preserving order
-    seen: set[str] = set()
-    out: list[str] = []
-    for g in genes:
-        if g not in seen:
-            seen.add(g)
-            out.append(g)
-    return out
+    return _dedup_preserve_order(genes)
 
 
 def build_term_gene_edges(
@@ -109,6 +127,9 @@ def build_term_gene_edges(
     Performance policy:
       - Prefer vectorized explode for list-like evidence_genes.
       - Fall back to tolerant parsing for scalar strings (legacy inputs).
+
+    Contract:
+      - Empty/invalid gene lists are dropped (no edges produced).
     """
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col} (hint: run distill first to add term_uid)")
@@ -119,26 +140,32 @@ def build_term_gene_edges(
     df[term_id_col] = df[term_id_col].astype(str).str.strip()
     df = df[df[term_id_col].ne("")].copy()
     if df.empty:
-        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
+        return out
 
-    # Normalize genes to list[str] (vectorized for list-like, fallback for scalars)
     def _to_list(x: object) -> list[str]:
         if isinstance(x, (list, tuple, set)):
-            genes = [_norm_gene_id(g) for g in x]
-            return [g for g in genes if g]
+            genes = [_norm_gene_id(str(g)) for g in list(x)]
+            genes = [g for g in genes if g]
+            return _dedup_preserve_order(genes)
         return _parse_genes_fallback(x)
 
     df["_genes_list"] = df[genes_col].map(_to_list)
     df = df[df["_genes_list"].map(len).gt(0)].copy()
     if df.empty:
-        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
+        return out
 
     edges = df[[term_id_col, "_genes_list"]].explode("_genes_list", ignore_index=True)
     edges = edges.rename(columns={term_id_col: "term_uid", "_genes_list": "gene_id"})
     edges["gene_id"] = edges["gene_id"].astype(str).map(_norm_gene_id)
     edges = edges[edges["gene_id"].ne("")].copy()
     if edges.empty:
-        return pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
+        out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
+        return out
 
     edges["weight"] = 1.0
 
@@ -148,6 +175,14 @@ def build_term_gene_edges(
         .sort_values(["term_uid", "gene_id"], kind="mergesort")
         .reset_index(drop=True)
     )
+
+    edges.attrs["edges"] = {
+        "term_id_col": term_id_col,
+        "genes_col": genes_col,
+        "n_terms": int(edges["term_uid"].nunique()) if not edges.empty else 0,
+        "n_genes": int(edges["gene_id"].nunique()) if not edges.empty else 0,
+        "n_edges": int(len(edges)),
+    }
     return edges
 
 
@@ -410,6 +445,8 @@ def factorize_modules_connected_components(
             "effective_method": None,
             "min_shared_genes": int(min_shared_genes),
             "jaccard_min": float(jaccard_min),
+            "term_id_col": str(term_id_col),
+            "genes_col": str(genes_col),
         }
     )
 
@@ -476,7 +513,7 @@ def factorize_modules_connected_components(
         max_terms_for_pairwise = 1200
         try:
             max_terms_for_pairwise = int(
-                evidence_df.attrs.get("max_terms_for_pairwise", 1200)  # type: ignore[attr-defined]
+                getattr(evidence_df, "attrs", {}).get("max_terms_for_pairwise", 1200)
             )
         except Exception:
             pass

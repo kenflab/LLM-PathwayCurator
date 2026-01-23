@@ -14,13 +14,20 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 # -----------------------------
 # Core definitions: Risk/Coverage
 # -----------------------------
-def compute_counts(status: pd.Series) -> dict[str, int]:
-    s = status.astype(str).str.strip().str.upper()
+def _normalize_status(s: pd.Series) -> pd.Series:
+    return s.astype(str).str.strip().str.upper()
 
+
+def _validate_status_values(s_norm: pd.Series) -> None:
     allowed = {"PASS", "FAIL", "ABSTAIN"}
-    bad = sorted(set(s.unique().tolist()) - allowed)
+    bad = sorted(set(s_norm.unique().tolist()) - allowed)
     if bad:
-        raise ValueError(f"compute_counts: invalid status values: {bad}")
+        raise ValueError(f"invalid status values: {bad} (allowed={sorted(allowed)})")
+
+
+def compute_counts(status: pd.Series) -> dict[str, int]:
+    s = _normalize_status(status)
+    _validate_status_values(s)
 
     n_pass = int((s == "PASS").sum())
     n_fail = int((s == "FAIL").sum())
@@ -33,19 +40,20 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
     """
     Spec-safe metrics with explicit denominators.
 
-    Coverage:
-      - coverage_pass_total = PASS / TOTAL   (PASS率; ABSTAINは分母に含まれる)
+    Coverage (tool-facing default):
+      - coverage_pass_total = PASS / TOTAL
+        (ABSTAIN is included in TOTAL)
 
     Risk (answered-subset risk; ABSTAIN excluded):
       - risk_fail_given_decided = FAIL / (PASS + FAIL)
 
-    Also provide "audit failure rate" over all:
+    Also provide audit-failure-over-all:
       - risk_fail_total = FAIL / TOTAL
-      - fail_rate_total = FAIL / TOTAL  (alias; kept for backward compatibility)
+      - fail_rate_total = FAIL / TOTAL  (alias; stable for backward compat)
 
-    “decided = PASS ∪ FAIL (ABSTAIN excluded).
-    FAIL is an explicit negative decision,
-    kept in denominator to quantify audit failure among decided items.”
+    Notes:
+      - "decided" = PASS ∪ FAIL (ABSTAIN excluded).
+      - FAIL is an explicit negative decision produced by mechanical audits.
     """
     c = compute_counts(status)
     total = c["TOTAL"]
@@ -53,8 +61,6 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
 
     coverage_pass_total = (c["PASS"] / total) if total > 0 else float("nan")
     risk_fail_total = (c["FAIL"] / total) if total > 0 else float("nan")
-
-    # IMPORTANT: do NOT include ABSTAIN in denominator here
     risk_fail_given_decided = (c["FAIL"] / decided) if decided > 0 else float("nan")
 
     return {
@@ -82,15 +88,21 @@ def risk_coverage_curve(
     """
     Build a Risk–Coverage curve by sweeping a PASS threshold.
 
-    Intended semantics (selective prediction):
-      - FAIL stays FAIL always (safety)
-      - Among non-FAIL items:
-          PASS if score passes threshold, else ABSTAIN
-        (This avoids the pitfall: "only already-PASS can be gated".)
+    Intended semantics (selective prediction / abstention):
+      - FAIL stays FAIL always (safety).
+      - If promote_abstain=True:
+          Among non-FAIL items, assign:
+            PASS if score passes threshold else ABSTAIN.
+        (This reassigns BOTH preexisting PASS and ABSTAIN among non-FAIL,
+         avoiding the pitfall: "only already-PASS can be gated".)
+      - If promote_abstain=False:
+          Only gate existing PASS -> ABSTAIN when below threshold;
+          ABSTAIN stays ABSTAIN; FAIL stays FAIL.
 
     Guardrails:
       - ABSTAIN must NOT enter risk denominator (handled by risk_coverage_from_status).
       - score must be finite numeric.
+      - status must be in {PASS, ABSTAIN, FAIL}.
     """
     if score_col not in df.columns:
         raise ValueError(f"risk_coverage_curve: missing score_col={score_col}")
@@ -104,7 +116,16 @@ def risk_coverage_curve(
     if not np.isfinite(scores.to_numpy()).all():
         raise ValueError("risk_coverage_curve: score contains non-finite values")
 
-    if decision_thresholds is None:
+    base_status = _normalize_status(df[status_col])
+    _validate_status_values(base_status)
+
+    if decision_thresholds is not None:
+        if len(decision_thresholds) == 0:
+            raise ValueError("risk_coverage_curve: decision_thresholds is empty")
+        decision_thresholds = [float(x) for x in decision_thresholds]
+        # keep stable ordering + dedupe
+        decision_thresholds = sorted(set(decision_thresholds))
+    else:
         uniq = np.unique(scores.to_numpy())
         uniq = np.sort(uniq)
         if len(uniq) == 0:
@@ -116,7 +137,6 @@ def risk_coverage_curve(
             qs = np.quantile(uniq, np.linspace(0, 1, 200))
             decision_thresholds = [float(x) for x in qs.tolist()]
 
-        # de-duplicate (important for discretized scores / quantiles)
         decision_thresholds = sorted(set(decision_thresholds))
 
     # Degenerate curve guardrail (paper-facing)
@@ -127,13 +147,10 @@ def risk_coverage_curve(
         )
         if fail_on_degenerate:
             raise ValueError(msg)
-        # keep behavior but do NOT return empty curve
-        decision_thresholds = list(decision_thresholds) if decision_thresholds is not None else []
         if len(decision_thresholds) == 0:
-            # fallback to the only available threshold
             decision_thresholds = [float(scores.iloc[0])]
+        # else keep the single threshold
 
-    base_status = df[status_col].astype(str).str.strip().str.upper()
     out_rows: list[dict[str, Any]] = []
 
     for thr in decision_thresholds:
@@ -150,17 +167,13 @@ def risk_coverage_curve(
 
         if promote_abstain:
             # Among non-FAIL: PASS if threshold satisfied else ABSTAIN
-            s = s.where(~not_fail, other="ABSTAIN")
+            s = s.where(is_fail, other="ABSTAIN")
             s = s.where(~pass_mask, other="PASS")
         else:
-            # Only allow gating of already-PASS items (more conservative)
-            # - PASS can drop to ABSTAIN if below threshold
-            # - ABSTAIN stays ABSTAIN
-            # - FAIL stays FAIL
+            # Only allow gating of already-PASS items
             was_pass = s == "PASS"
             to_abstain = was_pass & not_fail & (~pass_mask)
             s = s.where(~to_abstain, other="ABSTAIN")
-            # keep PASS where pass_mask, keep ABSTAIN where already ABSTAIN
 
         m = risk_coverage_from_status(s)
         m["threshold"] = float(thr)
@@ -259,7 +272,6 @@ def fit_temperature_scaling(
     losses = np.array([nll(T) for T in Ts], dtype=float)
     T_best = float(Ts[int(np.argmin(losses))])
 
-    # constrain extreme temps (avoid pathological output)
     return float(np.clip(T_best, 0.25, 10.0))
 
 
@@ -362,6 +374,8 @@ def extract_probs_and_labels(
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Extract probability-like scores + optional binary labels.
+
+    Labels are STRICT: only exact {0,1} accepted (no rounding).
     """
     if prob_col not in audit_log.columns:
         raise ValueError(f"extract_probs_and_labels: missing prob_col={prob_col}")
@@ -383,7 +397,6 @@ def extract_probs_and_labels(
         if not np.isfinite(yv.to_numpy()).all():
             raise ValueError("extract_probs_and_labels: label contains non-finite values")
 
-        # STRICT: allow only exact {0,1} (as int-like floats), refuse rounding
         y_arr = yv.to_numpy().astype(float)
         uniq = set(np.unique(y_arr).tolist())
         if uniq - {0.0, 1.0}:

@@ -12,9 +12,21 @@ from .audit_reasons import ALL_REASONS
 
 Direction = Literal["up", "down", "na"]
 Status = Literal["PASS", "ABSTAIN", "FAIL"]
-ContextKey = Literal["disease", "tissue", "perturbation", "comparison"]
+
+# Tool-facing context keys:
+# - Use neutral "condition" (not disease/cancer) for generality.
+# - Accept legacy synonyms at input time and normalize to "condition".
+ContextKey = Literal["condition", "tissue", "perturbation", "comparison"]
+
+# Optional per-claim context relevance review (used by audit gate).
+ContextStatus = Literal["PASS", "WARN", "FAIL"]
+ContextMethod = Literal["llm", "proxy", "none"]
 
 _NA = {"na", "nan", "none", ""}
+
+# Keep context explanation minimal to avoid “narrative drift”.
+_MAX_CONTEXT_REASON_CHARS = 160
+_MAX_CONTEXT_NOTES_CHARS = 400
 
 
 def _dedup_preserve_order(xs: list[str]) -> list[str]:
@@ -68,7 +80,7 @@ def _canonical_sorted_unique(xs: list[str]) -> list[str]:
     # Stable, order-invariant canonicalization for IDs/hashes.
     # - strip
     # - drop NA/empty
-    # - dedup (case-sensitive; callers can pre-normalize)
+    # - dedup
     # - sort for determinism
     ys = [str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() not in _NA]
     return sorted(set(ys))
@@ -125,6 +137,21 @@ def _stable_gene_set_hash_fallback(term_ids: list[str]) -> str:
     canon = _canonical_sorted_unique([str(t) for t in term_ids])
     payload = ",".join(canon)
     return _sha256_12hex(payload)
+
+
+# Legacy input aliases for context keys (normalized to tool-facing keys).
+_CTX_KEY_ALIASES: dict[str, str] = {
+    # legacy / figure-specific terms
+    "disease": "condition",
+    "cancer": "condition",
+    "tumor": "condition",
+    # canonical keys
+    "condition": "condition",
+    "tissue": "tissue",
+    "perturbation": "perturbation",
+    "comparison": "comparison",
+}
+_ALLOWED_CTX_KEYS: set[str] = {"condition", "tissue", "perturbation", "comparison"}
 
 
 class EvidenceRef(BaseModel):
@@ -197,7 +224,6 @@ class EvidenceRef(BaseModel):
         if not _looks_like_12hex(h):
             raise ValueError("EvidenceRef.gene_set_hash must be 12-hex (sha256[:12])")
 
-        # IMPORTANT: return self (not a new object) to avoid pydantic warning
         self.gene_set_hash = h
         return self
 
@@ -211,6 +237,20 @@ class Claim(BaseModel):
       - direction: up|down|na
       - context_keys: which SampleCard keys this claim is conditioned on (values live elsewhere)
       - evidence_ref: schema-locked EvidenceRef (no free text evidence)
+
+    Optional (for context gating / shuffle stress):
+      - context_evaluated: whether a context relevance review was executed
+      - context_method: llm|proxy|none
+      - context_status: PASS|WARN|FAIL (meaning: relevant / weak / inconsistent)
+      - context_reason/context_notes: short explanation (kept minimal; auditable gate uses status)
+
+    IMPORTANT invariant (enforced here):
+      - If context_evaluated is False:
+          * context_method must be "none"
+          * context_status/reason/notes must be None
+      - If context_evaluated is True:
+          * context_method must be "llm" or "proxy"
+          * context_status must be provided
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -219,6 +259,13 @@ class Claim(BaseModel):
     entity: str
     direction: Direction
     context_keys: list[ContextKey] = Field(default_factory=list)
+
+    # Optional context review metadata (used by audit gate).
+    context_evaluated: bool = False
+    context_method: ContextMethod = "none"
+    context_status: ContextStatus | None = None
+    context_reason: str | None = None
+    context_notes: str | None = None
 
     evidence_ref: EvidenceRef = Field(
         ...,
@@ -241,11 +288,18 @@ class Claim(BaseModel):
 
     @field_validator("context_keys", mode="before")
     @classmethod
-    def _ctx_keys_dedup(cls, v: Any) -> list[str]:
+    def _ctx_keys_normalize_and_dedup(cls, v: Any) -> list[str]:
         xs = _dedup_preserve_order(_split_listlike(v))
-        allowed = {"disease", "tissue", "perturbation", "comparison"}
-        xs2 = [x for x in xs if x in allowed]
-        return xs2
+        out: list[str] = []
+        for x in xs:
+            raw = str(x).strip()
+            if not raw:
+                continue
+            k = raw.lower()
+            k2 = _CTX_KEY_ALIASES.get(k, "")
+            if k2 and k2 in _ALLOWED_CTX_KEYS:
+                out.append(k2)
+        return _dedup_preserve_order(out)
 
     @field_validator("claim_id", mode="before")
     @classmethod
@@ -256,6 +310,40 @@ class Claim(BaseModel):
         if s.lower() in _NA:
             return ""
         return s
+
+    @field_validator("context_reason", "context_notes", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s or s.lower() in _NA:
+            return None
+        return s
+
+    @model_validator(mode="after")
+    def _normalize_context_review_fields(self) -> Claim:
+        # Enforce a simple, machine-reliable contract for audit gating.
+        if not self.context_evaluated:
+            self.context_method = "none"
+            self.context_status = None
+            self.context_reason = None
+            self.context_notes = None
+            return self
+
+        # context_evaluated=True:
+        if self.context_method == "none":
+            raise ValueError("context_method must be 'llm' or 'proxy' when context_evaluated=true")
+        if self.context_status is None:
+            raise ValueError("context_status must be provided when context_evaluated=true")
+
+        # Keep explanation fields minimal (avoid narrative drift).
+        if self.context_reason is not None and len(self.context_reason) > _MAX_CONTEXT_REASON_CHARS:
+            raise ValueError(f"context_reason too long (max {_MAX_CONTEXT_REASON_CHARS} chars)")
+        if self.context_notes is not None and len(self.context_notes) > _MAX_CONTEXT_NOTES_CHARS:
+            raise ValueError(f"context_notes too long (max {_MAX_CONTEXT_NOTES_CHARS} chars)")
+
+        return self
 
     @model_validator(mode="after")
     def _fill_claim_id(self) -> Claim:
@@ -269,7 +357,6 @@ class Claim(BaseModel):
             context_keys=list(self.context_keys or []),
         )
 
-        # IMPORTANT: return self (not a new object) to avoid pydantic warning
         self.claim_id = cid
         return self
 
