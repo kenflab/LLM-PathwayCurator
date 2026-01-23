@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 
 from .audit import audit_claims
-from .backends import BaseLLMBackend, GeminiBackend, OllamaBackend, OpenAIBackend
+from .backends import BaseLLMBackend, get_backend_from_env
 from .distill import distill_evidence
 from .modules import attach_module_ids, factorize_modules_connected_components
 from .report import write_report, write_report_jsonl
@@ -988,6 +988,116 @@ def _inject_contradictory_direction(
 # -------------------------
 # Context review (pipeline-owned)
 # -------------------------
+def _extract_context_fields_from_claim_json(claim_json: Any) -> dict[str, Any]:
+    """
+    Extract canonical context_* fields from claim_json (source of truth).
+    Safe for missing/invalid JSON.
+
+    Returns keys:
+      context_status, context_reason, context_notes, context_confidence,
+      context_method, context_gate_mode, context_review_mode, context_evaluated
+    """
+    out = {
+        "context_status": pd.NA,
+        "context_reason": pd.NA,
+        "context_notes": pd.NA,
+        "context_confidence": pd.NA,
+        "context_method": pd.NA,
+        "context_gate_mode": pd.NA,
+        "context_review_mode": pd.NA,
+        "context_evaluated": pd.NA,
+    }
+
+    try:
+        obj = json.loads(claim_json) if isinstance(claim_json, str) else dict(claim_json)
+        if not isinstance(obj, dict):
+            return out
+    except Exception:
+        return out
+
+    # canonical fields (select.py patches these)
+    if "context_status" in obj:
+        out["context_status"] = str(obj.get("context_status") or "").strip() or pd.NA
+    if "context_reason" in obj:
+        out["context_reason"] = str(obj.get("context_reason") or "").strip() or pd.NA
+    if "context_notes" in obj:
+        out["context_notes"] = str(obj.get("context_notes") or "").strip() or pd.NA
+    if "context_confidence" in obj:
+        try:
+            out["context_confidence"] = float(obj.get("context_confidence"))
+        except Exception:
+            out["context_confidence"] = pd.NA
+
+    if "context_method" in obj:
+        out["context_method"] = str(obj.get("context_method") or "").strip() or pd.NA
+    if "context_gate_mode" in obj:
+        out["context_gate_mode"] = str(obj.get("context_gate_mode") or "").strip() or pd.NA
+    if "context_review_mode" in obj:
+        out["context_review_mode"] = str(obj.get("context_review_mode") or "").strip() or pd.NA
+    if "context_evaluated" in obj:
+        v = obj.get("context_evaluated")
+        out["context_evaluated"] = bool(v) if isinstance(v, bool) else pd.NA
+
+    return out
+
+
+def _normalize_context_confidence_for_gating(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make gating robust:
+      - If status==PASS and confidence is missing -> set to 1.0
+      - If status in WARN/FAIL/ABSTAIN and confidence missing -> set to 0.0
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    if "context_status" not in out.columns:
+        return out
+    if "context_confidence" not in out.columns:
+        out["context_confidence"] = pd.NA
+
+    st = out["context_status"].astype(str).str.strip().str.upper()
+    conf = pd.to_numeric(out["context_confidence"], errors="coerce")
+
+    pass_mask = st.eq("PASS") & conf.isna()
+    failish_mask = ~st.eq("PASS") & conf.isna()
+
+    conf.loc[pass_mask] = 1.0
+    conf.loc[failish_mask] = 0.0
+
+    out["context_confidence"] = conf
+    return out
+
+
+def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure TSV context_* columns reflect claim_json (SoT).
+    Rule:
+      - If claim_json provides a value, overwrite TSV column.
+      - Otherwise keep existing TSV value.
+    """
+    if df is None or df.empty:
+        return df
+
+    if "claim_json" not in df.columns:
+        return df
+
+    out = df.copy()
+
+    extracted = out["claim_json"].apply(_extract_context_fields_from_claim_json)
+    extracted_df = pd.DataFrame(list(extracted))
+
+    for col in extracted_df.columns:
+        if col not in out.columns:
+            out[col] = pd.NA
+
+        # overwrite only where extracted is not NA
+        mask = ~pd.isna(extracted_df[col])
+        out.loc[mask, col] = extracted_df.loc[mask, col].values
+
+    return out
+
+
 def _get_card_extra(card: SampleCard) -> dict[str, Any]:
     try:
         ex = getattr(card, "extra", {}) or {}
@@ -1247,7 +1357,7 @@ def _apply_context_review(
     """
     Apply context review based on selected mode.
       - proxy: deterministic check over card context presence
-      - llm: not implemented here (future extension), falls back to proxy
+      - llm: DELEGATED (handled in select.py); do NOT override outputs here
       - off: leaves UNEVALUATED (hard gate will ABSTAIN by design)
     """
     rm = (review_mode or "").strip().lower()
@@ -1263,13 +1373,56 @@ def _apply_context_review(
             "note": "context review disabled",
         }
 
+    # IMPORTANT: if select.py already did LLM context review, do not override.
+    # In this tool, LLM context review is implemented in select.py, not pipeline.
     if rm == "llm":
-        out, meta = _proxy_context_review(proposed, card, gate_mode=gm)
-        meta["note"] = "llm context review not implemented in pipeline; used proxy fallback"
-        meta["backend_enabled"] = bool(backend is not None)
-        meta["seed"] = int(seed)
-        return out, meta
+        # try to detect whether context review is already present
+        already = False
+        if proposed is not None and (not proposed.empty):
+            # prefer claim_json SoT
+            if "claim_json" in proposed.columns:
+                try:
+                    ex = proposed["claim_json"].apply(_extract_context_fields_from_claim_json)
+                    ex_df = pd.DataFrame(list(ex))
+                    if "context_evaluated" in ex_df.columns:
+                        already = bool(
+                            pd.to_numeric(ex_df["context_evaluated"], errors="coerce")
+                            .fillna(0)
+                            .astype(int)
+                            .sum()
+                            > 0
+                        )
+                except Exception:
+                    already = False
 
+            # also accept select.py's context_review_* columns if present
+            if (not already) and ("context_review_evaluated" in proposed.columns):
+                try:
+                    v = proposed["context_review_evaluated"].map(
+                        lambda x: bool(x) if not _is_na_scalar(x) else False
+                    )
+                    already = bool(v.sum() > 0)
+                except Exception:
+                    already = False
+
+        out = proposed.copy()
+        # keep columns consistent (do not overwrite claim_json)
+        out = _ensure_context_review_fields(out, gate_mode=gm)
+
+        return out, {
+            "evaluated": bool(already),
+            "mode": "llm",
+            "gate_mode": gm,
+            "note": "context review is delegated to select.py; pipeline does not override",
+            "backend_enabled": bool(backend is not None),
+            "seed": int(seed),
+            "warning": (
+                "context_review_mode=llm but review_backend is None; "
+                "select.py may fall back or fail"
+            ),
+        }
+
+    # default: proxy
     return _proxy_context_review(proposed, card, gate_mode=gm)
 
 
@@ -1308,6 +1461,11 @@ def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
     if not s_norm:
         return ""
     return s_norm if s_norm.startswith("'") else ("'" + s_norm)
+
+
+def _fail_if_empty(df: pd.DataFrame, *, step: str, outdir: Path) -> None:
+    if df is None or getattr(df, "shape", (0,))[0] == 0:
+        raise RuntimeError(f"[{step}] produced 0 rows (outdir={outdir}).")
 
 
 def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
@@ -1467,76 +1625,55 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("select_claims")
 
-        backend: BaseLLMBackend | None = None
-        llm_backend_notes = ""
-        llm_backend_cfg: dict[str, Any] = {}
+        # resolve modes first
+        context_gate_mode = _resolve_context_gate_mode(card, default="soft")
+        context_review_mode = _resolve_context_review_mode(card, default="proxy")
 
-        claim_mode = _env_str("LLMPATH_CLAIM_MODE", "").lower()
+        seed0 = int(cfg.seed or 42)
+
+        # -------------------------
+        # C1 (claim selection) backend: ONLY when LLMPATH_CLAIM_MODE=llm
+        # -------------------------
+        claim_backend: BaseLLMBackend | None = None
+        claim_notes = ""
+        claim_mode = _env_str("LLMPATH_CLAIM_MODE", "").strip().lower()
+
         if claim_mode == "llm":
-            b = _env_str("LLMPATH_BACKEND", "ollama").lower()
-            llm_backend_cfg["backend"] = b
             try:
-                if b == "openai":
-                    api_key = _env_str("LLMPATH_OPENAI_API_KEY", "")
-                    llm_backend_cfg.update(
-                        {
-                            "model_name": _env_str("LLMPATH_OPENAI_MODEL", "gpt-4o"),
-                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
-                            "seed": int(cfg.seed or 42),
-                        }
-                    )
-                    if api_key:
-                        backend = OpenAIBackend(
-                            api_key=api_key,
-                            model_name=str(llm_backend_cfg["model_name"]),
-                            temperature=float(llm_backend_cfg["temperature"]),
-                            seed=int(llm_backend_cfg["seed"]),
-                        )
-                    else:
-                        llm_backend_notes = "missing LLMPATH_OPENAI_API_KEY"
-                elif b == "gemini":
-                    api_key = _env_str("LLMPATH_GEMINI_API_KEY", "")
-                    llm_backend_cfg.update(
-                        {
-                            "model_name": _env_str(
-                                "LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"
-                            ),
-                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
-                        }
-                    )
-                    if api_key:
-                        backend = GeminiBackend(
-                            api_key=api_key,
-                            model_name=str(llm_backend_cfg["model_name"]),
-                            temperature=float(llm_backend_cfg["temperature"]),
-                        )
-                    else:
-                        llm_backend_notes = "missing LLMPATH_GEMINI_API_KEY"
-                else:
-                    llm_backend_cfg.update(
-                        {
-                            "host": os.environ.get("LLMPATH_OLLAMA_HOST", None),
-                            "model_name": os.environ.get("LLMPATH_OLLAMA_MODEL", None),
-                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
-                            "timeout": float(_env_str("LLMPATH_OLLAMA_TIMEOUT", "120")),
-                        }
-                    )
-                    backend = OllamaBackend(
-                        host=llm_backend_cfg["host"],
-                        model_name=llm_backend_cfg["model_name"],
-                        temperature=float(llm_backend_cfg["temperature"]),
-                        timeout=float(llm_backend_cfg["timeout"]),
-                    )
+                claim_backend = get_backend_from_env(seed=seed0)
             except Exception as e:
-                backend = None
-                llm_backend_notes = f"backend_init_error:{type(e).__name__}"
+                claim_backend = None
+                claim_notes = f"claim_backend_init_error:{type(e).__name__}"
+
+        # -------------------------
+        # Context review backend: ONLY when context_review_mode == llm
+        # (independent of LLMPATH_CLAIM_MODE)
+        # -------------------------
+        review_backend: BaseLLMBackend | None = None
+        review_notes = ""
+
+        if str(context_review_mode).strip().lower() == "llm":
+            try:
+                review_backend = get_backend_from_env(seed=seed0)
+            except Exception as e:
+                review_backend = None
+                review_notes = f"review_backend_init_error:{type(e).__name__}"
 
         meta["inputs"]["llm"] = {
-            "claim_mode_env": claim_mode,
-            "backend_env": _env_str("LLMPATH_BACKEND", "ollama").lower(),
-            "backend_enabled": bool(backend is not None),
-            "backend_notes": llm_backend_notes,
-            "backend_config": llm_backend_cfg,
+            "claim": {
+                "enabled": (claim_mode == "llm"),
+                "claim_mode_env": claim_mode,
+                "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
+                "backend_enabled": bool(claim_backend is not None),
+                "backend_notes": claim_notes,
+            },
+            "review": {
+                "enabled": (str(context_review_mode).strip().lower() == "llm"),
+                "review_mode": str(context_review_mode).strip().lower(),
+                "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
+                "backend_enabled": bool(review_backend is not None),
+                "backend_notes": review_notes,
+            },
         }
 
         k_eff, k_meta = _resolve_k_claims(cfg, card)
@@ -1546,23 +1683,37 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 **k_meta,
                 "k_effective": int(k_eff),
                 "k_env_raw": os.environ.get("LLMPATH_K_CLAIMS", ""),
+                "context_gate_mode": context_gate_mode,
+                "context_review_mode": context_review_mode,
             }
         )
 
-        proposed = select_claims(
+        proposed = _call_compat(
+            select_claims,
             distilled2,
             card,
             k=int(k_eff),
-            backend=backend,
+            backend=claim_backend,  # C1 only
+            review_backend=review_backend,  # context review only (if select.py supports)
             seed=cfg.seed,
             outdir=str(outdir),
         )
 
+        if proposed is None or proposed.empty:
+            proposed = _call_compat(
+                select_claims,
+                distilled2,
+                card,
+                k=int(k_eff),
+                backend=None,  # force deterministic path
+                review_backend=review_backend,
+                seed=cfg.seed,
+                outdir=str(outdir),
+            )
+
+        _fail_if_empty(proposed, step="select_claims", outdir=outdir)
+
         proposed = _ensure_claim_payload_and_id(proposed, card)
-
-        context_gate_mode = _resolve_context_gate_mode(card, default="soft")
-        context_review_mode = _resolve_context_review_mode(card, default="proxy")
-
         proposed = _ensure_context_review_fields(proposed, gate_mode=context_gate_mode)
 
         seed0 = int(cfg.seed or 42)
@@ -1571,12 +1722,12 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             card,
             gate_mode=context_gate_mode,
             review_mode=context_review_mode,
-            backend=backend,
+            backend=review_backend,
             seed=seed0,
         )
 
         proposed = _canonicalize_claim_json_column(proposed)
-
+        meta.setdefault("inputs", {}).setdefault("llm", {})
         meta["inputs"]["claims"].update(
             {
                 "n_proposed_rows": int(getattr(proposed, "shape", [0, 0])[0]),
@@ -1713,6 +1864,9 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             proposed["gene_symbols_str"] = syms.map(
                 lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
             )
+
+        proposed = _sync_context_columns_from_claim_json(proposed)
+        proposed = _normalize_context_confidence_for_gating(proposed)
 
         proposed_path = outdir / "claims.proposed.tsv"
         _write_tsv(proposed, proposed_path)

@@ -4,9 +4,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.aliases import AliasChoices
-from pydantic.config import ConfigDict
 
 from .audit_reasons import ALL_REASONS
 
@@ -171,7 +170,7 @@ class EvidenceRef(BaseModel):
       - module_id: str
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     module_id: str = ""
     gene_ids: list[str] = Field(default_factory=list)

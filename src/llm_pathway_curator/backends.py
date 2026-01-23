@@ -11,37 +11,102 @@ from abc import ABC, abstractmethod
 from functools import wraps
 
 
+# -------------------------
+# Env helpers
+# -------------------------
+def _getenv(*names: str, default: str | None = None) -> str | None:
+    for n in names:
+        v = os.environ.get(n, None)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s == "":
+            continue
+        return s
+    return default
+
+
+def _getfloat(*names: str, default: float) -> float:
+    v = _getenv(*names, default=None)
+    if v is None:
+        return float(default)
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
+
+
+def _getint(*names: str, default: int) -> int:
+    v = _getenv(*names, default=None)
+    if v is None:
+        return int(default)
+    try:
+        return int(v)
+    except Exception:
+        return int(default)
+
+
 def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
-    backend = os.environ.get("LLMPATH_BACKEND", "ollama").strip().lower()
+    # Canonical prefix: LPC_*
+    backend = (
+        _getenv(
+            "BACKEND",
+            "LLMPATH_BACKEND",
+            default="ollama",
+        )
+        or "ollama"
+    ).lower()
     seed_val = 42 if seed is None else int(seed)
 
     if backend == "openai":
+        # prefer LPC_OPENAI_API_KEY, fallback to OPENAI_API_KEY, then LLMPATH_OPENAI_API_KEY
+        api_key = _getenv("OPENAI_API_KEY", "LLMPATH_OPENAI_API_KEY")
+        if not api_key:
+            raise KeyError("Missing OpenAI API key. Set: OPENAI_API_KEY or LLMPATH_OPENAI_API_KEY")
+
         return OpenAIBackend(
-            api_key=os.environ["LLMPATH_OPENAI_API_KEY"],
-            model_name=os.environ.get("LLMPATH_OPENAI_MODEL", "gpt-4o"),
-            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+            api_key=api_key,
+            model_name=_getenv(
+                "OPENAI_MODEL",
+                "LLMPATH_OPENAI_MODEL",
+                default="gpt-4o",
+            )
+            or "gpt-4o",
+            temperature=_getfloat("LLMPATH_TEMPERATURE", default=0.0),
             seed=seed_val,
         )
 
     if backend == "gemini":
+        api_key = _getenv("GEMINI_API_KEY", "LLMPATH_GEMINI_API_KEY")
+        if not api_key:
+            raise KeyError("Missing Gemini API key. Set: GEMINI_API_KEY or LLMPATH_GEMINI_API_KEY")
+
         return GeminiBackend(
-            api_key=os.environ["LLMPATH_GEMINI_API_KEY"],
-            model_name=os.environ.get("LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"),
-            temperature=float(os.environ.get("LLMPATH_TEMPERATURE", "0.0")),
+            api_key=api_key,
+            model_name=_getenv(
+                "GEMINI_MODEL",
+                "LLMPATH_GEMINI_MODEL",
+                default="models/gemini-2.0-flash",
+            )
+            or "models/gemini-2.0-flash",
+            temperature=_getfloat("LLMPATH_TEMPERATURE", default=0.0),
         )
 
     if backend == "ollama":
         return OllamaBackend(
-            host=os.environ.get("LLMPATH_OLLAMA_HOST", None),
-            model_name=os.environ.get("LLMPATH_OLLAMA_MODEL", None),
-            temperature=float(os.environ.get("LLMPATH_OLLAMA_TEMPERATURE", "0.0")),
-            timeout=float(os.environ.get("LLMPATH_OLLAMA_TIMEOUT", "120")),
+            host=_getenv("OLLAMA_HOST", "LLMPATH_OLLAMA_HOST", default=None),
+            model_name=_getenv("OLLAMA_MODEL", "LLMPATH_OLLAMA_MODEL", default=None),
+            temperature=_getfloat("LLMPATH_OLLAMA_TEMPERATURE", default=0.0),
+            timeout=_getfloat("LLMPATH_OLLAMA_TIMEOUT", default=120.0),
         )
 
     if backend in {"local", "offline"}:
         return LocalLLMBackend()
 
-    raise ValueError(f"Unknown LLMPATH_BACKEND={backend!r} (expected: openai|gemini|ollama|local)")
+    raise ValueError(
+        f"Unknown backend={backend!r} (expected: openai|gemini|ollama|local). "
+        "Set: BACKEND or LLMPATH_BACKEND."
+    )
 
 
 class BaseLLMBackend(ABC):
@@ -341,6 +406,47 @@ class OllamaBackend(BaseLLMBackend):
 
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        # --- json_mode: use /api/generate (known to work reliably) ---
+        if json_mode:
+            url = f"{self.host}/api/generate"
+            payload = {
+                "model": self.model_name,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": self.temperature},
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                obj = json.loads(raw)
+                content = (obj.get("response") or "").strip()
+
+                # ensure returned text is JSON
+                try:
+                    json.loads(content)
+                    return content
+                except Exception:
+                    return _soft_error_json(
+                        f"Ollama(/api/generate) returned non-JSON in json_mode: {content[:200]}",
+                        err_type="ollama_non_json",
+                        retryable=False,
+                    )
+            except Exception as e:
+                msg = str(e)
+                retryable = any(
+                    h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+                )
+                return _soft_error_json(msg, err_type="ollama_error", retryable=retryable)
+
+        # --- non-json_mode: keep /api/chat ---
         url = f"{self.host}/api/chat"
         payload = {
             "model": self.model_name,
@@ -348,8 +454,6 @@ class OllamaBackend(BaseLLMBackend):
             "messages": [{"role": "user", "content": prompt}],
             "options": {"temperature": self.temperature},
         }
-        if json_mode:
-            payload["format"] = "json"
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -369,30 +473,10 @@ class OllamaBackend(BaseLLMBackend):
                 msg = obj.get("message") or {}
                 if isinstance(msg, dict):
                     content = (msg.get("content") or "").strip()
-            if not content and isinstance(obj, dict):
-                content = (obj.get("response") or "").strip()
-
-            if json_mode:
-                s = (content or "").strip()
-                try:
-                    json.loads(s)
-                    return s
-                except Exception:
-                    return _soft_error_json(
-                        f"Ollama returned non-JSON in json_mode: {s[:200]}",
-                        err_type="ollama_non_json",
-                        retryable=False,
-                    )
-
             return content if content else raw.strip()
 
         except Exception as e:
             msg = str(e)
-            retryable = any(
-                h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
-            )
-            if json_mode:
-                return _soft_error_json(msg, err_type="ollama_error", retryable=retryable)
             return f"Ollama Error: {msg}"
 
 
