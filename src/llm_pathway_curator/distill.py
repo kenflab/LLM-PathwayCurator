@@ -460,7 +460,9 @@ def distill_evidence(
     )
 
     # TSV-friendly genes
-    out["evidence_genes_str"] = out["evidence_genes"].map(lambda xs: ",".join(xs))
+    out["evidence_genes_str"] = out["evidence_genes"].map(
+        lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
+    )
 
     # ===========================
     # Distill knobs (single read)

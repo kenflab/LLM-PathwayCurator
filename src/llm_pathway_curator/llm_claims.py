@@ -74,20 +74,23 @@ def _safe_write_json(path: Path, obj: Any) -> None:
 
 
 def _context_dict(card: SampleCard) -> dict[str, str]:
-    # values are used for prompting only; NOT used for claim_id identity
-    return {
-        "disease": _strip_na(getattr(card, "disease", "")),
-        "tissue": _strip_na(getattr(card, "tissue", "")),
-        "perturbation": _strip_na(getattr(card, "perturbation", "")),
-        "comparison": _strip_na(getattr(card, "comparison", "")),
-    }
+    """
+    Prompt-facing context. Values are for prompting only; NOT used for claim_id identity.
+    Tool-facing neutral key is "condition".
+    """
+    d = card.context_dict()
+    return {k: _strip_na(v) for k, v in d.items()}
 
 
 def _context_keys(card: SampleCard) -> list[str]:
-    # stable order is part of the contract
+    """
+    Stable order is part of the contract.
+    Use tool-facing CORE keys: condition/tissue/perturbation/comparison.
+    """
     keys: list[str] = []
-    for k in ["disease", "tissue", "perturbation", "comparison"]:
-        if _strip_na(getattr(card, k, None)):
+    d = card.context_dict()
+    for k in ["condition", "tissue", "perturbation", "comparison"]:
+        if _strip_na(d.get(k, "")):
             keys.append(k)
     return keys
 
@@ -196,6 +199,7 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
             "Do not invent new identifiers. Do not change term_uid strings.",
             "direction must be one of: up, down, na.",
             "entity must be term_id (not term_name).",
+            "context_keys must be drawn from: condition, tissue, perturbation, comparison.",
         ],
         "output_schema": {
             "claims": [
@@ -203,7 +207,7 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
                     "claim_id": "string (optional; tool-owned)",
                     "entity": "term_id",
                     "direction": "up|down|na",
-                    "context_keys": ["disease|tissue|perturbation|comparison"],
+                    "context_keys": ["condition|tissue|perturbation|comparison"],
                     "evidence_ref": {
                         "module_id": "string",
                         "term_ids": ["term_uid"],
@@ -425,6 +429,15 @@ def propose_claims_llm(
         df.get("stat", pd.Series([0] * len(df))), errors="coerce"
     ).fillna(0.0)
 
+    # Optional context proxy: if enabled and context_score exists, use it as a tie-breaker.
+    ctx_proxy_on = bool(card.enable_context_score_proxy(False))
+    if ctx_proxy_on:
+        df["context_score_sort"] = pd.to_numeric(
+            df.get("context_score", 0), errors="coerce"
+        ).fillna(0.0)
+    else:
+        df["context_score_sort"] = 0.0
+
     try:
         top_n = int(str(os.environ.get("LLMPATH_LLM_TOPN", "30")).strip())
     except Exception:
@@ -432,8 +445,8 @@ def propose_claims_llm(
     top_n = max(5, min(top_n, 200))
 
     df_rank = df.sort_values(
-        ["keep_term", "term_survival_sort", "stat_sort", "term_uid"],
-        ascending=[False, False, False, True],
+        ["keep_term", "term_survival_sort", "context_score_sort", "stat_sort", "term_uid"],
+        ascending=[False, False, False, False, True],
     ).head(top_n)
 
     require_gsh = os.environ.get("LLMPATH_LLM_REQUIRE_GENESET_HASH", "1").strip() != "0"
@@ -446,6 +459,8 @@ def propose_claims_llm(
         "k": int(k),
         "top_n": int(top_n),
         "require_gene_set_hash": bool(require_gsh),
+        "context_keys_resolved": _context_keys(card),
+        "context_proxy_enabled": bool(ctx_proxy_on),
         "candidates_sha256": _sha256_text(df_rank.to_csv(index=False, sep="\t")),
         "notes": "",
     }
@@ -513,7 +528,8 @@ def claims_to_proposed_tsv(
     distilled_with_modules: pd.DataFrame,
     card: SampleCard,
 ) -> pd.DataFrame:
-    _ = card  # reserved for future use (do not bake context values into IDs)
+    # Do NOT bake context values into IDs (tool contract), but do export them as columns.
+    ctx = card.context_dict()
 
     df = distilled_with_modules.copy()
 
@@ -559,6 +575,13 @@ def claims_to_proposed_tsv(
 
         rows.append(
             {
+                # exported context (not part of IDs)
+                "condition": ctx.get("condition", "NA"),
+                "tissue": ctx.get("tissue", "NA"),
+                "perturbation": ctx.get("perturbation", "NA"),
+                "comparison": ctx.get("comparison", "NA"),
+                "context_key": card.context_key(),
+                # claim fields
                 "claim_id": c.claim_id,
                 "entity": term_id,
                 "direction": c.direction,

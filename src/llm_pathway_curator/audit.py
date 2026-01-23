@@ -8,9 +8,11 @@ from typing import Any
 import pandas as pd
 
 from .audit_reasons import (
+    ABSTAIN_CONTEXT_MISSING,
     ABSTAIN_CONTEXT_NONSPECIFIC,
     ABSTAIN_HUB_BRIDGE,
     ABSTAIN_INCONCLUSIVE_STRESS,
+    ABSTAIN_MISSING_EVIDENCE_GENES,
     ABSTAIN_MISSING_SURVIVAL,
     ABSTAIN_REASONS,
     ABSTAIN_UNDER_SUPPORTED,
@@ -22,6 +24,12 @@ from .audit_reasons import (
 )
 from .claim_schema import Claim
 from .sample_card import SampleCard
+
+try:  # pragma: no cover
+    from .audit_reasons import FAIL_CONTEXT  # type: ignore
+except Exception:  # pragma: no cover
+    # Safer than mapping to evidence drift: context failure is a distinct category.
+    FAIL_CONTEXT = FAIL_SCHEMA_VIOLATION  # fallback (please add FAIL_CONTEXT in audit_reasons)
 
 _NA_TOKENS = {"", "na", "nan", "none", "NA"}
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
@@ -137,7 +145,6 @@ def _as_bool(x: Any, default: bool) -> bool:
 
 
 def _get_tau_default(card: SampleCard) -> float:
-    # Source of truth: SampleCard.audit_tau()
     try:
         return float(card.audit_tau())
     except Exception:
@@ -210,14 +217,10 @@ def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
     Tool contract (user-facing):
       - "off": ignore context gate
-      - "note": annotate context nonspecificity, do not change status
-      - "hard": context nonspecific => ABSTAIN_CONTEXT_NONSPECIFIC
+      - "note": annotate context issues, do not change status
+      - "hard": evaluated-only gating (safe-side): unevaluated => ABSTAIN
     Backward compat:
       - "abstain" => "hard"
-
-    NOTE:
-      Default is "note" (safe). "hard" as default can zero-out coverage
-      when context is not evaluated upstream.
     """
     if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
         try:
@@ -232,11 +235,9 @@ def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
         return "off"
     if s in {"note", "warn", "warning"}:
         return "note"
-    if s in {"abstain"}:
+    if s in {"abstain", "hard"}:
         return "hard"
-    if s in {"hard"}:
-        return "hard"
-    # unknown -> default
+
     d = str(default).strip().lower()
     if d in {"off", "note", "hard"}:
         return d
@@ -247,9 +248,13 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
     """
     Tool contract (user-facing):
       - "off" (default): ignore missing stress entirely
-      - "note": missing stress => PASS with note; stress FAIL => PASS with note
-      - "hard": missing stress => ABSTAIN_INCONCLUSIVE_STRESS;
-        stress FAIL => FAIL_EVIDENCE_DRIFT (auditable violation)
+      - "note": annotate stress results, do not change status
+      - "hard": safe-side robustness gating:
+          * missing stress => ABSTAIN_INCONCLUSIVE_STRESS
+          * stress ABSTAIN/WARN/FAIL => ABSTAIN_INCONCLUSIVE_STRESS (do NOT FAIL)
+        Rationale:
+          Stress is a robustness probe; failure under stress is not proof of invalidity.
+          This preserves monotonicity: stress PASS is a subset of non-stress PASS.
     Backward compat:
       - "abstain" => "hard"
     """
@@ -297,10 +302,9 @@ def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
         return "off"
     if s in {"note", "warn", "warning"}:
         return "note"
-    if s in {"abstain"}:
+    if s in {"abstain", "hard"}:
         return "hard"
-    if s in {"hard"}:
-        return "hard"
+
     d = str(default).strip().lower()
     if d in {"off", "note", "hard"}:
         return d
@@ -310,10 +314,34 @@ def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
 def _get_strict_evidence_check(card: SampleCard, default: bool = False) -> bool:
     """
     If True: missing evidence_genes in distilled => FAIL_SCHEMA_VIOLATION (strict contract).
-    If False (default): missing evidence_genes => ABSTAIN_INCONCLUSIVE_STRESS (decision-grade).
+    If False (default): missing evidence_genes => ABSTAIN (decision-grade).
     """
     ex = _get_extra(card)
     return _as_bool(ex.get("strict_evidence_check", None), default=default)
+
+
+def _get_evidence_dropout_p(card: SampleCard, default: float = 0.0) -> float:
+    ex = _get_extra(card)
+    v = ex.get("evidence_dropout_p", None)
+    if v is None:
+        return float(default)
+    try:
+        p = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, p))
+
+
+def _get_contradictory_p(card: SampleCard, default: float = 0.0) -> float:
+    ex = _get_extra(card)
+    v = ex.get("contradictory_p", None)
+    if v is None:
+        return float(default)
+    try:
+        p = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, p))
 
 
 def _norm_status(x: Any) -> str:
@@ -325,6 +353,13 @@ def _norm_status(x: Any) -> str:
 def _append_note(old: str, msg: str) -> str:
     old = "" if _is_na_scalar(old) else str(old)
     return msg if not old else f"{old} | {msg}"
+
+
+def _extract_claim_obj(cj: str) -> Claim | None:
+    try:
+        return Claim.model_validate_json(cj)
+    except Exception:
+        return None
 
 
 def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any, Any]:
@@ -356,7 +391,6 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
 
 
 def _extract_direction_from_claim_json(cj: str) -> str:
-    """Robust direction extraction (fallback). Returns lower-case direction in {up,down,na}."""
     try:
         obj = json.loads(cj)
     except Exception:
@@ -374,14 +408,33 @@ def _extract_direction_from_claim_json(cj: str) -> str:
     return "na"
 
 
+def _extract_context_review_from_claim_json(cj: str) -> tuple[bool, str, str]:
+    """
+    Primary source: Claim schema fields.
+    Returns: (evaluated, status, note)
+      - evaluated: bool
+      - status: "PASS"|"WARN"|"FAIL"|"" (may be empty if missing/legacy)
+      - note: compact description for audit_notes
+    """
+    c = _extract_claim_obj(cj)
+    if c is None:
+        return (False, "", "claim_json parse failed")
+
+    evaluated = bool(getattr(c, "context_evaluated", False))
+    method = str(getattr(c, "context_method", "none") or "none").strip().lower()
+    status = str(getattr(c, "context_status", "") or "").strip().upper()
+    reason = str(getattr(c, "context_reason", "") or "").strip()
+    note = f"context_evaluated={evaluated} method={method}"
+    if status:
+        note += f" status={status}"
+    if reason:
+        note += f" reason={reason}"
+    return (evaluated, status, note)
+
+
 def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
     """
-    Determine whether context was evaluated upstream.
-
-    Priority:
-      1) explicit boolean column: context_evaluated
-      2) explicit status column: context_status in {PASS,ABSTAIN,FAIL}
-      3) numeric context_score present and not NA => evaluated
+    Legacy/compat context fields on the row (pre-schema).
     Returns: (evaluated, note)
     """
     if "context_evaluated" in row.index:
@@ -395,7 +448,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
 
     if "context_status" in row.index:
         st = _norm_status(row.get("context_status"))
-        if st in {"PASS", "ABSTAIN", "FAIL"}:
+        if st in {"PASS", "WARN", "FAIL", "ABSTAIN"}:
             return (True, f"context_status={st}")
         if not st:
             return (False, "context_status missing")
@@ -414,60 +467,29 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str]:
     return (False, "no context fields")
 
 
-def _context_is_nonspecific(row: pd.Series) -> tuple[bool, str]:
-    """
-    Determine nonspecificity only when evaluated.
-
-    Rules:
-      - context_score == 0.0 => nonspecific
-      - context_status == ABSTAIN with reason hint in context_reason => nonspecific (optional)
-    """
-    if "context_score" in row.index:
-        cs_raw = row.get("context_score")
-        try:
-            cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
-        except Exception:
-            cs = None
-        if cs is not None and cs == 0.0:
-            return (True, "context_score=0")
-
-    if "context_status" in row.index:
-        st = _norm_status(row.get("context_status"))
-        if st == "ABSTAIN":
-            rs = str(row.get("context_reason", "")).strip()
-            if rs:
-                return (True, f"context_status=ABSTAIN:{rs}")
-            return (True, "context_status=ABSTAIN")
-
-    return (False, "context_specific_or_unknown")
-
-
 def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) -> pd.DataFrame:
     """
     Backfill stress/contradiction columns on claims using distilled annotations.
 
-    This is treated as an external input (v4 support):
-      - If claims already include stress_* columns, do nothing (respect caller).
-      - Else if distilled has stress_tag:
-          * non-empty tag => stress_status=FAIL, stress_reason="STRESS_TAG"
-          * empty tag => do not mark (leave absent)
-      - If claims already include contradiction_* columns, do nothing.
-      - Else if distilled has contradiction_flip:
-          * True => contradiction_status=FAIL, contradiction_reason="CONTRADICTION_FLIP"
-          * False/NA => leave absent
+    - If claims already include stress_* columns, do nothing (respect caller).
+    - Else if distilled has stress_tag:
+        non-empty tag => stress_status=ABSTAIN, stress_reason="STRESS_TAG"
+    - If claims already include contradiction_* columns, do nothing.
+    - Else if distilled has contradiction_flip:
+        True => contradiction_status=FAIL, contradiction_reason="CONTRADICTION_FLIP"
     """
     out2 = out.copy()
 
     claim_has_stress = any(
-        c in out2.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+        c in out2.columns for c in ["stress_status", "stress_reason", "stress_notes", "stress_ok"]
     )
     claim_has_contra = any(
         c in out2.columns
         for c in [
             "contradiction_status",
-            "contradiction_ok",
             "contradiction_reason",
             "contradiction_notes",
+            "contradiction_ok",
         ]
     )
 
@@ -490,9 +512,9 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
     if (not claim_has_stress) and ("stress_tag" in dist.columns):
         for tu, tag in zip(dist["term_uid"].tolist(), dist["stress_tag"].tolist(), strict=False):
             t = "" if _is_na_scalar(tag) else str(tag).strip()
-            if not t:
+            if not t or not tu:
                 continue
-            if tu and tu not in stress_map:
+            if tu not in stress_map:
                 stress_map[tu] = t
 
     contra_map: dict[str, bool] = {}
@@ -534,9 +556,6 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
             tags = [stress_map.get(t, "") for t in term_ids]
             tags = [t for t in tags if t]
             if tags:
-                # IMPORTANT: distilled stress_tag is an annotation/probe,
-                # not a decision-grade FAIL.
-                # Treat as ABSTAIN so audit gate mode can decide how to use it.
                 out2.at[i, "stress_status"] = "ABSTAIN"
                 out2.at[i, "stress_reason"] = "STRESS_TAG"
                 out2.at[i, "stress_notes"] = (
@@ -556,16 +575,18 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     """
     External contradiction check (optional).
-    If contradiction_status is present but missing/unknown, we treat it as inconclusive.
+    Policy:
+      - Missing contradiction_status => do NOT abstain; just note.
+      - PASS => ok
+      - ABSTAIN/WARN => abstain (inconclusive)
+      - FAIL => fail (contradiction)
+      - Unknown => schema violation
     """
     if "contradiction_status" not in out.columns:
         return
 
     st = _norm_status(row.get("contradiction_status"))
     if not st:
-        out.at[i, "status"] = "ABSTAIN"
-        out.at[i, "contradiction_ok"] = False
-        out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "audit_notes"] = _append_note(
             out.at[i, "audit_notes"], "contradiction_status missing"
         )
@@ -575,11 +596,11 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
         out.at[i, "contradiction_ok"] = True
         return
 
-    if st == "ABSTAIN":
+    if st in {"ABSTAIN", "WARN"}:
         out.at[i, "status"] = "ABSTAIN"
         out.at[i, "contradiction_ok"] = False
         out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "contradiction=ABSTAIN")
+        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], f"contradiction={st}")
         return
 
     if st == "FAIL":
@@ -610,22 +631,26 @@ def _apply_external_stress(
     row: pd.Series,
     *,
     gate_mode: str,
+    input_stress_cols: list[str],
 ) -> None:
     """
-    Apply stress results if present (including v4 injected columns).
+    Apply stress results if present.
 
-    Semantics:
-      - stress_ok is True/False when evaluated, NA when not evaluated.
-      - Missing stress values are handled by gate_mode.
+    Contract intent:
+      - Stress is a robustness probe, not a validity proof.
+      - Therefore, stress failures should NOT be escalated to FAIL.
+      - In hard mode, "missing" or "failed/abstained" stress => ABSTAIN_INCONCLUSIVE_STRESS.
     """
-    if not any(
-        c in out.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
-    ):
+    if not input_stress_cols:
         out.at[i, "stress_ok"] = pd.NA
         return
 
-    # If only stress_ok provided
-    if ("stress_ok" in out.columns) and ("stress_status" not in out.columns):
+    gate_mode = (gate_mode or "").strip().lower()
+    if gate_mode not in {"off", "note", "hard"}:
+        gate_mode = "note"
+
+    # If only stress_ok provided by caller
+    if ("stress_ok" in input_stress_cols) and ("stress_status" not in input_stress_cols):
         v = row.get("stress_ok")
         if _is_na_scalar(v):
             out.at[i, "stress_ok"] = pd.NA
@@ -648,11 +673,12 @@ def _apply_external_stress(
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=True")
             return
 
+        # stress_ok=False => robustness not supported; do NOT FAIL
         if gate_mode == "hard":
-            out.at[i, "status"] = "FAIL"
-            out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
             out.at[i, "audit_notes"] = _append_note(
-                out.at[i, "audit_notes"], "stress_ok=False (hard)"
+                out.at[i, "audit_notes"], "stress_ok=False -> ABSTAIN (hard)"
             )
         else:
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
@@ -681,53 +707,35 @@ def _apply_external_stress(
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress=PASS")
         return
 
-    if st == "ABSTAIN":
+    if st in {"ABSTAIN", "WARN"}:
         out.at[i, "stress_ok"] = False
         rs = rs_raw if rs_raw in ABSTAIN_REASONS else ABSTAIN_INCONCLUSIVE_STRESS
         if gate_mode == "hard":
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "abstain_reason"] = rs
-        note = "stress=ABSTAIN"
+        note = f"stress={st}"
         if rs_raw:
             note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
         note += f" [{gate_mode}]"
-        out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
-        return
-
-    if st == "WARN":
-        out.at[i, "stress_ok"] = False
-        note = "stress=WARN"
-        if rs_raw:
-            note += f": {rs_raw}"
-        if nt:
-            note += f" ({nt})"
-        note += f" [{gate_mode}]"
-
-        # WARN is a probe result. By default we do not change status.
-        # If caller wants decision-grade gating, use hard mode to ABSTAIN (not FAIL).
-        if gate_mode == "hard":
-            out.at[i, "status"] = "ABSTAIN"
-            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
     if st == "FAIL":
+        # stress FAIL => not robust; do NOT escalate to FAIL
         out.at[i, "stress_ok"] = False
+
+        if gate_mode == "hard":
+            out.at[i, "status"] = "ABSTAIN"
+            out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+
         note = "stress=FAIL"
         if rs_raw:
             note += f": {rs_raw}"
         if nt:
             note += f" ({nt})"
         note += f" [{gate_mode}]"
-
-        if gate_mode == "hard":
-            out.at[i, "status"] = "FAIL"
-            out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
-            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
-            return
-
         out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], note)
         return
 
@@ -738,12 +746,6 @@ def _apply_external_stress(
 
 
 def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
-    """
-    Contract enforcement:
-    - If status=FAIL, fail_reason must be one of FAIL_REASONS
-    - If status=ABSTAIN, abstain_reason must be one of ABSTAIN_REASONS
-    Any violation => FAIL_SCHEMA_VIOLATION
-    """
     st = str(out.at[i, "status"]).strip().upper()
 
     if st == "FAIL":
@@ -809,6 +811,81 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
                 _enforce_reason_vocab(out, i)
 
 
+def _deterministic_uniform_0_1(key: str, salt: str = "") -> float:
+    payload = f"{salt}|{key}".encode()
+    h = hashlib.sha256(payload).hexdigest()
+    x = int(h[:12], 16)
+    return (x % 1_000_000) / 1_000_000.0
+
+
+def _apply_internal_evidence_dropout(
+    *,
+    genes: list[str],
+    evidence_key: str,
+    p: float,
+) -> tuple[list[str], str]:
+    if p <= 0.0 or (not genes):
+        return (genes, "dropout_p=0")
+
+    kept: list[str] = []
+    for g in genes:
+        u = _deterministic_uniform_0_1(f"{evidence_key}|{g}", salt="dropout")
+        if u >= p:
+            kept.append(g)
+
+    if not kept and genes:
+        kept = [genes[0]]
+
+    note = f"dropout_p={p:.3f} kept={len(kept)}/{len(genes)}"
+    return (kept, note)
+
+
+def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
+    term_uids = dist["term_uid"].astype(str).str.strip().tolist()
+    known = {t for t in term_uids if t and t.lower() not in _NA_TOKENS_L}
+
+    raw_to_uids: dict[str, set[str]] = {}
+    for tu in known:
+        raw = tu.split(":", 1)[-1].strip()
+        if not raw:
+            continue
+        raw_to_uids.setdefault(raw, set()).add(tu)
+
+    raw_unique = {raw: next(iter(u)) for raw, u in raw_to_uids.items() if len(u) == 1}
+    raw_amb = {raw for raw, u in raw_to_uids.items() if len(u) > 1}
+    return known, raw_unique, raw_amb
+
+
+def _resolve_term_ids_to_uids(
+    term_ids: list[str],
+    *,
+    known: set[str],
+    raw_unique: dict[str, str],
+    raw_ambiguous: set[str],
+) -> tuple[list[str], list[str], list[str]]:
+    resolved: list[str] = []
+    unknown: list[str] = []
+    ambiguous: list[str] = []
+
+    for t in term_ids:
+        tt = str(t).strip()
+        if not tt:
+            continue
+        if tt in known:
+            resolved.append(tt)
+            continue
+        raw = tt.split(":", 1)[-1].strip()
+        if raw in raw_unique:
+            resolved.append(raw_unique[raw])
+            continue
+        if raw in raw_ambiguous:
+            ambiguous.append(tt)
+        else:
+            unknown.append(tt)
+
+    return resolved, unknown, ambiguous
+
+
 def audit_claims(
     claims: pd.DataFrame,
     distilled: pd.DataFrame,
@@ -818,26 +895,29 @@ def audit_claims(
 ) -> pd.DataFrame:
     """
     Mechanical audit (tool-facing).
-
     Status priority: FAIL > ABSTAIN > PASS
-
-    Source of truth for evidence references:
-      1) claim_json (Claim schema)
-      2) DataFrame columns as fallback (backward compatibility)
-
-    NOTE:
-      - This function does NOT generate stress tests; it only consumes them if provided.
-      - Missing stress is governed by SampleCard.stress_gate_mode() (default: off).
-      - If claims lack stress/contradiction columns but distilled provides
-        stress_tag / contradiction_flip,
-        we backfill them deterministically (v4 support).
     """
+    # --- IMPORTANT: capture caller-provided columns BEFORE compat injection ---
+    caller_cols = set(claims.columns)
+
     out = claims.copy()
 
-    # ---- v4 compat: inject stress/contradiction columns from distilled when absent ----
+    # compat: inject stress/contradiction columns from distilled when absent
     out = _inject_stress_from_distilled(out, distilled)
 
-    # Stable audit fields
+    # Columns that truly came from the caller (not from compat injection)
+    input_stress_cols = [
+        c
+        for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
+        if c in caller_cols
+    ]
+    input_contra_cols = [
+        c
+        for c in ["contradiction_status", "contradiction_reason", "contradiction_notes"]
+        if c in caller_cols
+    ]
+
+    # Stable audit fields (always exist after this point)
     out["status"] = "PASS"
     out["link_ok"] = True
     out["stability_ok"] = True
@@ -848,7 +928,6 @@ def audit_claims(
     out["fail_reason"] = ""
     out["audit_notes"] = ""
 
-    # reporting aids
     if "tau_used" not in out.columns:
         out["tau_used"] = pd.NA
     if "term_survival_agg" not in out.columns:
@@ -857,8 +936,6 @@ def audit_claims(
         out["stability_scope"] = ""
     if "module_id_effective" not in out.columns:
         out["module_id_effective"] = ""
-
-    # For intra-run contradiction
     if "gene_set_hash_effective" not in out.columns:
         out["gene_set_hash_effective"] = ""
     if "term_ids_set_hash" not in out.columns:
@@ -867,6 +944,22 @@ def audit_claims(
         out["evidence_key"] = ""
     if "direction_norm" not in out.columns:
         out["direction_norm"] = "na"
+
+    # always log parsed context review fields from claim_json (even if caller didn't provide)
+    if "context_evaluated" not in out.columns:
+        out["context_evaluated"] = False
+    if "context_method" not in out.columns:
+        out["context_method"] = "none"
+    if "context_status" not in out.columns:
+        out["context_status"] = ""
+    if "context_reason" not in out.columns:
+        out["context_reason"] = ""
+    if "context_notes" not in out.columns:
+        out["context_notes"] = ""
+
+    # module_reason (debuggable / decision-grade)
+    if "module_reason" not in out.columns:
+        out["module_reason"] = ""
 
     # Prepare distilled lookup
     dist = distilled.copy()
@@ -882,16 +975,12 @@ def audit_claims(
         else:
             raise ValueError("audit_claims: distilled must have term_uid OR (source, term_id)")
 
-    key_col = "term_uid"
-
-    term_key = dist[key_col].astype(str).str.strip()
-    term_key = term_key[~term_key.str.lower().isin(_NA_TOKENS_L)]
-    known_terms = set(term_key.tolist())
+    known_terms, raw_unique, raw_amb = _build_term_uid_maps(dist)
 
     has_survival = "term_survival" in distilled.columns
     if has_survival:
         tmp = distilled.copy()
-        tmp["term_key"] = tmp[key_col].astype(str).str.strip()
+        tmp["term_key"] = tmp["term_uid"].astype(str).str.strip()
         tmp["term_survival"] = pd.to_numeric(tmp["term_survival"], errors="coerce")
         term_surv = tmp.groupby("term_key")["term_survival"].min()
     else:
@@ -907,7 +996,6 @@ def audit_claims(
         if not tmpm.empty:
             module_surv = tmpm.groupby("module_id")["term_survival"].min()
 
-    # Resolve tau default (contract)
     tau_default = _get_tau_default(card)
     if tau is not None:
         try:
@@ -917,35 +1005,34 @@ def audit_claims(
 
     min_overlap_default = _get_min_overlap_default(card)
 
-    # Precompute evidence genes per term_key
+    # Precompute evidence genes per term_uid
     term_to_gene_set: dict[str, set[str]] = {}
     if "evidence_genes" in dist.columns:
         for tk, xs in zip(
-            dist[key_col].astype(str).str.strip(),
+            dist["term_uid"].astype(str).str.strip(),
             dist["evidence_genes"],
             strict=True,
         ):
-            if tk.lower() in _NA_TOKENS_L:
+            if not tk or tk.lower() in _NA_TOKENS_L:
                 continue
             if isinstance(xs, (list, tuple, set)):
                 genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
             else:
                 genes = [_norm_gene_id(g) for g in _parse_ids(xs)]
-            gs = set([g for g in genes if g])
+            gs = {g for g in genes if g}
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
-
     elif "evidence_genes_str" in dist.columns:
         for tk, s in zip(
-            dist[key_col].astype(str).str.strip(),
+            dist["term_uid"].astype(str).str.strip(),
             dist["evidence_genes_str"].astype(str),
             strict=True,
         ):
-            if tk.lower() in _NA_TOKENS_L:
+            if not tk or tk.lower() in _NA_TOKENS_L:
                 continue
             genes = [_norm_gene_id(g) for g in _parse_ids(s)]
-            gs = set([g for g in genes if g])
+            gs = {g for g in genes if g}
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
@@ -962,16 +1049,14 @@ def audit_claims(
     pass_note_enabled = _get_pass_notes(card, default=True)
     context_gate_mode = _get_context_gate_mode(card, default="note")
     stability_gate_mode = _get_stability_gate_mode(card, default="hard")
-
     stress_gate_mode = _get_stress_gate_mode(card, default="off")
     strict_evidence = _get_strict_evidence_check(card, default=False)
 
     min_union = _get_min_union_genes(card, default=3)
     hub_frac_thr = _get_hub_frac_thr(card, default=0.5)
 
-    has_stress_cols = any(
-        c in out.columns for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
-    )
+    evidence_dropout_p = _get_evidence_dropout_p(card, default=0.0)
+    contradictory_p = _get_contradictory_p(card, default=0.0)
 
     for i, row in out.iterrows():
         # 0) schema validation (claim_json -> Claim)
@@ -985,15 +1070,26 @@ def audit_claims(
             continue
 
         cj_str = str(cj)
-        try:
-            Claim.model_validate_json(cj_str)
-        except Exception as e:
+        cobj = _extract_claim_obj(cj_str)
+        if cobj is None:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
-            out.at[i, "audit_notes"] = f"claim_json schema violation: {type(e).__name__}"
+            out.at[i, "audit_notes"] = "claim_json schema violation"
             _enforce_reason_vocab(out, i)
             continue
+
+        # normalize claim_json to one-line canonical JSON
+        try:
+            out.at[i, "claim_json"] = json.dumps(
+                cobj.model_dump(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            cj_str = str(out.at[i, "claim_json"])  # keep cj_str consistent downstream
+        except Exception:
+            # keep original
+            pass
 
         # direction (for contradiction check)
         d = str(row.get("direction", "")).strip().lower()
@@ -1019,14 +1115,13 @@ def audit_claims(
                 min_overlap = min_overlap_default
 
         # 1) evidence refs
-        term_ids, gene_ids, gsh, module_id = _extract_evidence_from_claim_json(cj_str)
-
+        term_ids_raw, gene_ids, gsh, module_id = _extract_evidence_from_claim_json(cj_str)
         module_id = "" if module_id is None else str(module_id).strip()
         out.at[i, "module_id_effective"] = module_id
 
         gene_ids = [_norm_gene_id(g) for g in gene_ids]
 
-        if not term_ids:
+        if not term_ids_raw:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
@@ -1034,12 +1129,24 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        missing = [t for t in term_ids if t not in known_terms]
-        if missing:
+        term_ids, unknown, ambiguous = _resolve_term_ids_to_uids(
+            term_ids_raw,
+            known=known_terms,
+            raw_unique=raw_unique,
+            raw_ambiguous=raw_amb,
+        )
+        if ambiguous:
+            out.at[i, "status"] = "FAIL"
+            out.at[i, "link_ok"] = False
+            out.at[i, "fail_reason"] = FAIL_SCHEMA_VIOLATION
+            out.at[i, "audit_notes"] = f"ambiguous term_ids={ambiguous} (use term_uid)"
+            _enforce_reason_vocab(out, i)
+            continue
+        if unknown:
             out.at[i, "status"] = "FAIL"
             out.at[i, "link_ok"] = False
             out.at[i, "fail_reason"] = FAIL_EVIDENCE_DRIFT
-            out.at[i, "audit_notes"] = f"unknown term_ids={missing}"
+            out.at[i, "audit_notes"] = f"unknown term_ids={unknown}"
             _enforce_reason_vocab(out, i)
             continue
 
@@ -1075,7 +1182,7 @@ def audit_claims(
             else:
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "link_ok"] = False
-                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+                out.at[i, "abstain_reason"] = ABSTAIN_MISSING_EVIDENCE_GENES
                 out.at[i, "audit_notes"] = "evidence_genes unavailable for referenced term_ids"
             _enforce_reason_vocab(out, i)
             continue
@@ -1146,6 +1253,20 @@ def audit_claims(
         out.at[i, "term_survival_agg"] = agg
         out.at[i, "stability_scope"] = scope
 
+        # module_reason: why module/term survival was used
+        if scope == "module":
+            out.at[i, "module_reason"] = f"module_survival_used(module_id={module_id})"
+        else:
+            # if module_id existed but not found in module_surv, note it
+            if module_id and (
+                module_surv is None or module_id not in getattr(module_surv, "index", [])
+            ):
+                out.at[i, "module_reason"] = (
+                    f"term_survival_used(module_id_missing_or_unseen={module_id})"
+                )
+            else:
+                out.at[i, "module_reason"] = "term_survival_used"
+
         if pd.isna(agg):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "stability_ok"] = False
@@ -1179,20 +1300,30 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        # 3) optional external contradiction
-        _apply_external_contradiction(out, i, row)
-        if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
-            _enforce_reason_vocab(out, i)
-            continue
+        # 3) optional external contradiction (only if caller provided any contradiction values)
+        if input_contra_cols:
+            row_has_contra_value = False
+            for c in input_contra_cols:
+                v = row.get(c)
+                if not _is_na_scalar(v) and str(v).strip():
+                    row_has_contra_value = True
+                    break
+
+            if row_has_contra_value:
+                _apply_external_contradiction(out, i, row)
+                if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
+                    _enforce_reason_vocab(out, i)
+                    continue
 
         # 4) deterministic abstain rules
         if len(ev_union) < int(min_union):
             out.at[i, "status"] = "ABSTAIN"
             out.at[i, "abstain_reason"] = ABSTAIN_UNDER_SUPPORTED
             msg = (
-                f"under_supported: |union_evidence_genes|={len(ev_union)} "
-                f"< min_union_genes={int(min_union)}"
+                "under_supported: |union_evidence_genes|="
+                f"{len(ev_union)} < min_union_genes={int(min_union)}"
             )
+
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], msg)
             _enforce_reason_vocab(out, i)
             continue
@@ -1210,75 +1341,168 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
-        # 4.5) context gate (decision-grade, evaluation-aware)
-        # Only enforce nonspecificity when context is evaluated upstream.
-        evaluated, eval_note = _context_eval_from_row(row)
-        if not evaluated:
-            if context_gate_mode == "off":
-                pass
-            else:
-                # IMPORTANT: do NOT gate on missing context evaluation.
-                # "hard" applies only when context was evaluated and found nonspecific.
-                tag = "note" if context_gate_mode == "note" else "hard"
-                out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"], f"context_missing({tag}): {eval_note}"
-                )
+        # 4.5) context gate (PRIMARY = claim_json fields; safe-side semantics)
+        c_eval, c_status, c_note = _extract_context_review_from_claim_json(cj_str)
 
-        else:
-            nonspecific, ns_note = _context_is_nonspecific(row)
-            if nonspecific:
-                if context_gate_mode == "off":
-                    out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], f"context_nonspecific(off): {ns_note}"
-                    )
-                elif context_gate_mode == "note":
-                    out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], f"context_nonspecific(note): {ns_note}"
-                    )
-                else:
+        # Always materialize context review fields into columns for audit_log.tsv
+        try:
+            out.at[i, "context_evaluated"] = bool(c_eval)
+            out.at[i, "context_method"] = str(getattr(cobj, "context_method", "none") or "none")
+            out.at[i, "context_status"] = str(getattr(cobj, "context_status", "") or "")
+            out.at[i, "context_reason"] = str(getattr(cobj, "context_reason", "") or "")
+            out.at[i, "context_notes"] = str(getattr(cobj, "context_notes", "") or "")
+        except Exception:
+            pass
+
+        # Legacy fallback (row fields), only if claim_json did not provide evaluated/status
+        if (not c_eval) and (not c_status):
+            evaluated_row, eval_note_row = _context_eval_from_row(row)
+            c_eval = evaluated_row
+            c_note = f"legacy: {eval_note_row}"
+            if "context_status" in row.index:
+                st = _norm_status(row.get("context_status"))
+                if st == "ABSTAIN":
+                    c_status = "WARN"
+                elif st in {"PASS", "WARN", "FAIL"}:
+                    c_status = st
+
+        if context_gate_mode != "off":
+            if not c_eval:
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], f"context_missing({context_gate_mode}): {c_note}"
+                )
+                if context_gate_mode == "hard":
                     out.at[i, "status"] = "ABSTAIN"
-                    out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
-                    out.at[i, "audit_notes"] = _append_note(
-                        out.at[i, "audit_notes"], f"context_nonspecific(hard): {ns_note}"
-                    )
+                    out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_MISSING
                     _enforce_reason_vocab(out, i)
                     continue
+            else:
+                st = str(c_status or "").strip().upper()
 
-        # 5) stress gate
-        # Define "evaluated" per-row: some non-empty stress field present
-        row_has_stress_value = False
-        if has_stress_cols:
-            for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]:
-                if c not in out.columns:
-                    continue
+                if st == "PASS":
+                    pass
+                elif st == "WARN":
+                    if context_gate_mode == "note":
+                        out.at[i, "audit_notes"] = _append_note(
+                            out.at[i, "audit_notes"], f"context_warn(note): {c_note}"
+                        )
+                    else:
+                        out.at[i, "status"] = "ABSTAIN"
+                        out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
+                        out.at[i, "audit_notes"] = _append_note(
+                            out.at[i, "audit_notes"], f"context_warn(hard): {c_note}"
+                        )
+                        _enforce_reason_vocab(out, i)
+                        continue
+                elif st == "FAIL":
+                    if context_gate_mode == "note":
+                        out.at[i, "audit_notes"] = _append_note(
+                            out.at[i, "audit_notes"], f"context_fail(note): {c_note}"
+                        )
+                    else:
+                        out.at[i, "status"] = "FAIL"
+                        out.at[i, "fail_reason"] = FAIL_CONTEXT
+                        out.at[i, "audit_notes"] = _append_note(
+                            out.at[i, "audit_notes"], f"context_fail(hard): {c_note}"
+                        )
+                        _enforce_reason_vocab(out, i)
+                        continue
+                else:
+                    out.at[i, "audit_notes"] = _append_note(
+                        out.at[i, "audit_notes"],
+                        f"context_status_missing({context_gate_mode}): {c_note}",
+                    )
+                    if context_gate_mode == "hard":
+                        out.at[i, "status"] = "ABSTAIN"
+                        out.at[i, "abstain_reason"] = ABSTAIN_CONTEXT_MISSING
+                        _enforce_reason_vocab(out, i)
+                        continue
+
+        # 4.8) internal stress: evidence dropout
+        if evidence_dropout_p > 0.0:
+            out.at[i, "stress_evaluated"] = True
+            kept, note = _apply_internal_evidence_dropout(
+                genes=list(ev_union),
+                evidence_key=str(out.at[i, "evidence_key"]),
+                p=float(evidence_dropout_p),
+            )
+
+            if len(kept) < int(min_union):
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stress_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    f"dropout_unstable: {note} < min_union_genes={int(min_union)}",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+            gsh_after = _hash_gene_set(list(kept))
+            if (
+                str(gsh_after).strip().lower()
+                != str(out.at[i, "gene_set_hash_effective"]).strip().lower()
+            ):
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stress_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_UNSTABLE
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"], f"dropout_hash_change: {note} gsh_after={gsh_after}"
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+            out.at[i, "stress_ok"] = True
+            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], f"dropout_ok: {note}")
+
+        # 4.9) internal stress: contradiction injection
+        if contradictory_p > 0.0 and str(out.at[i, "direction_norm"]).strip().lower() in {
+            "up",
+            "down",
+        }:
+            out.at[i, "stress_evaluated"] = True
+            u = _deterministic_uniform_0_1(str(out.at[i, "evidence_key"]), salt="contradictory")
+            if u < float(contradictory_p):
+                out.at[i, "status"] = "FAIL"
+                out.at[i, "fail_reason"] = FAIL_CONTRADICTION
+                out.at[i, "contradiction_ok"] = False
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    f"contradictory_injected(p={float(contradictory_p):.3f})",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+        # 5) external stress gate (if caller provided any stress columns with values)
+        if input_stress_cols:
+            row_has_stress_value = False
+            for c in input_stress_cols:
                 v = row.get(c)
                 if not _is_na_scalar(v) and str(v).strip():
                     row_has_stress_value = True
                     break
 
-        if not has_stress_cols or (not row_has_stress_value):
-            out.at[i, "stress_evaluated"] = False
+            if row_has_stress_value:
+                out.at[i, "stress_evaluated"] = True
+                _apply_external_stress(
+                    out, i, row, gate_mode=stress_gate_mode, input_stress_cols=input_stress_cols
+                )
+                if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
+                    _enforce_reason_vocab(out, i)
+                    continue
 
-            if stress_gate_mode == "off":
-                out.at[i, "stress_ok"] = pd.NA
-            elif stress_gate_mode == "note":
-                out.at[i, "stress_ok"] = pd.NA
+        if not bool(out.at[i, "stress_evaluated"]):
+            if stress_gate_mode == "note":
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], "stress_missing(note_mode)"
                 )
-            else:
+            elif stress_gate_mode == "hard":
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
                 out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"], "stress_missing(hard_mode)"
                 )
-                _enforce_reason_vocab(out, i)
-                continue
-        else:
-            out.at[i, "stress_evaluated"] = True
-            _apply_external_stress(out, i, row, gate_mode=stress_gate_mode)
-            if str(out.at[i, "status"]).strip().upper() in {"FAIL", "ABSTAIN"}:
                 _enforce_reason_vocab(out, i)
                 continue
 

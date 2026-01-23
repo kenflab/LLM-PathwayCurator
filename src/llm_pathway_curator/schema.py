@@ -33,6 +33,7 @@ NORMALIZED_COLS = [
 # Gene-like token heuristic for whitespace-separated lists (fallback path).
 # Keep conservative to avoid destructive split.
 _GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+_GENE_TOKEN = __import__("re").compile(_GENE_TOKEN_RE)
 
 # Keep aliases conservative but cover common real-world headers.
 # IMPORTANT: keys should be in the post-normalized form (lower, spaces/hyphens -> underscores).
@@ -215,6 +216,8 @@ class EvidenceTable:
             genes = [g for g in genes if g]
         else:
             s = str(x).strip()
+            if s.startswith("'"):
+                s = s[1:].strip()
             if not s or s.lower() in {"na", "nan", "none"}:
                 return []
 
@@ -232,11 +235,8 @@ class EvidenceTable:
                 parts = s.split(",")
             else:
                 # Space-separated fallback ONLY if all tokens look gene-like.
-                import re
-
-                gene_tok = re.compile(_GENE_TOKEN_RE)
                 parts0 = s.split(" ")
-                if parts0 and all(bool(gene_tok.match(tok)) for tok in parts0):
+                if parts0 and all(bool(_GENE_TOKEN.match(tok)) for tok in parts0):
                     parts = parts0
                 else:
                     # treat as a single field (avoid destructive split)
@@ -296,12 +296,12 @@ class EvidenceTable:
 
         strict:
           - if True, any invalid row triggers ValueError.
-          - if False (default), invalid rows are optionally dropped or marked.
+          - if False (default), invalid rows are dropped/kept per drop_invalid and marked.
 
         drop_invalid:
-          - if True (default), drop rows that violate term×gene (empty evidence_genes),
+          - if True (default), drop rows that violate term×gene (e.g., empty evidence_genes),
             unless strict=True (then we raise).
-          - if False, keep rows but mark them invalid; downstream should ignore them.
+          - if False, keep rows but mark them invalid; downstream should ignore them via is_valid.
         """
         rr = cls._read_flexible(path)
         df_raw = rr.df
@@ -323,11 +323,9 @@ class EvidenceTable:
             )
 
         # ---- auto-fill optional normalized columns ----
-        # source
         if "source" not in df.columns:
             df["source"] = "unknown"
 
-        # qval / pval (best-effort)
         qval_in_input = "qval" in df.columns
         pval_in_input = "pval" in df.columns
 
@@ -336,11 +334,9 @@ class EvidenceTable:
         if "pval" not in df.columns:
             df["pval"] = pd.NA
 
-        # direction: ORA often lacks it
         if "direction" not in df.columns:
             df["direction"] = "na"
 
-        # optional flags
         if "is_summary" in df.columns:
             df["is_summary"] = df["is_summary"].map(cls._normalize_bool)
         else:
@@ -360,7 +356,6 @@ class EvidenceTable:
                 f"mapped_columns={list(df.columns)}"
             )
 
-        # ensure all normalized columns exist (even if not used downstream)
         for c in NORMALIZED_COLS:
             if c not in df.columns:
                 df[c] = pd.NA
@@ -384,21 +379,67 @@ class EvidenceTable:
         df["qval"] = pd.to_numeric(df["qval"], errors="coerce")
         df["pval"] = pd.to_numeric(df["pval"], errors="coerce")
 
+        # ---- row validity bookkeeping (always present) ----
+        df["is_valid"] = True
+        df["invalid_reason"] = ""
+
+        # required fields validity
+        bad_required = df["term_id"].eq("") | df["term_name"].eq("")
+        if bad_required.any():
+            df.loc[bad_required, "is_valid"] = False
+            df.loc[bad_required, "invalid_reason"] = "EMPTY_REQUIRED_FIELDS"
+            if strict:
+                i = int(df.index[bad_required][0])
+                bad = df.loc[i].to_dict()
+                raise ValueError(
+                    f"EvidenceTable has empty required fields at row index={i}. "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: ensure term_id/term_name are non-empty. "
+                    f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
+                )
+
+        bad_stat = df["stat"].isna()
+        if bad_stat.any():
+            df.loc[bad_stat, "is_valid"] = False
+            # preserve earlier reason if already invalid
+            df.loc[bad_stat & df["invalid_reason"].eq(""), "invalid_reason"] = "NON_NUMERIC_STAT"
+            if strict:
+                i = int(df.index[bad_stat][0])
+                bad = df.loc[i, ["term_id", "term_name"]].to_dict()
+                raise ValueError(
+                    f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP). "
+                    "Tip: check your input column mapped to 'stat'."
+                )
+
+        # ---- enforce term×gene contract (tolerate + drop/mark invalid) ----
+        empty_ev = df["evidence_genes"].map(len).eq(0)
+        if empty_ev.any():
+            df.loc[empty_ev, "is_valid"] = False
+            df.loc[empty_ev & df["invalid_reason"].eq(""), "invalid_reason"] = (
+                "EMPTY_EVIDENCE_GENES"
+            )
+            if strict:
+                i = int(df.index[empty_ev][0])
+                raise ValueError(
+                    f"EvidenceTable has empty evidence_genes at row index={i} "
+                    f"(term_id={df.loc[i, 'term_id']}). "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: provide overlap genes (ORA) or leadingEdge/core_enrichment (GSEA/fgsea), "
+                    "or set strict=False to drop/mark summary rows."
+                )
+
         # ---- qval fallback policy ----
-        # If qval is missing but pval exists, compute q-values by Benjamini–Hochberg (BH)
-        # within conservative groups (source × direction) to preserve interpretability.
-        #
         # Provenance:
         #   - "qval": provided in input
         #   - "bh(pval)": computed from p-values (BH)
         #   - "missing": neither qval nor pval available
         df["qval_source"] = "missing"
 
-        # mark provided qvals (row-wise)
         if qval_in_input:
             df.loc[~df["qval"].isna(), "qval_source"] = "qval"
 
-        # helper: BH q-value (no external deps)
         def _bh_qvalues(p: pd.Series) -> pd.Series:
             p = pd.to_numeric(p, errors="coerce")
             m = int(p.notna().sum())
@@ -411,7 +452,6 @@ class EvidenceTable:
             ranks = pd.Series(range(1, len(order) + 1), index=order, dtype="float64")
             q_non = p_non.loc[order] * (m / ranks.loc[order])
 
-            # enforce monotonicity
             q_non = q_non.iloc[::-1].cummin().iloc[::-1]
             q_non = q_non.clip(lower=0.0, upper=1.0)
 
@@ -419,11 +459,11 @@ class EvidenceTable:
             q.loc[q_non.index] = q_non
             return q
 
-        # compute BH qvals only where qval is missing but pval exists
         needs_q = df["qval"].isna() & (~df["pval"].isna())
 
-        # Safety: do NOT BH-correct rows with unknown source (mixed DB risk).
-        needs_q = needs_q & (df["source"].astype(str).str.strip() != "unknown")
+        # Only compute qvals for rows that are otherwise valid enough to be used.
+        # (If drop_invalid=False, downstream can still ignore via is_valid.)
+        needs_q = needs_q & df["is_valid"]
 
         if needs_q.any():
             group_cols = ["source", "direction"]
@@ -433,76 +473,36 @@ class EvidenceTable:
                 df.loc[idx, "qval"] = q_calc
                 df.loc[idx, "qval_source"] = "bh(pval)"
 
-        # provenance flags (row-wise, downstream-friendly)
         df["qval_provided"] = df["qval_source"].eq("qval")
 
-        # pval provenance: whether pval was present in input AND non-missing per row
         df["pval_source"] = "missing"
         if pval_in_input:
             df.loc[~df["pval"].isna(), "pval_source"] = "pval"
         df["pval_provided"] = df["pval_source"].eq("pval")
 
-        # ---- required sanity checks ----
-        bad_required = df["term_id"].eq("") | df["term_name"].eq("")
-        if bad_required.any():
-            i = int(df.index[bad_required][0])
-            bad = df.loc[i].to_dict()
-            raise ValueError(
-                f"EvidenceTable has empty required fields at row index={i}. "
-                f"read_mode={rr.read_mode}. "
-                "Fix: ensure term_id/term_name are non-empty. "
-                f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
-            )
+        # ---- drop invalid rows if requested ----
+        n_invalid_total = int((~df["is_valid"]).sum())
+        n_invalid_empty_ev = int(empty_ev.sum())
 
-        if df["stat"].isna().any():
-            i = int(df.index[df["stat"].isna()][0])
-            bad = df.loc[i, ["term_id", "term_name"]].to_dict()
-            raise ValueError(
-                f"EvidenceTable has non-numeric stat at row index={i} (row={bad}). "
-                f"read_mode={rr.read_mode}. "
-                "Fix: provide a numeric stat (e.g., NES, -log10(q), LogP). "
-                "Tip: check your input column mapped to 'stat'."
-            )
-
-        # ---- enforce term×gene contract (tolerate + drop/mark invalid) ----
-        df["is_valid"] = True
-        df["invalid_reason"] = ""
-
-        empty_ev = df["evidence_genes"].map(len).eq(0)
-
-        # Summary rows are common in ORA exports; they often have no gene list.
-        invalid_mask = empty_ev
-        n_invalid_empty_ev = int(invalid_mask.sum())
-
-        if invalid_mask.any():
-            df.loc[invalid_mask, "is_valid"] = False
-            df.loc[invalid_mask, "invalid_reason"] = "EMPTY_EVIDENCE_GENES"
-
-            if strict:
-                i = int(df.index[invalid_mask][0])
-                raise ValueError(
-                    f"EvidenceTable has empty evidence_genes at row index={i} "
-                    f"(term_id={df.loc[i, 'term_id']}). "
-                    f"read_mode={rr.read_mode}. "
-                    "Fix: provide overlap genes (ORA) or leadingEdge/core_enrichment (GSEA/fgsea), "
-                    "or set strict=False to drop/mark summary rows."
-                )
-
-            if drop_invalid:
-                df = df.loc[df["is_valid"]].copy()
+        if drop_invalid:
+            df = df.loc[df["is_valid"]].copy()
 
         # provenance
         df.attrs["read_mode"] = rr.read_mode
 
-        # provenance / health hints (tool-facing; stable)
-        genes_n = df["evidence_genes"].map(len)
+        genes_n = (
+            df["evidence_genes"].map(len)
+            if "evidence_genes" in df.columns
+            else pd.Series([], dtype="int64")
+        )
         df.attrs["health"] = {
             "n_terms": int(df.shape[0]),
-            "n_terms_genes_le1": int((genes_n <= 1).sum()),
+            "n_terms_genes_le1": int((genes_n <= 1).sum()) if len(genes_n) else 0,
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
             "qval_source_counts": df["qval_source"].value_counts(dropna=False).to_dict()
             if "qval_source" in df.columns
             else {},
+            "n_invalid_total": int(n_invalid_total),
             "n_invalid_empty_evidence_genes": int(n_invalid_empty_ev),
             "drop_invalid": bool(drop_invalid),
             "strict": bool(strict),
@@ -532,23 +532,29 @@ class EvidenceTable:
     def write_tsv(self, path: str) -> None:
         out = self.df.copy()
 
-        # robust stringify: handle both list-like and scalar strings
-        if "evidence_genes_str" in out.columns:
-            ev_str = out["evidence_genes_str"].astype(str)
-        else:
+        def _excel_safe(s: str) -> str:
+            s = str(s or "")
+            return ("'" + s) if s else ""
 
-            def _stringify(x: object) -> str:
-                if self._is_na_scalar(x):
-                    return ""
-                if isinstance(x, (list, tuple, set)):
-                    return ",".join([str(g) for g in x])
-                return str(x)
-
-            if "evidence_genes" in out.columns:
-                ev_str = out["evidence_genes"].map(_stringify)
+        def _join_genes(x: object) -> str:
+            if EvidenceTable._is_na_scalar(x):
+                return ""
+            if isinstance(x, (list, tuple, set)):
+                s = ",".join([str(g) for g in x if str(g).strip()])
             else:
-                ev_str = pd.Series([""] * len(out), index=out.index)
+                s = str(x).strip()
+            return _excel_safe(s)
+
+        if "evidence_genes" in out.columns:
+            out["evidence_genes_str"] = out["evidence_genes"].map(_join_genes)
+        elif "evidence_genes_str" in out.columns:
+            out["evidence_genes_str"] = out["evidence_genes_str"].map(
+                lambda x: _excel_safe(str(x).strip())
+            )
+        else:
+            out["evidence_genes_str"] = ""
 
         out = out.drop(columns=["evidence_genes"], errors="ignore")
-        out["evidence_genes"] = ev_str
+        out = out.rename(columns={"evidence_genes_str": "evidence_genes"})
+
         out.to_csv(path, sep="\t", index=False)

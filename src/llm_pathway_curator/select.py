@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
+import sys
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +23,9 @@ _NA_TOKENS = {"na", "nan", "none", "", "NA"}
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 
+# -------------------------
+# Small utilities
+# -------------------------
 def _is_na_scalar(x: Any) -> bool:
     """pd.isna is unsafe for list-like; only treat scalars here."""
     if x is None:
@@ -29,10 +37,6 @@ def _is_na_scalar(x: Any) -> bool:
         return bool(v) if isinstance(v, bool) else False
     except Exception:
         return False
-
-
-def _make_id(s: str, *, n: int = 12) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:n]
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
@@ -48,138 +52,6 @@ def _dedup_preserve_order(items: list[str]) -> list[str]:
     return out
 
 
-def _as_gene_list(x: Any) -> list[str]:
-    """
-    Tolerant parsing for evidence genes (align with schema/distill):
-      - list/tuple/set -> preserve order (dedup)
-      - string -> split on , ; | (fallback: whitespace if no commas)
-      - NA -> []
-    """
-    if _is_na_scalar(x):
-        return []
-    if isinstance(x, (list, tuple, set)):
-        genes = [str(g).strip() for g in x if str(g).strip()]
-        return _dedup_preserve_order(genes)
-
-    s = str(x).strip()
-    if not s or s.lower() in _NA_TOKENS_L:
-        return []
-
-    s = s.replace(";", ",").replace("|", ",")
-    s = s.replace("\n", " ").replace("\t", " ")
-    s = " ".join(s.split()).strip()
-    if not s or s.lower() in _NA_TOKENS_L:
-        return []
-
-    if "," in s:
-        parts = [p.strip() for p in s.split(",") if p.strip()]
-    else:
-        parts = [p.strip() for p in s.split(" ") if p.strip()]
-
-    return _dedup_preserve_order(parts)
-
-
-def _norm_gene_id(g: str) -> str:
-    # align with audit.py to avoid spurious drift
-    return str(g).strip().upper()
-
-
-def _hash_gene_set_audit(genes: list[str]) -> str:
-    """
-    Audit-grade fingerprint should be SET-stable:
-      - same gene set -> same hash, regardless of order
-      - normalize IDs to reduce casing drift (align with audit.py)
-    """
-    payload = ",".join(sorted({_norm_gene_id(g) for g in genes if str(g).strip()}))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-
-
-def _hash_term_set_fallback(term_uids: list[str]) -> str:
-    """
-    Fallback when evidence genes are missing/empty.
-    Keep it deterministic and set-stable across ordering.
-    This is term-driven (not gene-driven).
-    """
-    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
-    payload = ",".join(canon)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-
-
-def _norm_direction(x: Any) -> str:
-    if _is_na_scalar(x):
-        return "na"
-    s = str(x).strip().lower()
-    if s in _ALLOWED_DIRECTIONS:
-        return s
-    if s in {"upregulated", "increase", "increased", "activated", "pos", "positive", "+", "1"}:
-        return "up"
-    if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
-        return "down"
-    if s in _NA_TOKENS_L:
-        return "na"
-    return "na"
-
-
-def _context_tokens(card: SampleCard) -> list[str]:
-    toks: list[str] = []
-    for v in [card.disease, card.tissue, card.perturbation, card.comparison]:
-        s = str(v).strip().lower()
-        if not s or s in _NA_TOKENS_L:
-            continue
-        if len(s) < 3:
-            continue
-        toks.append(s)
-    return toks
-
-
-def _context_score(term_name: str, toks: list[str]) -> int:
-    # v1 proxy only; must be explicitly enabled by SampleCard knob
-    name = str(term_name).lower()
-    return sum(1 for t in toks if t and t in name)
-
-
-def _context_keys(card: SampleCard) -> list[str]:
-    keys: list[str] = []
-    for k in ["disease", "tissue", "perturbation", "comparison"]:
-        v = getattr(card, k, None)
-        if v is None:
-            continue
-        s = str(v).strip().lower()
-        if not s or s in _NA_TOKENS_L:
-            continue
-        keys.append(k)
-    return keys
-
-
-def _resolve_mode(card: SampleCard, mode: str | None) -> str:
-    # Priority: explicit arg > env > SampleCard getter > default
-    if mode is not None:
-        s = str(mode).strip().lower()
-        return s if s in {"deterministic", "llm"} else "deterministic"
-
-    env = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower()
-    if env:
-        return env if env in {"deterministic", "llm"} else "deterministic"
-
-    try:
-        return card.claim_mode(default="deterministic")
-    except Exception:
-        return "deterministic"
-
-
-def _validate_k(k: Any) -> int:
-    try:
-        kk = int(k)
-    except Exception as e:
-        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)") from e
-    if kk < 1:
-        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)")
-    return kk
-
-
-# ===========================
-# Stress suite (evidence identity collapse)
-# ===========================
 def _get_extra(card: SampleCard) -> dict[str, Any]:
     ex = getattr(card, "extra", {}) or {}
     return ex if isinstance(ex, dict) else {}
@@ -216,6 +88,538 @@ def _as_float(x: Any, default: float) -> float:
         return float(default)
 
 
+def _validate_k(k: Any) -> int:
+    try:
+        kk = int(k)
+    except Exception as e:
+        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)") from e
+    if kk < 1:
+        raise ValueError(f"select_claims: invalid k={k!r} (must be int>=1)")
+    return kk
+
+
+def _norm_gene_id(g: str) -> str:
+    # align with audit.py to avoid spurious drift
+    return str(g).strip().upper()
+
+
+def _norm_direction(x: Any) -> str:
+    if _is_na_scalar(x):
+        return "na"
+    s = str(x).strip().lower()
+    if s in _ALLOWED_DIRECTIONS:
+        return s
+    if s in {"upregulated", "increase", "increased", "activated", "pos", "positive", "+", "1"}:
+        return "up"
+    if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
+        return "down"
+    if s in _NA_TOKENS_L:
+        return "na"
+    return "na"
+
+
+def _as_gene_list(x: Any) -> list[str]:
+    """
+    Tolerant parsing for evidence genes (align with schema/distill):
+      - list/tuple/set -> preserve order (dedup)
+      - string -> split on , ; | (fallback: whitespace if no commas)
+      - NA -> []
+    """
+    if _is_na_scalar(x):
+        return []
+    if isinstance(x, (list, tuple, set)):
+        genes = [str(g).strip() for g in x if str(g).strip()]
+        return _dedup_preserve_order(genes)
+
+    s = str(x).strip()
+    if not s or s.lower() in _NA_TOKENS_L:
+        return []
+
+    s = s.replace(";", ",").replace("|", ",")
+    s = s.replace("\n", " ").replace("\t", " ")
+    s = " ".join(s.split()).strip()
+    if not s or s.lower() in _NA_TOKENS_L:
+        return []
+
+    if "," in s:
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+    else:
+        parts = [p.strip() for p in s.split(" ") if p.strip()]
+
+    return _dedup_preserve_order(parts)
+
+
+def _hash_gene_set_audit(genes: list[str]) -> str:
+    """
+    Audit-grade fingerprint should be SET-stable:
+      - same gene set -> same hash, regardless of order
+      - normalize IDs to reduce casing drift (align with audit.py)
+    """
+    payload = ",".join(sorted({_norm_gene_id(g) for g in genes if str(g).strip()}))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _hash_term_set_fallback(term_uids: list[str]) -> str:
+    """
+    Fallback when evidence genes are missing/empty.
+    Keep it deterministic and set-stable across ordering.
+    This is term-driven (not gene-driven).
+    """
+    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
+    payload = ",".join(canon)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _debug_enabled() -> bool:
+    s = str(os.environ.get("LLMPATH_DEBUG", "")).strip().lower()
+    return s in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _dlog(msg: str) -> None:
+    if _debug_enabled():
+        print(msg, file=sys.stderr)
+
+
+def _emit_dev_meta(card: SampleCard) -> bool:
+    """
+    Developer-only metadata emission switch.
+    Default OFF to avoid leaking internal versions/keys into user-facing outputs.
+    Enable via:
+      - env: LLMPATH_DEV_META=1
+      - card.extra: {"emit_developer_meta": true}
+    """
+    env = str(os.environ.get("LLMPATH_DEV_META", "")).strip().lower()
+    if env:
+        return env in {"1", "true", "t", "yes", "y", "on"}
+    ex = _get_extra(card)
+    return _as_bool(ex.get("emit_developer_meta", None), False)
+
+
+def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> str:
+    """
+    Backward-compatible SampleCard field access.
+    Example: primary="condition", fallback="disease".
+    """
+    v = getattr(card, primary, None)
+    if (v is None or (str(v).strip() == "")) and fallback:
+        v = getattr(card, fallback, None)
+    s = "" if v is None else str(v).strip()
+    return s
+
+
+# -------------------------
+# Context proxy (deterministic)
+# -------------------------
+def _context_tokens(card: SampleCard) -> list[str]:
+    """
+    Deterministic proxy tokens from SampleCard core context.
+    NOTE: This is a weak heuristic; must be explicitly enabled.
+    Backward compat: condition falls back to disease.
+    """
+    toks: list[str] = []
+    for v in [
+        _card_text(card, "condition", "disease"),
+        _card_text(card, "tissue", None),
+        _card_text(card, "perturbation", None),
+        _card_text(card, "comparison", None),
+    ]:
+        s = str(v).strip().lower()
+        if not s or s in _NA_TOKENS_L:
+            continue
+        parts = re.split(r"[^a-z0-9]+", s)
+        parts = [p for p in parts if len(p) >= 3 and p not in _NA_TOKENS_L]
+        toks.extend(parts)
+    return _dedup_preserve_order(toks)
+
+
+def _context_score(term_name: str, toks: list[str]) -> int:
+    # proxy only; must be explicitly enabled by SampleCard knob
+    name = str(term_name).lower()
+    return sum(1 for t in toks if t and t in name)
+
+
+def _context_keys(card: SampleCard) -> list[str]:
+    """
+    Tool-facing context keys (stable vocabulary).
+    Backward compat: if disease exists but condition missing, still emit "condition".
+    """
+    keys: list[str] = []
+
+    # condition (primary) / disease (fallback)
+    cond = _card_text(card, "condition", "disease").strip().lower()
+    if cond and cond not in _NA_TOKENS_L:
+        keys.append("condition")
+
+    for k in ["tissue", "perturbation", "comparison"]:
+        v = getattr(card, k, None)
+        if v is None:
+            continue
+        s = str(v).strip().lower()
+        if not s or s in _NA_TOKENS_L:
+            continue
+        keys.append(k)
+
+    return keys
+
+
+# -------------------------
+# Mode resolution
+# -------------------------
+def _resolve_mode(card: SampleCard, mode: str | None) -> str:
+    # Priority: explicit arg > env > SampleCard getter > default
+    if mode is not None:
+        s = str(mode).strip().lower()
+        return s if s in {"deterministic", "llm"} else "deterministic"
+
+    env = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower()
+    if env:
+        return env if env in {"deterministic", "llm"} else "deterministic"
+
+    try:
+        s = str(card.claim_mode(default="deterministic")).strip().lower()
+        return s if s in {"deterministic", "llm"} else "deterministic"
+    except Exception:
+        return "deterministic"
+
+
+# ===========================
+# Context relevance review (LLM probe + cache)
+# ===========================
+_CONTEXT_ALLOWED = {"PASS", "WARN", "FAIL"}
+_CONTEXT_REVIEW_ENV = "LLMPATH_CONTEXT_REVIEW_MODE"  # off|llm (default off)
+_CONTEXT_REVIEW_VERSION = "context_review_v1"  # internal only (do not emit by default)
+
+
+def _context_review_mode(card: SampleCard) -> str:
+    # Priority: env > card.extra > default off
+    env = str(os.environ.get(_CONTEXT_REVIEW_ENV, "")).strip().lower()
+    if env:
+        return env if env in {"off", "llm"} else "off"
+    ex = _get_extra(card)
+    v = str(ex.get("context_review_mode", "")).strip().lower()
+    return v if v in {"off", "llm"} else "off"
+
+
+def _context_review_cache_path(outdir: str | None) -> Path | None:
+    if not outdir:
+        return None
+    p = Path(str(outdir)).resolve() / "context_review_cache.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _stable_json_dumps(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _context_review_key(
+    *,
+    card: SampleCard,
+    term_uid: str,
+    term_name: str,
+    source: str,
+    gene_ids: list[str],
+) -> str:
+    """
+    Cache key (internal). Not emitted to user outputs by default.
+    """
+    payload = {
+        "condition": _card_text(card, "condition", "disease").strip().lower(),
+        "tissue": _card_text(card, "tissue", None).strip().lower(),
+        "perturbation": _card_text(card, "perturbation", None).strip().lower(),
+        "comparison": _card_text(card, "comparison", None).strip().lower(),
+        "term_uid": str(term_uid).strip(),
+        "term_name": str(term_name).strip().lower(),
+        "source": str(source).strip().lower(),
+        "gene_ids": [str(g).strip().upper() for g in gene_ids if str(g).strip()],
+        "version": _CONTEXT_REVIEW_VERSION,
+    }
+    return hashlib.sha256(_stable_json_dumps(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def _load_context_cache(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None or (not path.exists()):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                k = str(rec.get("key", "")).strip()
+                v = rec.get("value", None)
+                if k and isinstance(v, dict):
+                    out[k] = v
+    except Exception:
+        return {}
+    return out
+
+
+def _append_context_cache(path: Path | None, *, key: str, value: dict[str, Any]) -> None:
+    if path is None:
+        return
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(_stable_json_dumps({"key": key, "value": value}) + "\n")
+    except Exception:
+        return
+
+
+def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
+    """
+    Best-effort JSON call across backends.
+    Tries common method names; accepts dict return or JSON string return.
+    """
+    candidates = [
+        "complete_json",
+        "chat_json",
+        "generate_json",
+        "call_json",
+        "run_json",
+        "json",
+    ]
+    last_err: Exception | None = None
+    for name in candidates:
+        fn = getattr(backend, name, None)
+        if fn is None or (not callable(fn)):
+            continue
+        try:
+            out = fn(prompt=prompt, seed=seed)  # type: ignore[misc]
+            if isinstance(out, dict):
+                return out
+            if isinstance(out, str):
+                return json.loads(out)
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"context_review: backend has no usable JSON method (tried {candidates})"
+    ) from last_err
+
+
+def _context_review_prompt(
+    *,
+    card: SampleCard,
+    term_name: str,
+    term_id: str,
+    source: str,
+    gene_ids: list[str],
+) -> str:
+    """
+    Keep prompt short and schema-locked (auditable).
+    We intentionally use neutral "condition" (not disease/cancer).
+    """
+    ctx = {
+        "condition": _card_text(card, "condition", "disease"),
+        "tissue": _card_text(card, "tissue", None),
+        "perturbation": _card_text(card, "perturbation", None),
+        "comparison": _card_text(card, "comparison", None),
+    }
+    g = [str(x).strip().upper() for x in gene_ids if str(x).strip()]
+    payload = {
+        "context": ctx,
+        "pathway": {
+            "term_name": str(term_name).strip(),
+            "term_id": str(term_id).strip(),
+            "source": str(source).strip(),
+        },
+        "evidence_gene_ids": g[:10],
+        "task": (
+            "Judge whether this pathway term is a plausible, context-relevant pathway "
+            "for the given context, given only the term name/ID/source and a small list "
+            "of evidence genes. Return JSON ONLY with keys: context_status (PASS|WARN|FAIL), "
+            "context_reason (short code), context_notes (<=200 chars), confidence (0-1)."
+        ),
+        "output_schema": {
+            "context_status": "PASS|WARN|FAIL",
+            "context_reason": "string",
+            "context_notes": "string",
+            "confidence": "number",
+        },
+    }
+    return (
+        "You are a careful biomedical pathway reviewer. "
+        "Do not invent evidence. If uncertain, use WARN.\n"
+        "Return JSON only.\n\n" + _stable_json_dumps(payload)
+    )
+
+
+def _normalize_context_review(obj: dict[str, Any]) -> dict[str, Any]:
+    st = str(obj.get("context_status", "")).strip().upper()
+    if st not in _CONTEXT_ALLOWED:
+        st = "WARN"  # safe default
+    reason = str(obj.get("context_reason", "")).strip()
+    notes = str(obj.get("context_notes", "")).strip()
+    try:
+        conf = float(obj.get("confidence", 0.0))
+    except Exception:
+        conf = 0.0
+    conf = min(max(conf, 0.0), 1.0)
+    return {
+        "context_status": st,
+        "context_reason": reason or ("ok" if st == "PASS" else "uncertain"),
+        "context_notes": notes[:200],
+        "context_confidence": conf,
+        # NOTE: version/key are internal; do not include here (cache is keyed externally)
+    }
+
+
+def _patch_claim_json_with_context(
+    claim_json: Any,
+    *,
+    status: str,
+    reason: str,
+    notes: str,
+    confidence: float,
+    method: str = "llm",
+    dev_meta: dict[str, Any] | None = None,
+) -> str:
+    """
+    Patch Claim JSON to reflect context review results.
+
+    Source-of-truth is claim_json for audit/report.
+
+    IMPORTANT (user-facing cleanliness):
+      - Do NOT emit internal versioning/keys by default.
+      - Optionally attach developer metadata only when explicitly enabled.
+    """
+    try:
+        obj = json.loads(claim_json) if isinstance(claim_json, str) else dict(claim_json)
+    except Exception:
+        obj = {}
+
+    obj["context_evaluated"] = True
+    obj["context_method"] = str(method)
+    st = str(status).strip().upper()
+    obj["context_status"] = st if st in _CONTEXT_ALLOWED else "WARN"
+    obj["context_reason"] = str(reason).strip() if reason is not None else None
+    obj["context_notes"] = str(notes).strip()[:200] if notes is not None else None
+
+    try:
+        obj["context_confidence"] = float(confidence)
+    except Exception:
+        obj["context_confidence"] = 0.0
+
+    # Developer-only metadata (opt-in)
+    if dev_meta and isinstance(dev_meta, dict):
+        for k, v in dev_meta.items():
+            obj[k] = v
+
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _apply_context_review_llm(
+    df_claims: pd.DataFrame,
+    *,
+    card: SampleCard,
+    backend: BaseLLMBackend,
+    seed: int | None,
+    outdir: str | None,
+) -> pd.DataFrame:
+    """
+    Adds user-facing columns (stable, no internal versions):
+      context_evaluated, context_status, context_reason, context_notes,
+      context_confidence, context_review_mode
+
+    Cache: outdir/context_review_cache.jsonl (best-effort)
+    """
+    cache_path = _context_review_cache_path(outdir)
+    cache = _load_context_cache(cache_path)
+    emit_dev = _emit_dev_meta(card)
+
+    out = df_claims.copy()
+
+    # Ensure columns exist even if we bail early
+    for col, default in [
+        ("context_evaluated", False),
+        ("context_status", pd.NA),
+        ("context_reason", pd.NA),
+        ("context_notes", pd.NA),
+        ("context_confidence", pd.NA),
+        ("context_review_mode", "off"),
+    ]:
+        if col not in out.columns:
+            out[col] = default
+
+    # Developer-only columns (OFF by default)
+    if emit_dev:
+        for col, default in [
+            ("context_review_key", pd.NA),
+            ("context_review_version", _CONTEXT_REVIEW_VERSION),
+        ]:
+            if col not in out.columns:
+                out[col] = default
+
+    for idx, r in out.iterrows():
+        term_uid = str(r.get("term_uid", "")).strip()
+        term_name = str(r.get("term_name", "")).strip()
+        term_id = str(r.get("term_id", "")).strip()
+        source = str(r.get("source", "")).strip()
+
+        genes = _as_gene_list(r.get("gene_ids", ""))  # TSV often stores as comma-string
+        genes = [str(g).strip().upper() for g in genes if str(g).strip()]
+
+        key = _context_review_key(
+            card=card, term_uid=term_uid, term_name=term_name, source=source, gene_ids=genes[:10]
+        )
+        out.at[idx, "context_review_mode"] = "llm"
+        if emit_dev:
+            out.at[idx, "context_review_key"] = key
+            out.at[idx, "context_review_version"] = _CONTEXT_REVIEW_VERSION
+
+        if key in cache:
+            norm = cache[key]
+        else:
+            prompt = _context_review_prompt(
+                card=card, term_name=term_name, term_id=term_id, source=source, gene_ids=genes[:10]
+            )
+            raw = _backend_call_json(backend, prompt=prompt, seed=seed)
+            norm = _normalize_context_review(raw)
+            cache[key] = norm
+            _append_context_cache(cache_path, key=key, value=norm)
+
+        st = str(norm.get("context_status", "WARN")).strip().upper()
+        rsn = str(norm.get("context_reason", "uncertain")).strip()
+        nts = str(norm.get("context_notes", "")).strip()
+        try:
+            conf = float(norm.get("context_confidence", 0.0))
+        except Exception:
+            conf = 0.0
+
+        out.at[idx, "context_evaluated"] = True
+        out.at[idx, "context_status"] = st
+        out.at[idx, "context_reason"] = rsn
+        out.at[idx, "context_notes"] = nts
+        out.at[idx, "context_confidence"] = conf
+
+        # Reflect into claim_json for audit/report (source-of-truth)
+        if "claim_json" in out.columns:
+            cj = out.at[idx, "claim_json"]
+            if not _is_na_scalar(cj) and str(cj).strip():
+                dev_meta = None
+                if emit_dev:
+                    dev_meta = {
+                        "context_review_key": str(key),
+                        "context_review_version": _CONTEXT_REVIEW_VERSION,
+                    }
+                out.at[idx, "claim_json"] = _patch_claim_json_with_context(
+                    cj,
+                    status=st,
+                    reason=rsn,
+                    notes=nts,
+                    confidence=conf,
+                    method="llm",
+                    dev_meta=dev_meta,
+                )
+
+    return out
+
+
+# ===========================
+# Stress suite (identity collapse) - PROBE
+# ===========================
 def _stress_enabled(card: SampleCard) -> bool:
     # default OFF (paper-aligned). Enable via env or SampleCard.extra.
     env = str(os.environ.get("LLMPATH_STRESS_GENERATE", "")).strip().lower()
@@ -377,13 +781,7 @@ def _evaluate_stress_for_claim(
 
     IMPORTANT:
       - This is a PROBE (measurement), not the mechanical DECIDER.
-      - We therefore avoid "FAIL" vocabulary here; audit.py may turn WARN into FAIL/ABSTAIN.
-
-    Emits:
-      stress_status: PASS | WARN | ABSTAIN
-      stress_ok: bool
-      stress_reason: str
-      stress_notes: str
+      - audit.py can gate on WARN/ABSTAIN/FAIL depending on policy.
     """
     ex = _get_extra(card)
 
@@ -418,7 +816,6 @@ def _evaluate_stress_for_claim(
             "stress_notes": "claim gene_set_hash missing",
         }
 
-    # Consistency check: claim hash should match baseline genes hash (set-stable)
     base_hash_calc = _hash_gene_set_audit(sorted(list(base_genes)))
     if base_hash_calc != base_hash_claim:
         return {
@@ -428,7 +825,6 @@ def _evaluate_stress_for_claim(
             "stress_notes": f"claim_hash={base_hash_claim} != baseline_hash={base_hash_calc}",
         }
 
-    # Separate RNG streams to reduce unwanted correlation.
     rng_term = np.random.default_rng(_seed_for_claim(seed, claim_id))
     rng_mod = np.random.default_rng(_seed_for_claim(seed, claim_id) + 1)
 
@@ -507,8 +903,15 @@ def _evaluate_stress_for_claim(
     }
 
 
+# ===========================
+# Deterministic selection
+# ===========================
 def _select_claims_deterministic(
-    distilled: pd.DataFrame, card: SampleCard, *, k: int = 3, seed: int | None = None
+    distilled: pd.DataFrame,
+    card: SampleCard,
+    *,
+    k: int = 3,
+    seed: int | None = None,
 ) -> pd.DataFrame:
     # direction is NOT required (we can default to "na")
     required = {"term_id", "term_name", "source", "stat", "evidence_genes"}
@@ -753,6 +1156,55 @@ def _select_claims_deterministic(
     return pd.DataFrame(rows)
 
 
+# ===========================
+# LLM mode compatibility wrapper
+# ===========================
+def _try_call(fn: Callable[..., Any], **kwargs: Any) -> Any:
+    """
+    Try calling a function with a subset of kwargs.
+    This avoids brittle signature coupling across refactors.
+    """
+    # 1) try full kwargs
+    try:
+        return fn(**kwargs)
+    except TypeError:
+        pass
+
+    # 2) progressively drop less-essential keys
+    drop_orders = [
+        ["outdir"],
+        ["seed"],
+        ["k"],
+        ["backend"],
+        ["card"],
+        ["distilled"],
+    ]
+    keys = dict(kwargs)
+    for drop in drop_orders:
+        for d in drop:
+            keys.pop(d, None)
+        try:
+            return fn(**keys)
+        except TypeError:
+            continue
+
+    # 3) last resort: positional (distilled, card, backend, k, seed, outdir)
+    try:
+        return fn(
+            kwargs.get("distilled"),
+            kwargs.get("card"),
+            kwargs.get("backend"),
+            kwargs.get("k"),
+            kwargs.get("seed"),
+            kwargs.get("outdir"),
+        )
+    except Exception as e:
+        raise RuntimeError(f"LLM call failed for {getattr(fn, '__name__', 'fn')}") from e
+
+
+# ===========================
+# Public API
+# ===========================
 def select_claims(
     distilled: pd.DataFrame,
     card: SampleCard,
@@ -772,21 +1224,44 @@ def select_claims(
       hard-to-debug "k=100 but only 3" regressions.
 
     - mode="deterministic": stable ranking + module diversity gate, emits Claim JSON.
-    - mode="llm": LLM selects from top candidates but is post-validated against
-      candidates (term_uid/entity/gene_set_hash) and MUST emit JSON; otherwise
-      we fall back to deterministic output.
+    - mode="llm": LLM selects from candidates but MUST emit schema-valid claims;
+      otherwise we fall back to deterministic output.
 
     NOTE: stress_* columns emitted by deterministic mode are PROBES (measurements),
     not final decisions. audit.py may convert WARN->ABSTAIN/FAIL depending on policy.
+
+    NOTE: context review (LLM) is also a PROBE and is opt-in (off by default).
+    The review result is persisted into claim_json as the audit/report source-of-truth.
+
+    IMPORTANT (user-facing cleanliness):
+      - Internal version labels/keys are not emitted by default (including in claim_json).
+      - Enable explicitly via LLMPATH_DEV_META=1 or card.extra["emit_developer_meta"]=true.
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
+    ctx_review = _context_review_mode(card)
+    _dlog(
+        f"[select] ctx_review={ctx_review} mode_eff={mode_eff} backend={'yes' if backend else 'no'}"
+    )
 
+    # ---- LLM mode ----
     if mode_eff == "llm":
         if backend is None:
-            mode_eff = "deterministic"
-        else:
-            res = propose_claims_llm(
+            # no backend -> deterministic
+            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
+            out_det["claim_mode"] = "deterministic"
+            out_det["llm_notes"] = "llm requested but backend=None; deterministic used"
+            if ctx_review == "llm":
+                # context review requires backend, so skip
+                out_det["context_review_mode"] = "off"
+            return out_det
+
+        # Try LLM proposal using best-effort signature compatibility.
+        res = None
+        notes = ""
+        try:
+            res = _try_call(
+                propose_claims_llm,
                 distilled_with_modules=distilled,
                 card=card,
                 backend=backend,
@@ -794,23 +1269,65 @@ def select_claims(
                 seed=seed,
                 outdir=outdir,
             )
+        except Exception as e:
+            notes = f"LLM propose failed: {type(e).__name__}"
+            res = None
 
-            if (not res.used_fallback) and res.claims:
-                out_llm = claims_to_proposed_tsv(
-                    claims=res.claims,
-                    distilled_with_modules=distilled,
-                    card=card,
+        out_llm: pd.DataFrame | None = None
+        used_fallback = True
+
+        # We accept either a structured object (with .claims/.used_fallback/.notes)
+        # or a plain DataFrame already.
+        if isinstance(res, pd.DataFrame):
+            out_llm = res
+            used_fallback = False
+        elif res is not None:
+            used_fallback = bool(getattr(res, "used_fallback", True))
+            notes2 = str(getattr(res, "notes", "")).strip()
+            notes = notes2 or notes
+            claims_obj = getattr(res, "claims", None)
+
+            if claims_obj is not None:
+                try:
+                    out_llm = _try_call(
+                        claims_to_proposed_tsv,
+                        claims=claims_obj,
+                        distilled_with_modules=distilled,
+                        card=card,
+                    )
+                    used_fallback = False
+                except Exception:
+                    out_llm = None
+                    used_fallback = True
+
+        if out_llm is not None and (not used_fallback):
+            out_llm = out_llm.copy()
+            out_llm["claim_mode"] = "llm"
+            out_llm["llm_notes"] = notes
+            if ctx_review == "llm":
+                out_llm = _apply_context_review_llm(
+                    out_llm, card=card, backend=backend, seed=seed, outdir=outdir
                 )
-                out_llm["claim_mode"] = "llm"
-                out_llm["llm_notes"] = res.notes
-                return out_llm
+            return out_llm
 
-            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
-            out_det["claim_mode"] = "deterministic_fallback"
-            out_det["llm_notes"] = res.notes
-            return out_det
+        # Fallback
+        out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
+        out_det["claim_mode"] = "deterministic_fallback"
+        out_det["llm_notes"] = notes or "llm returned fallback/empty; deterministic used"
+        if ctx_review == "llm":
+            out_det = _apply_context_review_llm(
+                out_det, card=card, backend=backend, seed=seed, outdir=outdir
+            )
+        return out_det
 
+    # ---- Deterministic ----
     out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
+
+    if ctx_review == "llm" and backend is not None:
+        out_det = _apply_context_review_llm(
+            out_det, card=card, backend=backend, seed=seed, outdir=outdir
+        )
+
     return out_det
