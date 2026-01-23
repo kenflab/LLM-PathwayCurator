@@ -22,6 +22,8 @@ _ALLOWED_DIRECTIONS = {"up", "down", "na"}
 _NA_TOKENS = {"na", "nan", "none", "", "NA"}
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
+_BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
+
 
 # -------------------------
 # Small utilities
@@ -122,7 +124,10 @@ def _as_gene_list(x: Any) -> list[str]:
     """
     Tolerant parsing for evidence genes (align with schema/distill):
       - list/tuple/set -> preserve order (dedup)
-      - string -> split on , ; | (fallback: whitespace if no commas)
+      - string -> supports:
+          "A,B" / "A;B" / "A|B" / "A/B"
+          "['A','B']" / '["A","B"]' / "{A,B}"
+        fallback: whitespace split if no commas and looks tokenized
       - NA -> []
     """
     if _is_na_scalar(x):
@@ -135,17 +140,24 @@ def _as_gene_list(x: Any) -> list[str]:
     if not s or s.lower() in _NA_TOKENS_L:
         return []
 
-    s = s.replace(";", ",").replace("|", ",")
+    # Strip wrapper if it looks like a bracketed list; do NOT eval.
+    if _BRACKETED_LIST_RE.match(s):
+        s = s.strip().lstrip("[({").rstrip("])}").strip()
+
+    # normalize separators
+    s = s.replace(";", ",").replace("|", ",").replace("/", ",")
     s = s.replace("\n", " ").replace("\t", " ")
     s = " ".join(s.split()).strip()
     if not s or s.lower() in _NA_TOKENS_L:
         return []
 
     if "," in s:
-        parts = [p.strip() for p in s.split(",") if p.strip()]
+        parts = [p.strip().strip('"').strip("'") for p in s.split(",") if p.strip()]
     else:
-        parts = [p.strip() for p in s.split(" ") if p.strip()]
+        parts = [p.strip().strip('"').strip("'") for p in s.split(" ") if p.strip()]
 
+    parts = [p.strip("[](){}").strip() for p in parts]
+    parts = [p for p in parts if p and p.lower() not in _NA_TOKENS_L]
     return _dedup_preserve_order(parts)
 
 
@@ -462,7 +474,6 @@ def _normalize_context_review(obj: dict[str, Any]) -> dict[str, Any]:
         "context_reason": reason or ("ok" if st == "PASS" else "uncertain"),
         "context_notes": notes[:200],
         "context_confidence": conf,
-        # NOTE: version/key are internal; do not include here (cache is keyed externally)
     }
 
 
@@ -502,7 +513,6 @@ def _patch_claim_json_with_context(
     except Exception:
         obj["context_confidence"] = 0.0
 
-    # Developer-only metadata (opt-in)
     if dev_meta and isinstance(dev_meta, dict):
         for k, v in dev_meta.items():
             obj[k] = v
@@ -531,7 +541,6 @@ def _apply_context_review_llm(
 
     out = df_claims.copy()
 
-    # Ensure columns exist even if we bail early
     for col, default in [
         ("context_evaluated", False),
         ("context_status", pd.NA),
@@ -543,7 +552,6 @@ def _apply_context_review_llm(
         if col not in out.columns:
             out[col] = default
 
-    # Developer-only columns (OFF by default)
     if emit_dev:
         for col, default in [
             ("context_review_key", pd.NA),
@@ -558,7 +566,7 @@ def _apply_context_review_llm(
         term_id = str(r.get("term_id", "")).strip()
         source = str(r.get("source", "")).strip()
 
-        genes = _as_gene_list(r.get("gene_ids", ""))  # TSV often stores as comma-string
+        genes = _as_gene_list(r.get("gene_ids", ""))
         genes = [str(g).strip().upper() for g in genes if str(g).strip()]
 
         key = _context_review_key(
@@ -594,7 +602,6 @@ def _apply_context_review_llm(
         out.at[idx, "context_notes"] = nts
         out.at[idx, "context_confidence"] = conf
 
-        # Reflect into claim_json for audit/report (source-of-truth)
         if "claim_json" in out.columns:
             cj = out.at[idx, "claim_json"]
             if not _is_na_scalar(cj) and str(cj).strip():
@@ -621,7 +628,6 @@ def _apply_context_review_llm(
 # Stress suite (identity collapse) - PROBE
 # ===========================
 def _stress_enabled(card: SampleCard) -> bool:
-    # default OFF (paper-aligned). Enable via env or SampleCard.extra.
     env = str(os.environ.get("LLMPATH_STRESS_GENERATE", "")).strip().lower()
     if env:
         return env in {"1", "true", "t", "yes", "y", "on"}
@@ -630,10 +636,6 @@ def _stress_enabled(card: SampleCard) -> bool:
 
 
 def _module_prefix(card: SampleCard) -> str:
-    """
-    Ensure select's module_id fallback matches modules.py prefix behavior.
-    Priority: env > card.extra > default "M"
-    """
     env = str(os.environ.get("LLMPATH_MODULE_PREFIX", "")).strip()
     if env:
         return env
@@ -652,7 +654,6 @@ def _seed_for_claim(seed: int | None, claim_id: str) -> int:
 
 
 def _similarity(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
-    # (jaccard, recall, precision)
     if not orig and not pert:
         return (1.0, 1.0, 1.0)
     if not orig:
@@ -698,10 +699,6 @@ def _perturb_gene_set(
 
 
 def _module_hash_like_modules_py(terms: list[str], genes: list[str]) -> str:
-    """
-    Match modules.py: sha256("T:...\\nG:...")[:12]
-    IMPORTANT: gene IDs are normalized (upper) to avoid spurious drift.
-    """
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
     g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
     payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
@@ -734,10 +731,6 @@ def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
 def _build_module_terms_genes(
     distilled: pd.DataFrame, term_to_genes: dict[str, set[str]]
 ) -> dict[str, tuple[list[str], set[str]]]:
-    """
-    module_id -> (sorted terms, union genes)
-    Only works if distilled has module_id.
-    """
     out: dict[str, tuple[list[str], set[str]]] = {}
     if "module_id" not in distilled.columns or "term_uid" not in distilled.columns:
         return out
@@ -776,13 +769,6 @@ def _evaluate_stress_for_claim(
     seed: int | None,
     card: SampleCard,
 ) -> dict[str, Any]:
-    """
-    Stress suite (identity collapse) for a single claim.
-
-    IMPORTANT:
-      - This is a PROBE (measurement), not the mechanical DECIDER.
-      - audit.py can gate on WARN/ABSTAIN/FAIL depending on policy.
-    """
     ex = _get_extra(card)
 
     n = max(8, min(256, _as_int(ex.get("stress_n", None), 64)))
@@ -913,7 +899,6 @@ def _select_claims_deterministic(
     k: int = 3,
     seed: int | None = None,
 ) -> pd.DataFrame:
-    # direction is NOT required (we can default to "na")
     required = {"term_id", "term_name", "source", "stat", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
     if missing:
@@ -947,11 +932,9 @@ def _select_claims_deterministic(
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
         df["context_evaluated"] = True
     else:
-        # IMPORTANT: OFF => NOT evaluated. Use NA (not 0) to avoid hard-gate collapse downstream.
         df["context_score"] = pd.NA
         df["context_evaluated"] = False
 
-    # sorting helper (stable rank even with NA)
     df["context_score_sort"] = pd.to_numeric(df["context_score"], errors="coerce").fillna(-1)
 
     # ---- Evidence hygiene gates ----
@@ -986,7 +969,6 @@ def _select_claims_deterministic(
         df["term_survival"].fillna(-1.0) if "term_survival" in df.columns else -1.0
     )
 
-    # module diversity default: 1 per module (SampleCard getter)
     try:
         max_per_module = int(card.max_per_module(default=1))
     except Exception:
@@ -1001,7 +983,16 @@ def _select_claims_deterministic(
 
     has_module = "module_id" in df_ranked.columns
 
-    # ---- pick with module diversity (deterministic scan) ----
+    def _effective_mid(r: pd.Series) -> str:
+        mid = ""
+        if has_module and (not _is_na_scalar(r.get("module_id"))):
+            mid = str(r.get("module_id")).strip()
+        if (not mid) or (mid.lower() in _NA_TOKENS_L):
+            # treat missing module as unique bucket per term_uid
+            mid = f"M_missing::{str(r.get('term_uid'))}"
+        return mid
+
+    # ---- pass1: enforce module diversity cap ----
     picked_idx: list[int] = []
     per_module_count: dict[str, int] = {}
     blocked_by_module_cap = 0
@@ -1009,22 +1000,43 @@ def _select_claims_deterministic(
     for idx, r in df_ranked.iterrows():
         if len(picked_idx) >= int(k):
             break
-
-        mid = ""
-        if has_module and (not _is_na_scalar(r.get("module_id"))):
-            mid = str(r.get("module_id")).strip()
-
-        if (not mid) or (mid.lower() in _NA_TOKENS_L):
-            # treat "missing module" as its own bucket per term_uid to avoid collapsing
-            mid = f"M_missing::{str(r.get('term_uid'))}"
-
+        mid = _effective_mid(r)
         c = per_module_count.get(mid, 0)
         if c >= max_per_module:
             blocked_by_module_cap += 1
             continue
-
         per_module_count[mid] = c + 1
         picked_idx.append(idx)
+
+    # ---- pass2: if still short, relax cap to honor k ----
+    relaxed = False
+    relax_passes = 0
+    if len(picked_idx) < int(k):
+        remaining = [i for i in df_ranked.index.tolist() if i not in set(picked_idx)]
+        if remaining:
+            relaxed = True
+            # progressively raise cap until filled or exhausted
+            cap = max_per_module
+            while len(picked_idx) < int(k) and remaining and cap < 10:
+                cap += 1
+                relax_passes += 1
+                for idx in remaining:
+                    if len(picked_idx) >= int(k):
+                        break
+                    r = df_ranked.loc[idx]
+                    mid = _effective_mid(r)
+                    c = per_module_count.get(mid, 0)
+                    if c >= cap:
+                        continue
+                    per_module_count[mid] = c + 1
+                    picked_idx.append(idx)
+                remaining = [i for i in remaining if i not in set(picked_idx)]
+
+            # final fallback: if still short, just take next by rank
+            # (rare; e.g., cap loop exhausted)
+            if len(picked_idx) < int(k) and remaining:
+                need = int(k) - len(picked_idx)
+                picked_idx.extend(remaining[:need])
 
     df_pick = df_ranked.loc[picked_idx].copy()
 
@@ -1043,7 +1055,7 @@ def _select_claims_deterministic(
     rows: list[dict[str, Any]] = []
     ctx_keys = _context_keys(card)
 
-    # selection diagnostics (helps explain "k=100 but only 3")
+    # selection diagnostics
     n_total = int(df_ranked.shape[0])
     n_eligible = int(df_ranked["eligible"].sum()) if "eligible" in df_ranked.columns else n_total
     n_ineligible = int(n_total - n_eligible)
@@ -1052,7 +1064,8 @@ def _select_claims_deterministic(
     notes_common = (
         f"ranked={n_total}; eligible={n_eligible}; ineligible={n_ineligible}; "
         f"picked={n_picked}; k={int(k)}; max_per_module={int(max_per_module)}; "
-        f"blocked_by_module_cap={int(blocked_by_module_cap)}"
+        f"blocked_by_module_cap={int(blocked_by_module_cap)}; "
+        f"relaxed={bool(relaxed)}; relax_passes={int(relax_passes)}"
     )
 
     mprefix = _module_prefix(card)
@@ -1065,7 +1078,8 @@ def _select_claims_deterministic(
 
         term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
-        genes_full = [_norm_gene_id(g) for g in _as_gene_list(r.get("evidence_genes"))]
+        genes_full_raw = _as_gene_list(r.get("evidence_genes"))
+        genes_full = [_norm_gene_id(g) for g in genes_full_raw]
         genes_full = [g for g in genes_full if str(g).strip()]
 
         module_id = ""
@@ -1076,8 +1090,6 @@ def _select_claims_deterministic(
             module_id = str(r.get("module_id")).strip()
 
         if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
-            # Deterministic fallback that matches modules.py identity shape:
-            # {prefix}{content_hash12}
             content_hash = _module_hash_like_modules_py([term_uid], genes_full)
             module_id = f"{mprefix}{content_hash}"
             module_reason = "missing_module_id"
@@ -1116,7 +1128,6 @@ def _select_claims_deterministic(
             "gene_ids": ",".join(claim.evidence_ref.gene_ids),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
-            # context fields (evaluation-aware; used by audit.py)
             "context_score": r.get("context_score", pd.NA),
             "context_evaluated": bool(r.get("context_evaluated", False)),
             "eligible": bool(r.get("eligible", True)),
@@ -1127,12 +1138,13 @@ def _select_claims_deterministic(
             "preselect_tau_gate": bool(preselect_tau_gate),
             "context_score_proxy": bool(enable_ctx_proxy),
             "select_notes": notes_common,
-            # machine-readable diagnostics
             "select_diag_n_total": n_total,
             "select_diag_n_eligible": n_eligible,
             "select_diag_n_ineligible": n_ineligible,
             "select_diag_n_picked": n_picked,
             "select_diag_blocked_by_module_cap": int(blocked_by_module_cap),
+            "select_diag_relaxed": bool(relaxed),
+            "select_diag_relax_passes": int(relax_passes),
             "select_diag_k": int(k),
             "select_diag_max_per_module": int(max_per_module),
         }
@@ -1164,13 +1176,11 @@ def _try_call(fn: Callable[..., Any], **kwargs: Any) -> Any:
     Try calling a function with a subset of kwargs.
     This avoids brittle signature coupling across refactors.
     """
-    # 1) try full kwargs
     try:
         return fn(**kwargs)
     except TypeError:
         pass
 
-    # 2) progressively drop less-essential keys
     drop_orders = [
         ["outdir"],
         ["seed"],
@@ -1188,7 +1198,6 @@ def _try_call(fn: Callable[..., Any], **kwargs: Any) -> Any:
         except TypeError:
             continue
 
-    # 3) last resort: positional (distilled, card, backend, k, seed, outdir)
     try:
         return fn(
             kwargs.get("distilled"),
@@ -1247,16 +1256,13 @@ def select_claims(
     # ---- LLM mode ----
     if mode_eff == "llm":
         if backend is None:
-            # no backend -> deterministic
             out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
             out_det["claim_mode"] = "deterministic"
             out_det["llm_notes"] = "llm requested but backend=None; deterministic used"
             if ctx_review == "llm":
-                # context review requires backend, so skip
                 out_det["context_review_mode"] = "off"
             return out_det
 
-        # Try LLM proposal using best-effort signature compatibility.
         res = None
         notes = ""
         try:
@@ -1276,8 +1282,6 @@ def select_claims(
         out_llm: pd.DataFrame | None = None
         used_fallback = True
 
-        # We accept either a structured object (with .claims/.used_fallback/.notes)
-        # or a plain DataFrame already.
         if isinstance(res, pd.DataFrame):
             out_llm = res
             used_fallback = False
@@ -1310,7 +1314,6 @@ def select_claims(
                 )
             return out_llm
 
-        # Fallback
         out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
         out_det["claim_mode"] = "deterministic_fallback"
         out_det["llm_notes"] = notes or "llm returned fallback/empty; deterministic used"

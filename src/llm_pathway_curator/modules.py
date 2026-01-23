@@ -23,7 +23,7 @@ _GENE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 # -------------------------
-# Normalization (align with audit/select)
+# Normalization (align with schema/distill: trim-only; NO forced uppercasing)
 # -------------------------
 def _clean_gene_id(g: object) -> str:
     s = str(g).strip().strip('"').strip("'")
@@ -33,8 +33,15 @@ def _clean_gene_id(g: object) -> str:
 
 
 def _norm_gene_id(g: object) -> str:
-    # match audit.py (_norm_gene_id) to avoid spurious drift
-    return _clean_gene_id(g).upper()
+    """
+    Canonical gene token for graph/module construction.
+
+    IMPORTANT:
+      - Do NOT force uppercasing here.
+      - Case normalization can be species-dependent (e.g., mouse genes),
+        and should be handled upstream if desired.
+    """
+    return _clean_gene_id(g)
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
@@ -59,8 +66,8 @@ def _hash_set_short12(items: list[str]) -> str:
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Gene-set stable short hash (sha256[:12]), normalized (upper).
-    This prevents spurious drift from casing differences.
+    Gene-set stable short hash (sha256[:12]), normalized (trim-only).
+    Order invariant; avoids casing assumptions.
     """
     uniq = sorted({_norm_gene_id(x) for x in genes if str(x).strip()})
     payload = ",".join(uniq)
@@ -68,6 +75,10 @@ def _hash_gene_set_short12(genes: list[str]) -> str:
 
 
 def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
+    """
+    Content hash binds module identity to BOTH term set and gene set.
+    Uses the same canonicalization as edges (trim-only).
+    """
     t = sorted([str(x).strip() for x in terms if str(x).strip()])
     g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
     payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)

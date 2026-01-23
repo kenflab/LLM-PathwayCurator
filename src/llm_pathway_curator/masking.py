@@ -58,6 +58,16 @@ def _sha256_short(payload: object, n: int = 12) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:n]
 
 
+def _validate_frac(name: str, x: float) -> float:
+    try:
+        v = float(x)
+    except Exception as e:
+        raise ValueError(f"{name} must be a float in [0,1] (got {x!r})") from e
+    if v < 0.0 or v > 1.0:
+        raise ValueError(f"{name} must be in [0,1] (got {v})")
+    return v
+
+
 def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str, str]:
     if whitelist is None:
         whitelist = []
@@ -114,7 +124,7 @@ def apply_gene_masking(
     v0 behavior: deterministic "noise gene" masking by lists/patterns.
 
     NOTE:
-      - seed is accepted for CLI plumbing; v0 masking is deterministic.
+      - seed is accepted for CLI plumbing; v0 masking is deterministic (seed ignored).
       - For Fig2 v4 stress (dropout/noise/contradiction), use apply_evidence_stress().
     """
     _ = seed  # intentionally unused in v0
@@ -132,6 +142,8 @@ def apply_gene_masking(
     import re
 
     compiled = {k: re.compile(pat) for k, pat in NOISE_PATTERNS.items()}
+
+    wl = set([str(g).strip() for g in whitelist if str(g).strip()])
 
     gene_reasons: dict[str, str] = {}
     out = distilled.copy()
@@ -164,8 +176,6 @@ def apply_gene_masking(
             )
             continue
 
-        wl = set([str(g).strip() for g in whitelist if str(g).strip()])
-
         kept: list[str] = []
         removed: list[tuple[str, str]] = []
         for g in genes:
@@ -194,8 +204,9 @@ def apply_gene_masking(
                 kept2 = [g for g in kept2 if g not in matches]
 
         for g, reason in removed:
-            # v0: global map (best-effort)
-            gene_reasons[g] = reason
+            # v0: global map (best-effort). Keep first reason to avoid overwriting.
+            if g not in gene_reasons:
+                gene_reasons[g] = reason
 
         after = kept2[:]
         masked_lists.append(after)
@@ -209,7 +220,7 @@ def apply_gene_masking(
                 "before_n": int(len(before)),
                 "after_n": int(len(after)),
                 "dropped_n": int(len(dropped)),
-                "dropped_hash": _sha256_short(dropped),
+                "dropped_hash": _sha256_short(dropped) if dropped else "",
                 "injected_n": 0,
                 "injected_hash": "",
                 "notes": "",
@@ -256,11 +267,11 @@ def apply_evidence_stress(
     Fig2 v4: stress that targets evidence identity.
 
     What it does:
-      1) gene dropout: remove a fraction of evidence genes per term (seeded)
-      2) gene noise injection: add a fraction of "noise" genes per term (seeded)
+      1) gene dropout: remove a fraction of evidence genes per term (seeded; per-term RNG)
+      2) gene noise injection: add a fraction of "noise" genes per term (seeded; per-term RNG)
       3) contradiction tag: mark some terms for direction flip downstream (seeded)
          - does NOT modify claim_json here (keep layers separated)
-         - emits stress_tag/contradiction_tag columns + term_events log
+         - emits stress_tag/contradiction_flip columns + term_events log
 
     Outputs:
       - masked_distilled: updated evidence_genes (+ evidence_genes_str)
@@ -269,6 +280,13 @@ def apply_evidence_stress(
     """
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_evidence_stress: missing column {genes_col}")
+
+    if int(min_genes_after) < 0:
+        raise ValueError(f"min_genes_after must be >= 0 (got {min_genes_after})")
+
+    dropout_frac = _validate_frac("dropout_frac", dropout_frac)
+    noise_frac = _validate_frac("noise_frac", noise_frac)
+    contradiction_frac = _validate_frac("contradiction_frac", contradiction_frac)
 
     out = distilled.copy()
 
@@ -290,8 +308,8 @@ def apply_evidence_stress(
 
     wl = set([str(g).strip() for g in (whitelist or []) if str(g).strip()])
 
-    # Deterministic: seed is accepted for CLI-level reproducibility plumbing.
-    _ = seed
+    # Deterministic per-term RNG seed is derived from (seed, term_uid, row_index fallback).
+    seed = int(seed)
 
     noise_pool = _build_noise_pool(whitelist=wl)
 
@@ -308,15 +326,21 @@ def apply_evidence_stress(
         genes0 = [g for g in genes0 if g]  # safety
         before = genes0[:]
 
-        # Per-term seeded stream (so reordering rows doesn't change stress)
-        term_seed = int(_sha256_short({"seed": seed, "term_uid": term_uid}, n=12), 16) % (2**31 - 1)
+        # If term_uid is empty, include row_index as a fallback
+        # to avoid identical per-term RNG streams.
+        seed_payload = {
+            "seed": seed,
+            "term_uid": term_uid,
+            "row_index": int(idx) if not term_uid else None,
+        }
+        term_seed = int(_sha256_short(seed_payload, n=12), 16) % (2**31 - 1)
         trng = random.Random(term_seed)
 
-        # 1) dropout
+        # 1) dropout (floor-based)
         genes = before[:]
         dropped: list[str] = []
-        if dropout_frac > 0 and len(genes) > min_genes_after:
-            k = int(round(len(genes) * float(dropout_frac)))
+        if dropout_frac > 0.0 and len(genes) > int(min_genes_after):
+            k = int(len(genes) * float(dropout_frac))
             # never drop below min_genes_after
             k = min(k, max(0, len(genes) - int(min_genes_after)))
             to_drop = set(_pick_k(trng, genes, k))
@@ -324,30 +348,32 @@ def apply_evidence_stress(
                 genes = [g for g in genes if g not in to_drop]
                 dropped = [g for g in before if g in to_drop]
                 for g in dropped:
-                    gene_reasons[g] = gene_reasons.get(g, "stress_dropout")
+                    if g not in gene_reasons:
+                        gene_reasons[g] = "stress_dropout"
 
-        # 2) noise injection
+        # 2) noise injection (floor-based)
         injected: list[str] = []
-        if noise_frac > 0 and noise_pool:
-            k_inj = int(round(max(1, len(genes)) * float(noise_frac)))
+        if noise_frac > 0.0 and noise_pool:
+            base = max(1, len(genes))
+            k_inj = int(base * float(noise_frac))
             k_inj = max(0, k_inj)
-            cand = [g for g in noise_pool if g not in wl and g not in set(genes)]
-            inj = _pick_k(trng, cand, k_inj)
-            if inj:
-                genes = genes + inj
-                injected = inj[:]
-                for g in injected:
-                    gene_reasons[g] = gene_reasons.get(g, "stress_noise_inject")
+            if k_inj > 0:
+                cand = [g for g in noise_pool if g not in wl and g not in set(genes)]
+                inj = _pick_k(trng, cand, k_inj)
+                if inj:
+                    genes = genes + inj
+                    injected = inj[:]
+                    for g in injected:
+                        if g not in gene_reasons:
+                            gene_reasons[g] = "stress_noise_inject"
 
         genes = _dedup_preserve_order(genes)
 
         # 3) contradiction tagging (direction flip downstream)
         flip = False
-        if contradiction_frac > 0:
-            # Bernoulli with per-term RNG
+        if contradiction_frac > 0.0:
             flip = trng.random() < float(contradiction_frac)
 
-        # tag string (compact)
         tags: list[str] = []
         if dropped:
             tags.append("dropout")

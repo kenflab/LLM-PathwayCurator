@@ -1,6 +1,6 @@
-# LLM-PathwayCurator/src/llm_pathway_curator/schema.py
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -33,10 +33,15 @@ NORMALIZED_COLS = [
 # Gene-like token heuristic for whitespace-separated lists (fallback path).
 # Keep conservative to avoid destructive split.
 _GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-_GENE_TOKEN = __import__("re").compile(_GENE_TOKEN_RE)
+_GENE_TOKEN = re.compile(_GENE_TOKEN_RE)
 
-# Keep aliases conservative but cover common real-world headers.
-# IMPORTANT: keys should be in the post-normalized form (lower, spaces/hyphens -> underscores).
+# Used to recognize bracketed/list-like strings that should be split.
+_BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
+
+# Excel formula injection starters.
+_EXCEL_FORMULA_START = ("=", "+", "-", "@")
+
+
 ALIASES = {
     # -------------------------
     # term id/name
@@ -94,7 +99,7 @@ ALIASES = {
     "adj_p": "qval",
     "adj_pval": "qval",
     "adj_p_value": "qval",
-    # some tools only export p-value; we map to pval then (optionally) to qval
+    # some tools only export p-value
     "pval": "pval",
     "p_value": "pval",
     "pvalue": "pval",
@@ -142,9 +147,10 @@ class EvidenceTable:
     @staticmethod
     def _normalize_col(c: str) -> str:
         # Normalize common messiness while keeping it conservative.
-        c = c.strip().lstrip("\ufeff")
-        c = c.replace(" ", "_").replace("-", "_")
-        return c.lower()
+        s = str(c).strip().lstrip("\ufeff")
+        s = s.replace(" ", "_").replace("-", "_")
+        s = re.sub(r"_+", "_", s)
+        return s.lower()
 
     @staticmethod
     def _is_na_scalar(x: object) -> bool:
@@ -199,11 +205,72 @@ class EvidenceTable:
         return "na"
 
     @staticmethod
-    def _clean_gene_symbol(g: str) -> str:
-        s = g.strip().strip('"').strip("'")
+    def _clean_gene_token(g: str) -> str:
+        """
+        Clean a single gene-like token conservatively.
+
+        NOTE: Do NOT force uppercase.
+        - Mouse gene symbols are case-sensitive in practice (e.g., Trp53).
+        - Ensembl/other IDs may appear in mixed case depending on export.
+        Our downstream logic uses set/hash comparisons; canonicalization beyond trimming
+        should be an explicit, opt-in mapping step (resources/gene_id_maps).
+        """
+        s = str(g).strip().strip('"').strip("'")
         s = " ".join(s.split())
+        # Strip common wrapping punctuation from list-like exports.
         s = s.strip(",;|")
-        return s.upper()
+        s = s.strip("[](){}")
+        # Some exports keep trailing commas/brackets mixed.
+        s = s.strip(",;|").strip("[](){}")
+        return s
+
+    @classmethod
+    def _split_gene_string(cls, s: str) -> list[str]:
+        """
+        Split a gene string into tokens with conservative rules.
+
+        Supports common real-world formats:
+        - "A,B,C"
+        - "A;B;C"
+        - "A|B|C"
+        - "A/B/C" (seen in some core_enrichment exports)
+        - "['A', 'B']" / '["A","B"]' / "{A,B}"
+        """
+        s = s.strip()
+        if not s:
+            return []
+
+        # Remove a single leading quote that sometimes appears (TSV quoting issues)
+        if s.startswith("'") and len(s) > 1:
+            s = s[1:].strip()
+
+        # Tolerate explicit list-like wrappers: [..], (..), {..}
+        # We do NOT eval; just strip wrappers if present.
+        if _BRACKETED_LIST_RE.match(s):
+            s = s.strip().lstrip("[({").rstrip("])}").strip()
+
+        # Normalize delimiters (keep conservative)
+        s = s.replace("\n", " ").replace("\t", " ")
+        s = " ".join(s.split()).strip()
+        if not s:
+            return []
+
+        # Common delimiters to comma
+        s = s.replace(";", ",").replace("|", ",").replace("/", ",")
+        # If it looks like JSON-ish list with commas, this now splits fine.
+
+        if "," in s:
+            parts = s.split(",")
+        else:
+            parts0 = s.split(" ")
+            # Space-separated fallback ONLY if all tokens look gene-like.
+            if parts0 and all(bool(_GENE_TOKEN.match(tok)) for tok in parts0):
+                parts = parts0
+            else:
+                # treat as a single field (avoid destructive split)
+                parts = [s]
+
+        return parts
 
     @classmethod
     def _parse_genes(cls, x: object) -> list[str]:
@@ -212,37 +279,15 @@ class EvidenceTable:
 
         # Already list-like
         if isinstance(x, (list, tuple, set)):
-            genes = [cls._clean_gene_symbol(str(g)) for g in x]
+            genes = [cls._clean_gene_token(str(g)) for g in x]
             genes = [g for g in genes if g]
         else:
             s = str(x).strip()
-            if s.startswith("'"):
-                s = s[1:].strip()
             if not s or s.lower() in {"na", "nan", "none"}:
                 return []
 
-            # normalize common delimiters
-            s = s.replace(";", ",").replace("|", ",")
-            # tolerate tabs/newlines
-            s = s.replace("\n", " ").replace("\t", " ")
-            s = " ".join(s.split()).strip()
-
-            if not s or s.lower() in {"na", "nan", "none"}:
-                return []
-
-            # If comma-delimited, prefer commas.
-            if "," in s:
-                parts = s.split(",")
-            else:
-                # Space-separated fallback ONLY if all tokens look gene-like.
-                parts0 = s.split(" ")
-                if parts0 and all(bool(_GENE_TOKEN.match(tok)) for tok in parts0):
-                    parts = parts0
-                else:
-                    # treat as a single field (avoid destructive split)
-                    parts = [s]
-
-            genes = [cls._clean_gene_symbol(g) for g in parts]
+            parts = cls._split_gene_string(s)
+            genes = [cls._clean_gene_token(g) for g in parts]
             genes = [g for g in genes if g]
 
         # de-duplicate while preserving order
@@ -383,7 +428,7 @@ class EvidenceTable:
         df["is_valid"] = True
         df["invalid_reason"] = ""
 
-        # required fields validity
+        # Required string fields
         bad_required = df["term_id"].eq("") | df["term_name"].eq("")
         if bad_required.any():
             df.loc[bad_required, "is_valid"] = False
@@ -398,10 +443,44 @@ class EvidenceTable:
                     f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
                 )
 
+        # ---- salvage term_id/term_name conservatively (after initial marking) ----
+        # Rationale: some exports use "term" to mean name, not id.
+        # We keep ALIASES for backward compatibility, but rescue common cases here.
+        # - If term_id is empty and term_name is present -> copy term_name into term_id.
+        # - If term_name is empty but term_id contains whitespace (looks like a name)
+        #   -> copy term_id into term_name.
+        # This rescue only applies to rows not already invalid for
+        # other reasons beyond empty fields.
+        term_id_empty = df["term_id"].eq("")
+        term_name_empty = df["term_name"].eq("")
+        salvage_1 = term_id_empty & (~term_name_empty)
+        if salvage_1.any():
+            df.loc[salvage_1, "term_id"] = df.loc[salvage_1, "term_name"]
+
+        looks_like_name = df["term_id"].astype(str).str.contains(r"\s+", regex=True)
+        salvage_2 = term_name_empty & (~term_id_empty) & looks_like_name
+        if salvage_2.any():
+            df.loc[salvage_2, "term_name"] = df.loc[salvage_2, "term_id"]
+
+        # Re-evaluate required field validity after salvage
+        bad_required2 = df["term_id"].eq("") | df["term_name"].eq("")
+        if bad_required2.any():
+            df.loc[bad_required2, "is_valid"] = False
+            df.loc[bad_required2, "invalid_reason"] = "EMPTY_REQUIRED_FIELDS"
+            if strict:
+                i = int(df.index[bad_required2][0])
+                bad = df.loc[i].to_dict()
+                raise ValueError(
+                    f"EvidenceTable has empty required fields at row index={i}. "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: ensure term_id/term_name are non-empty (after salvage still empty). "
+                    f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
+                )
+
+        # stat validity
         bad_stat = df["stat"].isna()
         if bad_stat.any():
             df.loc[bad_stat, "is_valid"] = False
-            # preserve earlier reason if already invalid
             df.loc[bad_stat & df["invalid_reason"].eq(""), "invalid_reason"] = "NON_NUMERIC_STAT"
             if strict:
                 i = int(df.index[bad_stat][0])
@@ -430,6 +509,38 @@ class EvidenceTable:
                     "or set strict=False to drop/mark summary rows."
                 )
 
+        # ---- pval/qval range checks (prevent silent mis-mapping) ----
+        # If the user mistakenly mapped logP into pval, it can exceed 1.
+        pval_bad_range = (~df["pval"].isna()) & ((df["pval"] < 0.0) | (df["pval"] > 1.0))
+        if pval_bad_range.any():
+            df.loc[pval_bad_range, "is_valid"] = False
+            df.loc[pval_bad_range & df["invalid_reason"].eq(""), "invalid_reason"] = (
+                "INVALID_PVAL_RANGE"
+            )
+            if strict:
+                i = int(df.index[pval_bad_range][0])
+                raise ValueError(
+                    f"EvidenceTable has pval outside [0,1] at row index={i} "
+                    f"(term_id={df.loc[i, 'term_id']}, pval={df.loc[i, 'pval']}). "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: ensure 'pval' column is a true p-value, not logP/-log10(P)."
+                )
+
+        qval_bad_range = (~df["qval"].isna()) & ((df["qval"] < 0.0) | (df["qval"] > 1.0))
+        if qval_bad_range.any():
+            df.loc[qval_bad_range, "is_valid"] = False
+            df.loc[qval_bad_range & df["invalid_reason"].eq(""), "invalid_reason"] = (
+                "INVALID_QVAL_RANGE"
+            )
+            if strict:
+                i = int(df.index[qval_bad_range][0])
+                raise ValueError(
+                    f"EvidenceTable has qval outside [0,1] at row index={i} "
+                    f"(term_id={df.loc[i, 'term_id']}, qval={df.loc[i, 'qval']}). "
+                    f"read_mode={rr.read_mode}. "
+                    "Fix: ensure 'qval' column is a true FDR/q-value in [0,1]."
+                )
+
         # ---- qval fallback policy ----
         # Provenance:
         #   - "qval": provided in input
@@ -442,6 +553,8 @@ class EvidenceTable:
 
         def _bh_qvalues(p: pd.Series) -> pd.Series:
             p = pd.to_numeric(p, errors="coerce")
+            # Guard again: p must be in [0,1]
+            p = p.where((p >= 0.0) & (p <= 1.0))
             m = int(p.notna().sum())
             if m == 0:
                 return pd.Series([pd.NA] * len(p), index=p.index, dtype="float64")
@@ -460,14 +573,12 @@ class EvidenceTable:
             return q
 
         needs_q = df["qval"].isna() & (~df["pval"].isna())
-
         # Only compute qvals for rows that are otherwise valid enough to be used.
-        # (If drop_invalid=False, downstream can still ignore via is_valid.)
         needs_q = needs_q & df["is_valid"]
 
+        bh_group_cols = ["source", "direction"]  # conservative grouping
         if needs_q.any():
-            group_cols = ["source", "direction"]
-            for _, idx in df.loc[needs_q].groupby(group_cols).groups.items():
+            for _, idx in df.loc[needs_q].groupby(bh_group_cols).groups.items():
                 idx = list(idx)
                 q_calc = _bh_qvalues(df.loc[idx, "pval"])
                 df.loc[idx, "qval"] = q_calc
@@ -483,6 +594,13 @@ class EvidenceTable:
         # ---- drop invalid rows if requested ----
         n_invalid_total = int((~df["is_valid"]).sum())
         n_invalid_empty_ev = int(empty_ev.sum())
+
+        # Capture a small sample of invalid rows for debugging/repro.
+        invalid_sample = []
+        if n_invalid_total > 0:
+            cols = ["term_id", "term_name", "source", "invalid_reason"]
+            cols = [c for c in cols if c in df.columns]
+            invalid_sample = df.loc[~df["is_valid"], cols].head(5).to_dict(orient="records")
 
         if drop_invalid:
             df = df.loc[df["is_valid"]].copy()
@@ -504,8 +622,11 @@ class EvidenceTable:
             else {},
             "n_invalid_total": int(n_invalid_total),
             "n_invalid_empty_evidence_genes": int(n_invalid_empty_ev),
+            "invalid_sample": invalid_sample,
             "drop_invalid": bool(drop_invalid),
             "strict": bool(strict),
+            "bh_group_cols": list(bh_group_cols),
+            "read_mode": rr.read_mode,
         }
 
         return cls(df=df)
@@ -532,9 +653,14 @@ class EvidenceTable:
     def write_tsv(self, path: str) -> None:
         out = self.df.copy()
 
-        def _excel_safe(s: str) -> str:
+        def _excel_safe_cell(s: str) -> str:
             s = str(s or "")
-            return ("'" + s) if s else ""
+            if not s:
+                return ""
+            # Only guard if it could be interpreted as a formula in Excel-like tools.
+            if s.startswith(_EXCEL_FORMULA_START):
+                return "'" + s
+            return s
 
         def _join_genes(x: object) -> str:
             if EvidenceTable._is_na_scalar(x):
@@ -543,13 +669,13 @@ class EvidenceTable:
                 s = ",".join([str(g) for g in x if str(g).strip()])
             else:
                 s = str(x).strip()
-            return _excel_safe(s)
+            return _excel_safe_cell(s)
 
         if "evidence_genes" in out.columns:
             out["evidence_genes_str"] = out["evidence_genes"].map(_join_genes)
         elif "evidence_genes_str" in out.columns:
             out["evidence_genes_str"] = out["evidence_genes_str"].map(
-                lambda x: _excel_safe(str(x).strip())
+                lambda x: _excel_safe_cell(str(x).strip())
             )
         else:
             out["evidence_genes_str"] = ""

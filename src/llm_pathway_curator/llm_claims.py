@@ -15,6 +15,7 @@ from .claim_schema import Claim
 from .sample_card import SampleCard
 
 _NA_TOKENS = {"", "na", "nan", "none", "NA"}
+_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -34,7 +35,7 @@ def _strip_na(s: Any) -> str:
     if _is_na_scalar(s):
         return ""
     t = str(s).strip()
-    if not t or t.lower() in {x.lower() for x in _NA_TOKENS}:
+    if not t or t.lower() in _NA_TOKENS_L:
         return ""
     return t
 
@@ -52,6 +53,17 @@ def _sha256_text(s: str) -> str:
     h = hashlib.sha256()
     h.update((s or "").encode("utf-8"))
     return h.hexdigest()
+
+
+def _stable_json_dumps(obj: Any) -> str:
+    # stable across runs
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _df_records_sha256(df: pd.DataFrame) -> str:
+    # stable hash for provenance/debugging
+    recs = df.to_dict(orient="records")
+    return _sha256_text(_stable_json_dumps(recs))
 
 
 def _parse_soft_error_json(s: str) -> dict[str, Any] | None:
@@ -102,17 +114,48 @@ def _norm_gene_id(g: Any) -> str:
 def _parse_gene_list(x: Any) -> list[str]:
     """
     Parse genes into canonical list[str] (upper, de-dup, preserve order).
-    Accept list-like or csv-ish strings.
+
+    Accept:
+      - list-like
+      - csv-ish strings with separators: , ; | /
+      - bracket-ish strings: "['A','B']" / '["A","B"]' / "{A,B}" (NO eval)
+      - whitespace split as fallback
+
+    Returns: de-duplicated list preserving first occurrence order.
     """
     if _is_na_scalar(x):
         return []
+
     if isinstance(x, (list, tuple, set)):
         items = [str(t).strip() for t in x if str(t).strip()]
     else:
-        s = str(x).strip().replace(";", ",").replace("|", ",")
-        if not s or s.lower() in {t.lower() for t in _NA_TOKENS}:
+        s = str(x).strip()
+        if not s or s.lower() in _NA_TOKENS_L:
             return []
-        items = [t.strip() for t in s.split(",") if t.strip()]
+
+        # strip bracket wrappers if it looks like a list literal; do NOT eval
+        s0 = s.strip()
+        if (
+            (s0.startswith("[") and s0.endswith("]"))
+            or (s0.startswith("(") and s0.endswith(")"))
+            or (s0.startswith("{") and s0.endswith("}"))
+        ):
+            s0 = s0[1:-1].strip()
+
+        # normalize separators
+        s0 = s0.replace(";", ",").replace("|", ",").replace("/", ",")
+        s0 = s0.replace("\n", " ").replace("\t", " ")
+        s0 = " ".join(s0.split()).strip()
+        if not s0 or s0.lower() in _NA_TOKENS_L:
+            return []
+
+        if "," in s0:
+            items = [t.strip().strip('"').strip("'") for t in s0.split(",") if t.strip()]
+        else:
+            items = [t.strip().strip('"').strip("'") for t in s0.split(" ") if t.strip()]
+
+        items = [t.strip("[](){}").strip() for t in items]
+        items = [t for t in items if t and t.lower() not in _NA_TOKENS_L]
 
     seen: set[str] = set()
     out: list[str] = []
@@ -180,7 +223,7 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
                 "term_survival": ts,
                 "module_id": str(r.get("module_id", "")).strip(),
                 "gene_set_hash": str(r.get("gene_set_hash", "")).strip().lower(),
-                "gene_ids_suggest": genes_list,  # canonical
+                "gene_ids_suggest": genes_list,
             }
         )
 
@@ -264,8 +307,12 @@ def _post_validate_against_candidates(
       - claim_id is TOOL-OWNED by Claim schema; do NOT generate or overwrite here
     """
     cand2 = cand.copy()
+
     cand2["term_uid"] = cand2.get("term_uid", pd.Series([""] * len(cand2))).astype(str).str.strip()
     cand2["term_id"] = cand2.get("term_id", pd.Series([""] * len(cand2))).astype(str).str.strip()
+
+    # CRITICAL: enforce uniqueness to avoid DataFrame-return from .loc[uid]
+    cand2 = cand2.drop_duplicates(subset=["term_uid"], keep="first")
 
     if "gene_set_hash" not in cand2.columns:
         cand2["gene_set_hash"] = ""
@@ -286,7 +333,6 @@ def _post_validate_against_candidates(
     ctx_allowed = set(ctx_keys_resolved or [])
 
     for c in claims:
-        # project context_keys to resolved keys (stable); if none, use resolved keys
         ck_in = list(c.context_keys or [])
         ck_proj = [k for k in ck_in if (k in ctx_allowed)]
         if not ck_proj:
@@ -309,7 +355,6 @@ def _post_validate_against_candidates(
         if term_id_expected and str(c.entity).strip() != term_id_expected:
             return (False, f"entity != term_id for term_uid={term_uid}", [])
 
-        # tool-owned gene_set_hash (prefer candidate; fallback allowed only if candidate missing)
         gsh_expected = str(row.get("gene_set_hash", "")).strip().lower()
         if require_gene_set_hash:
             if (not gsh_expected) or (not _looks_like_12hex(gsh_expected)):
@@ -338,8 +383,6 @@ def _post_validate_against_candidates(
                     [],
                 )
 
-        # Normalize claim by overwriting context_keys + evidence_ref.gene_set_hash.
-        # IMPORTANT: do NOT overwrite claim_id here; Claim schema owns it.
         gsh_final = gsh_expected or gsh_in or ""
         update: dict[str, Any] = {"context_keys": ck_proj}
 
@@ -370,11 +413,8 @@ def propose_claims_llm(
     seed: int | None = None,
     outdir: str | None = None,
 ) -> LLMClaimResult:
-    _ = seed  # backend may handle seeding
-
     df = distilled_with_modules.copy()
 
-    # accept missing term_uid
     if "term_uid" not in df.columns:
         if not {"source", "term_id"}.issubset(set(df.columns)):
             raise ValueError("propose_claims_llm: requires term_uid OR (source, term_id)")
@@ -398,8 +438,6 @@ def propose_claims_llm(
     else:
         df["gene_ids_suggest"] = [[] for _ in range(len(df))]
 
-    # gene_set_hash: deterministic fill from gene_ids_suggest when missing/invalid;
-    # if genes are empty, use term_uid fallback (never leave empty).
     if "gene_set_hash" not in df.columns:
         df["gene_set_hash"] = ""
 
@@ -430,7 +468,11 @@ def propose_claims_llm(
     ).fillna(0.0)
 
     # Optional context proxy: if enabled and context_score exists, use it as a tie-breaker.
-    ctx_proxy_on = bool(card.enable_context_score_proxy(False))
+    try:
+        ctx_proxy_on = bool(card.enable_context_score_proxy(default=False))
+    except Exception:
+        ctx_proxy_on = False
+
     if ctx_proxy_on:
         df["context_score_sort"] = pd.to_numeric(
             df.get("context_score", 0), errors="coerce"
@@ -449,19 +491,27 @@ def propose_claims_llm(
         ascending=[False, False, False, False, True],
     ).head(top_n)
 
+    # ensure candidates are not duplicated by term_uid (important for post-validate)
+    df_rank = df_rank.drop_duplicates(subset=["term_uid"], keep="first")
+
     require_gsh = os.environ.get("LLMPATH_LLM_REQUIRE_GENESET_HASH", "1").strip() != "0"
 
     prompt = build_claim_prompt(card=card, candidates=df_rank, k=int(k))
-    raw = backend.generate(prompt, json_mode=True) or ""
-    raw_text = str(raw).strip()
+
+    # Best-effort seed pass-through (backend may ignore); keep in meta for provenance.
+    raw = (
+        backend.generate(prompt, json_mode=True, seed=seed) if hasattr(backend, "generate") else ""
+    )
+    raw_text = str(raw or "").strip()
 
     meta: dict[str, Any] = {
         "k": int(k),
+        "seed": None if seed is None else int(seed),
         "top_n": int(top_n),
         "require_gene_set_hash": bool(require_gsh),
         "context_keys_resolved": _context_keys(card),
         "context_proxy_enabled": bool(ctx_proxy_on),
-        "candidates_sha256": _sha256_text(df_rank.to_csv(index=False, sep="\t")),
+        "candidates_sha256": _df_records_sha256(df_rank),
         "notes": "",
     }
 
@@ -542,6 +592,10 @@ def claims_to_proposed_tsv(
     df["term_id"] = df["term_id"].astype(str).str.strip()
     df["term_name"] = df["term_name"].astype(str).str.strip()
     df["source"] = df["source"].astype(str).str.strip()
+
+    # enforce uniqueness to avoid surprises
+    df = df.drop_duplicates(subset=["term_uid"], keep="first")
+
     by_uid = df.set_index("term_uid", drop=False)
 
     rows: list[dict[str, Any]] = []
@@ -575,13 +629,11 @@ def claims_to_proposed_tsv(
 
         rows.append(
             {
-                # exported context (not part of IDs)
                 "condition": ctx.get("condition", "NA"),
                 "tissue": ctx.get("tissue", "NA"),
                 "perturbation": ctx.get("perturbation", "NA"),
                 "comparison": ctx.get("comparison", "NA"),
                 "context_key": card.context_key(),
-                # claim fields
                 "claim_id": c.claim_id,
                 "entity": term_id,
                 "direction": c.direction,

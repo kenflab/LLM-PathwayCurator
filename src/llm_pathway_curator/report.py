@@ -65,34 +65,28 @@ def _json_sanitize(x: Any) -> Any:
     """
     # fast-path for simple primitives
     if x is None or isinstance(x, (str, int, float, bool)):
-        # Note: float("nan") is NOT JSON-serializable; handle below.
         if isinstance(x, float) and (pd.isna(x)):
             return None
         return x
 
-    # pandas NA / numpy NaN-like
     if _is_na_scalar(x):
         return None
 
-    # datetime
     if isinstance(x, datetime):
         try:
             return x.astimezone(timezone.utc).isoformat()
         except Exception:
             return x.isoformat()
 
-    # Path
     if isinstance(x, Path):
         return str(x)
 
-    # pydantic BaseModel-like (Claim, Decision, etc.)
     if hasattr(x, "model_dump") and callable(x.model_dump):
         try:
             return _json_sanitize(x.model_dump())
         except Exception:
             pass
 
-    # numpy / pandas scalar-like: try .item()
     if hasattr(x, "item") and callable(x.item):
         try:
             v = x.item()
@@ -100,28 +94,33 @@ def _json_sanitize(x: Any) -> Any:
         except Exception:
             pass
 
-    # dict
     if isinstance(x, dict):
         out: dict[str, Any] = {}
         for k, v in x.items():
-            # JSON keys should be strings (python json allows bool/int keys but keep it stable)
-            ks = str(k)
-            out[ks] = _json_sanitize(v)
+            out[str(k)] = _json_sanitize(v)
         return out
 
-    # list/tuple/set
     if isinstance(x, (list, tuple, set)):
         return [_json_sanitize(v) for v in list(x)]
 
-    # pandas Series (defensive)
     if isinstance(x, pd.Series):
         try:
             return [_json_sanitize(v) for v in x.tolist()]
         except Exception:
             return str(x)
 
-    # fallback
     return str(x)
+
+
+def _strip_excel_text_prefix(s: str) -> str:
+    """
+    Excel-safe text fields sometimes start with a single quote.
+    For JSON payload columns, strip it to allow json.loads.
+    """
+    ss = str(s or "").strip()
+    if ss.startswith("'"):
+        return ss[1:].strip()
+    return ss
 
 
 def _split_ids_to_list(x: Any) -> list[str]:
@@ -142,7 +141,6 @@ def _split_ids_to_list(x: Any) -> list[str]:
     if s.startswith("'"):
         s = s[1:].strip()
 
-    # normalize separators to ';'
     s = re.sub(r"[,\|\t\n ]+", ";", s)
     return [p.strip() for p in s.split(";") if p.strip()]
 
@@ -298,7 +296,6 @@ def _decision_from_audit_row(row: pd.Series) -> Decision:
         if k in row.index and (not _is_na_scalar(row.get(k))):
             details[k] = row.get(k)
 
-    # stress (if present)
     for k in ["stress_status", "stress_reason", "stress_notes"]:
         if k in row.index and (not _is_na_scalar(row.get(k))):
             details[k] = row.get(k)
@@ -424,10 +421,6 @@ def _safe_json_loads(s: str) -> dict[str, Any] | None:
 
 
 def _claim_stub_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """
-    Minimal claim representation if Claim.model_validate fails.
-    Keep keys aligned with Claim schema shape (best-effort).
-    """
     ev = raw.get("evidence_ref", {}) if isinstance(raw.get("evidence_ref", {}), dict) else {}
     return {
         "entity": str(raw.get("entity", "") or ""),
@@ -443,10 +436,6 @@ def _claim_stub_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_context_review_fields(claim_raw: dict[str, Any]) -> dict[str, Any]:
-    """
-    Pull context review fields injected into claim_json by select/pipeline.
-    This is report-only; auditing is already done upstream.
-    """
     keys = [
         "context_evaluated",
         "context_method",
@@ -473,7 +462,6 @@ def _get_card_context(card: SampleCard) -> dict[str, str]:
     ctx_pert = str(getattr(card, "perturbation", "") or "").strip()
     ctx_comp = str(getattr(card, "comparison", "") or "").strip()
 
-    # Backward compatibility: some cards may still use 'disease'
     ctx_disease = str(getattr(card, "disease", "") or "").strip()
     if (not ctx_condition) and ctx_disease:
         ctx_condition = ctx_disease
@@ -547,7 +535,6 @@ def _synthesize_claim_json_from_audit_log(
             },
         }
 
-        # attach context-review cols if present; otherwise mark unevaluated explicitly
         had_any_ctx = False
         for c in ctx_review_cols:
             if c in df.columns and not _is_na_scalar(row.get(c)):
@@ -566,27 +553,16 @@ def _synthesize_claim_json_from_audit_log(
 
 
 def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize stress columns for display.
-    Pipeline-style columns:
-      - stress_status in {PASS,FAIL,ABSTAIN,""}
-      - stress_reason, stress_notes
-    Legacy display columns (optional):
-      - stress_evaluated (bool-like)
-      - stress_ok (bool-like)
-    """
     out = audit_out.copy()
 
     if "stress_status" in out.columns:
         s = out["stress_status"].map(lambda x: "" if _is_na_scalar(x) else str(x).strip().upper())
         out["stress_status"] = s
-        # evaluated: true if status is non-empty OR any stress fields present
         out["stress_evaluated"] = s.map(lambda v: bool(v))
         out["stress_ok"] = s.map(
             lambda v: True if v == "PASS" else (False if v in {"FAIL", "ABSTAIN"} else False)
         )
     else:
-        # Keep stable columns for report tables even if stress not used
         if "stress_evaluated" not in out.columns:
             out["stress_evaluated"] = False
         if "stress_ok" not in out.columns:
@@ -595,8 +571,23 @@ def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _load_gene_id_map_from_env() -> dict[str, str]:
+    """
+    Keep consistent with pipeline.py:
+      - optional external mapping (TSV) via env LLMPATH_GENE_ID_MAP_TSV
+    """
+    try:
+        p = (os.environ.get("LLMPATH_GENE_ID_MAP_TSV", "") or "").strip()
+        if p:
+            m = load_id_map_tsv(p)
+            return m if isinstance(m, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
 # -----------------------------
-# JSONL export (paper artifact; stable keys)
+# JSONL export (tool artifact; stable keys)
 # -----------------------------
 def write_report_jsonl(
     audit_log: pd.DataFrame,
@@ -618,11 +609,15 @@ def write_report_jsonl(
     Robustness:
       - Accept 'claim_json' OR fallbacks as source-of-truth payload.
       - Report should not crash if Claim validation fails (emit stub).
+      - Missing metrics columns should NOT crash the export (emit nulls).
 
-    Required columns in audit_log:
+    Required columns in audit_log (strict):
       - status
       - <claim_json_col>  (claim_json or claim_json_str or claim_json_raw)
-      - term_survival_agg (column must exist; row values may be NA -> null in JSON)
+    Optional columns (best-effort):
+      - term_survival_agg, context_score, stat, tau_used, stability_scope,
+        module_id_effective, gene_set_hash_effective
+      - stress_status/stress_reason/stress_notes
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -641,13 +636,17 @@ def write_report_jsonl(
             "Upstream dropped all claim fields needed to reconstruct payload."
         )
 
-    _require_columns(audit_log, ["status", claim_json_col, "term_survival_agg"], "audit_log")
+    _require_columns(audit_log, ["status", claim_json_col], "audit_log")
 
-    # Stable row-wise access even if index is non-consecutive
     audit0 = audit_log.reset_index(drop=True)
     df = _stringify_list_columns(audit0)
 
-    surv_s = pd.to_numeric(audit0["term_survival_agg"], errors="coerce")
+    # Optional metric series (all-null if missing)
+    if "term_survival_agg" in audit0.columns:
+        surv_s = pd.to_numeric(audit0["term_survival_agg"], errors="coerce")
+    else:
+        surv_s = pd.Series([pd.NA] * len(audit0))
+
     ctx_s = (
         pd.to_numeric(audit0.get("context_score"), errors="coerce")
         if "context_score" in audit0.columns
@@ -682,8 +681,6 @@ def write_report_jsonl(
     jsonl_path = out_path / "report.jsonl"
     created_at = datetime.now(timezone.utc).isoformat()
     dev_meta_enabled = _get_dev_meta_enabled()
-
-    # Internal versioning (default: do not expose)
     schema_version_internal = _get_schema_version(card, default="v1")
 
     with jsonl_path.open("w", encoding="utf-8") as f:
@@ -693,13 +690,13 @@ def write_report_jsonl(
             row_raw = audit0.loc[i]
             decision_obj = _decision_from_audit_row(row_raw)
 
-            cj = str(row.get(claim_json_col, "") or "").strip()
+            cj0 = str(row.get(claim_json_col, "") or "").strip()
+            cj = _strip_excel_text_prefix(cj0)
             if not cj:
                 raise ValueError(f"audit_log has empty {claim_json_col} for a row (required)")
 
             claim_raw = _safe_json_loads(cj) or {}
 
-            # Attempt typed Claim; fall back to stub on failure.
             try:
                 claim_typed = Claim.model_validate(claim_raw)
                 claim_dump = claim_typed.model_dump()
@@ -736,9 +733,7 @@ def write_report_jsonl(
                 "created_at": created_at,
                 "run_id": str(run_id),
                 "method": method_val,
-                # Tool-facing primary key (neutral)
                 "condition": condition_key,
-                # Legacy aliases (kept for backward compatibility; do not treat as canonical)
                 "disease": condition_key,
                 "cancer": condition_key,
                 "comparison": comp_val,
@@ -756,14 +751,11 @@ def write_report_jsonl(
                     "gene_set_hash_effective": str(
                         row_raw.get("gene_set_hash_effective") or ""
                     ).strip(),
-                    # stress (pipeline-aligned)
                     "stress_status": str(row_raw.get("stress_status") or "").strip(),
                     "stress_reason": str(row_raw.get("stress_reason") or "").strip(),
-                    # context review (if present)
                     "context_status": str(ctx_review.get("context_status", "") or "").strip(),
                     "context_confidence": _to_float_or_none(ctx_review.get("context_confidence")),
                 },
-                # Common “flat” fields (legacy / convenience)
                 "claim_id": claim_id_val,
                 "decision_status": str(getattr(decision_obj, "status", "") or "").strip(),
                 "decision": str(getattr(decision_obj, "status", "") or "").strip(),
@@ -774,9 +766,8 @@ def write_report_jsonl(
                 "claim.context.tissue": ctx["tissue"],
                 "claim.context.perturbation": ctx["perturbation"],
                 "claim.context.comparison": ctx["comparison"] or comp_val,
-                "claim.context.disease": ctx["disease_alias"],  # legacy alias
+                "claim.context.disease": ctx["disease_alias"],
                 "evidence_refs.gene_set_hash": gene_set_hash_val,
-                # context review fields (top-level for easy filtering)
                 "context_evaluated": ctx_review.get("context_evaluated", None),
                 "context_method": ctx_review.get("context_method", None),
                 "context_status": ctx_review.get("context_status", None),
@@ -787,13 +778,9 @@ def write_report_jsonl(
                 "context_review_version": ctx_review.get("context_review_version", None),
             }
 
-            # Developer-only metadata (default OFF to satisfy “no internal versions in user output”)
             if dev_meta_enabled:
-                rec["dev_meta"] = {
-                    "schema_version": schema_version_internal,
-                }
+                rec["dev_meta"] = {"schema_version": schema_version_internal}
 
-            # --- CRITICAL: sanitize before json.dumps to avoid numpy/pandas scalar crashes ---
             rec_safe = _json_sanitize(rec)
             f.write(json.dumps(rec_safe, ensure_ascii=False) + "\n")
 
@@ -817,32 +804,15 @@ def write_report(
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # -------------------------
-    # Display-only symbol mapping (best-effort, reproducible, no network)
-    # -------------------------
-    id2sym_distilled = build_id_to_symbol_from_distilled(distilled)
-
-    id2sym_user: dict[str, str] = {}
-    try:
-        ex = getattr(card, "extra", {}) or {}
-        map_path = ex.get("gene_id_map_tsv", None) if isinstance(ex, dict) else None
-        if map_path:
-            id2sym_user = load_id_map_tsv(map_path)
-    except Exception:
-        id2sym_user = {}
-
-    id2sym = {**id2sym_distilled, **id2sym_user}
-
     audit_out = audit_log.copy()
+    dist_out = distilled.copy()
 
     # -------------------------
-    # Stress display normalization (pipeline-aligned + backward-friendly)
+    # Always write TSV artifacts (even if report tables are skipped)
     # -------------------------
     audit_out = _derive_stress_display_cols(audit_out)
 
-    # -------------------------
-    # Excel-safe ID columns (single-pass; avoid double overwrites)
-    # -------------------------
+    # Excel-safe ID columns
     if "gene_ids" in audit_out.columns:
         audit_out["gene_ids_str"] = audit_out["gene_ids"].map(_excel_safe_ids)
     elif "gene_ids_str" in audit_out.columns:
@@ -853,70 +823,57 @@ def write_report(
     elif "term_ids_str" in audit_out.columns:
         audit_out["term_ids_str"] = audit_out["term_ids_str"].map(_excel_safe_ids)
 
-    # Keep canonical display columns if they exist
     if "gene_ids" in audit_out.columns and "gene_ids_str" in audit_out.columns:
         audit_out["gene_ids"] = audit_out["gene_ids_str"]
     if "term_ids" in audit_out.columns and "term_ids_str" in audit_out.columns:
         audit_out["term_ids"] = audit_out["term_ids_str"]
 
     # -------------------------
-    # Add display-only gene symbols
+    # Display-only symbol mapping (best-effort, reproducible, no network)
+    # Priority (consistent with pipeline intent):
+    #   1) distilled-derived mapping
+    #   2) env LLMPATH_GENE_ID_MAP_TSV
+    #   3) card.extra.gene_id_map_tsv (optional override)
     # -------------------------
+    id2sym = {}
+    try:
+        id2sym = build_id_to_symbol_from_distilled(distilled)
+    except Exception:
+        id2sym = {}
+
+    id2sym = {**id2sym, **_load_gene_id_map_from_env()}
+
+    try:
+        ex = getattr(card, "extra", {}) or {}
+        map_path = ex.get("gene_id_map_tsv", None) if isinstance(ex, dict) else None
+        if map_path:
+            id2sym_user = load_id_map_tsv(map_path)
+            if isinstance(id2sym_user, dict) and id2sym_user:
+                id2sym = {**id2sym, **id2sym_user}
+    except Exception:
+        pass
+
     if ("gene_ids_str" in audit_out.columns) or ("gene_ids" in audit_out.columns):
         src = "gene_ids_str" if "gene_ids_str" in audit_out.columns else "gene_ids"
         s = audit_out[src].map(lambda x: "" if _is_na_scalar(x) else str(x))
-        syms = s.map(lambda x: map_ids_to_symbols(x, id2sym))
+        syms = s.map(lambda x: map_ids_to_symbols(x, id2sym) if id2sym else [])
         audit_out["gene_symbols"] = syms
         audit_out["gene_symbols_str"] = syms.map(
             lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
         )
 
-    # Stringify after we create *_str columns
     audit_out = _stringify_list_columns(audit_out)
-    dist_out = _stringify_list_columns(distilled)
+    dist_out = _stringify_list_columns(dist_out)
 
     audit_tsv = out_path / "audit_log.tsv"
     distilled_tsv = out_path / "distilled.tsv"
     audit_out.to_csv(audit_tsv, sep="\t", index=False)
     dist_out.to_csv(distilled_tsv, sep="\t", index=False)
 
+    # -------------------------
+    # If audit_log has no status, write a minimal report and exit safely.
+    # -------------------------
     status_col = "status" if "status" in audit_log.columns else None
-    if status_col is None:
-        n_pass = n_abs = n_fail = 0
-    else:
-        n_pass = int((audit_log[status_col] == "PASS").sum())
-        n_abs = int((audit_log[status_col] == "ABSTAIN").sum())
-        n_fail = int((audit_log[status_col] == "FAIL").sum())
-
-    abs_sum, fail_sum = _reason_summary(audit_log)
-
-    rc_summary: dict[str, float] | None = None
-    rc_curve_path: Path | None = None
-    score_col = _pick_score_col(audit_log)
-
-    if status_col and (risk_coverage_from_status is not None):
-        try:
-            rc_summary = risk_coverage_from_status(audit_log[status_col])
-        except Exception:
-            rc_summary = None
-
-    if status_col and score_col and (risk_coverage_curve is not None):
-        try:
-            curve = risk_coverage_curve(audit_log, score_col=score_col, status_col=status_col)
-            rc_curve_path = out_path / "risk_coverage.tsv"
-            curve.to_csv(rc_curve_path, sep="\t", index=False)
-        except Exception:
-            rc_curve_path = None
-
-    def _top(df: pd.DataFrame) -> pd.DataFrame:
-        if "term_survival_agg" in df.columns:
-            return df.sort_values(["term_survival_agg"], ascending=[False], kind="mergesort")
-        if "stat" in df.columns:
-            return df.sort_values(["stat"], ascending=[False], kind="mergesort")
-        if "claim_id" in df.columns:
-            return df.sort_values(["claim_id"], ascending=[True], kind="mergesort")
-        return df
-
     ctx = _get_card_context(card)
 
     lines: list[str] = []
@@ -933,6 +890,61 @@ def write_report(
     if notes:
         lines.append(f"- notes: {notes}")
     lines.append("")
+
+    if status_col is None:
+        lines.append("## Decisions")
+        lines.append("")
+        lines.append(
+            "**WARNING:** audit_log is missing required column `status`. "
+            "Skipping PASS/ABSTAIN/FAIL summaries."
+        )
+        lines.append("")
+        lines.append("## Audit log (top)")
+        lines.append("")
+        lines.append(_safe_table_md(_stringify_list_columns(audit_log), n=20))
+        lines.append("")
+        lines.append("## Reproducible artifacts")
+        lines.append("")
+        lines.append(f"- audit_log.tsv: {audit_tsv.name}")
+        lines.append(f"- distilled.tsv: {distilled_tsv.name}")
+        report_path = out_path / "report.md"
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        return
+
+    # Normal case
+    n_pass = int((audit_log[status_col] == "PASS").sum())
+    n_abs = int((audit_log[status_col] == "ABSTAIN").sum())
+    n_fail = int((audit_log[status_col] == "FAIL").sum())
+
+    abs_sum, fail_sum = _reason_summary(audit_log)
+
+    rc_summary: dict[str, float] | None = None
+    rc_curve_path: Path | None = None
+    score_col = _pick_score_col(audit_log)
+
+    if risk_coverage_from_status is not None:
+        try:
+            rc_summary = risk_coverage_from_status(audit_log[status_col])
+        except Exception:
+            rc_summary = None
+
+    if score_col and (risk_coverage_curve is not None):
+        try:
+            curve = risk_coverage_curve(audit_log, score_col=score_col, status_col=status_col)
+            rc_curve_path = out_path / "risk_coverage.tsv"
+            curve.to_csv(rc_curve_path, sep="\t", index=False)
+        except Exception:
+            rc_curve_path = None
+
+    def _top(df: pd.DataFrame) -> pd.DataFrame:
+        if "term_survival_agg" in df.columns:
+            return df.sort_values(["term_survival_agg"], ascending=[False], kind="mergesort")
+        if "stat" in df.columns:
+            return df.sort_values(["stat"], ascending=[False], kind="mergesort")
+        if "claim_id" in df.columns:
+            return df.sort_values(["claim_id"], ascending=[True], kind="mergesort")
+        return df
+
     lines.append(f"## Decisions (PASS/ABSTAIN/FAIL): {n_pass}/{n_abs}/{n_fail}")
     lines.append(
         "PASS requires evidence-link integrity and stability; otherwise the system "
@@ -969,7 +981,7 @@ def write_report(
     # PASS
     lines.append("## PASS (top)")
     lines.append("")
-    pass_df = audit_out[audit_out[status_col] == "PASS"] if status_col else audit_out.iloc[0:0]
+    pass_df = audit_out[audit_out[status_col] == "PASS"]
     pass_df = _top(pass_df)
     lines.append(
         _safe_table_md(
@@ -990,11 +1002,9 @@ def write_report(
                     "context_score",
                     "stat",
                     "audit_notes",
-                    # context review (if present)
                     "context_status",
                     "context_reason",
                     "context_confidence",
-                    # stress (aligned)
                     "stress_status",
                     "stress_reason",
                     "stress_evaluated",
@@ -1009,12 +1019,12 @@ def write_report(
     # ABSTAIN
     lines.append("## ABSTAIN (top)")
     lines.append("")
-    abs_df = audit_out[audit_out[status_col] == "ABSTAIN"] if status_col else audit_out.iloc[0:0]
-    abs_df = _top(abs_df)
+    abs_df2 = audit_out[audit_out[status_col] == "ABSTAIN"]
+    abs_df2 = _top(abs_df2)
     lines.append(
         _safe_table_md(
             _prefer_str_cols(
-                abs_df,
+                abs_df2,
                 [
                     "claim_id",
                     "entity",
@@ -1024,14 +1034,12 @@ def write_report(
                     "gene_ids",
                     "gene_symbols",
                     "gene_set_hash_effective",
-                    # stress
                     "stress_status",
                     "stress_reason",
                     "stress_evaluated",
                     "stress_ok",
                     "term_survival_agg",
                     "context_score",
-                    # context review
                     "context_status",
                     "context_reason",
                     "context_confidence",
@@ -1046,12 +1054,12 @@ def write_report(
     # FAIL
     lines.append("## FAIL (top)")
     lines.append("")
-    fail_df = audit_out[audit_out[status_col] == "FAIL"] if status_col else audit_out.iloc[0:0]
-    fail_df = _top(fail_df)
+    fail_df2 = audit_out[audit_out[status_col] == "FAIL"]
+    fail_df2 = _top(fail_df2)
     lines.append(
         _safe_table_md(
             _prefer_str_cols(
-                fail_df,
+                fail_df2,
                 [
                     "claim_id",
                     "entity",
@@ -1061,7 +1069,6 @@ def write_report(
                     "gene_ids",
                     "gene_symbols",
                     "gene_set_hash_effective",
-                    # stress/context review
                     "stress_status",
                     "stress_reason",
                     "context_status",

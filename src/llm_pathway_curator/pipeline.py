@@ -559,11 +559,9 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
 
             out.loc[missing_id2, "claim_id"] = out.loc[missing_id2].apply(_mk, axis=1)
 
-        # Canonicalize (single-line, deterministic)
         out = _canonicalize_claim_json_column(out)
         return out
 
-    # No payload at all -> synthesize
     out["claim_json_raw"] = out.apply(lambda r: _synthesize_claim_json_row(r, card), axis=1)
     out["claim_json"] = out["claim_json_raw"]
 
@@ -577,8 +575,6 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
         return ""
 
     out["claim_id"] = out["claim_json"].map(_extract_id).map(lambda x: str(x).strip())
-
-    # Canonicalize (single-line, deterministic)
     out = _canonicalize_claim_json_column(out)
     return out
 
@@ -718,6 +714,22 @@ def _apply_evidence_gene_dropout(
         "kept_total": int(kept_total),
     }
     return out, meta
+
+
+def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
+    term_uids = dist["term_uid"].astype(str).str.strip().tolist()
+    known = {t for t in term_uids if t and t.lower() not in _NA_TOKENS_L}
+
+    raw_to_uids: dict[str, set[str]] = {}
+    for tu in known:
+        raw = tu.split(":", 1)[-1].strip()
+        if not raw:
+            continue
+        raw_to_uids.setdefault(raw, set()).add(tu)
+
+    raw_unique = {raw: next(iter(u)) for raw, u in raw_to_uids.items() if len(u) == 1}
+    raw_amb = {raw for raw, u in raw_to_uids.items() if len(u) > 1}
+    return known, raw_unique, raw_amb
 
 
 def _resolve_term_ids_to_uids(
@@ -1102,8 +1114,6 @@ def _proxy_context_review(
       - Determine required context keys from claim_json if present; else use default keys.
       - PASS if required keys in card context are all non-empty (after strip)
       - FAIL otherwise (missing keys)
-    This converts "UNEVALUATED" -> evaluated=True with an explicit decision,
-    allowing hard gate to function without forcing an LLM dependency.
 
     Returns:
       (updated_df, meta)
@@ -1111,7 +1121,6 @@ def _proxy_context_review(
     out = proposed.copy()
     gate_mode = (gate_mode or "").strip().lower()
 
-    # Card context
     card_ctx = {
         "condition": str(_card_condition(card) or "").strip(),
         "tissue": str(getattr(card, "tissue", "") or "").strip(),
@@ -1126,7 +1135,6 @@ def _proxy_context_review(
     n_pass = 0
     n_fail = 0
 
-    # Ensure columns exist
     out = _ensure_context_review_fields(out, gate_mode=gate_mode)
 
     for i, row in out.iterrows():
@@ -1145,7 +1153,6 @@ def _proxy_context_review(
 
         missing = [k for k in req_keys if (k in card_ctx and not str(card_ctx.get(k, "")).strip())]
 
-        # Evaluate
         n_eval += 1
         out.at[i, "context_evaluated"] = True
         out.at[i, "context_method"] = "proxy"
@@ -1163,7 +1170,6 @@ def _proxy_context_review(
             out.at[i, "context_confidence"] = ""
             n_pass += 1
 
-    # Write back into claim_json too (contract-friendly)
     out = _write_context_review_into_claim_json(out)
 
     meta = {
@@ -1180,7 +1186,6 @@ def _proxy_context_review(
 def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
     """
     Mirror context review columns into claim_json (single-line canonical).
-    This makes downstream audit/report robust even if they only read claim_json.
     """
     out = df.copy()
     if "claim_json" not in out.columns:
@@ -1211,7 +1216,6 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
             if k in row.index and not _is_na_scalar(row.get(k)):
                 v = row.get(k)
 
-                # Normalize types to JSON-serializable python scalars
                 if isinstance(v, (pd.Timestamp,)):
                     v = str(v)
                 if isinstance(v, (bytes, bytearray)):
@@ -1242,15 +1246,14 @@ def _apply_context_review(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
     Apply context review based on selected mode.
-    Current implementation:
       - proxy: deterministic check over card context presence
-      - llm: not implemented here (kept as a future extension), falls back to proxy
+      - llm: not implemented here (future extension), falls back to proxy
+      - off: leaves UNEVALUATED (hard gate will ABSTAIN by design)
     """
     rm = (review_mode or "").strip().lower()
     gm = (gate_mode or "").strip().lower()
 
     if rm in {"off", "none", "disabled", "0", "false"}:
-        # Explicitly leave unevaluated; hard gate will ABSTAIN by design
         out = _ensure_context_review_fields(proposed, gate_mode=gm)
         out = _write_context_review_into_claim_json(out)
         return out, {
@@ -1261,15 +1264,12 @@ def _apply_context_review(
         }
 
     if rm == "llm":
-        # Keep tool usable even when llm review isn't wired here
-        # (You can later replace this with an actual backend-based reviewer.)
         out, meta = _proxy_context_review(proposed, card, gate_mode=gm)
         meta["note"] = "llm context review not implemented in pipeline; used proxy fallback"
         meta["backend_enabled"] = bool(backend is not None)
         meta["seed"] = int(seed)
         return out, meta
 
-    # default: proxy
     return _proxy_context_review(proposed, card, gate_mode=gm)
 
 
@@ -1308,29 +1308,6 @@ def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
     if not s_norm:
         return ""
     return s_norm if s_norm.startswith("'") else ("'" + s_norm)
-
-
-# -------------------------
-# Stress helpers continue
-# -------------------------
-def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
-    term_uids = dist["term_uid"].astype(str).str.strip().tolist()
-    known = {t for t in term_uids if t and t.lower() not in _NA_TOKENS_L}
-
-    raw_to_uids: dict[str, set[str]] = {}
-    for tu in known:
-        raw = tu.split(":", 1)[-1].strip()
-        if not raw:
-            continue
-        raw_to_uids.setdefault(raw, set()).add(tu)
-
-    raw_unique = {raw: next(iter(u)) for raw, u in raw_to_uids.items() if len(u) == 1}
-    raw_amb = {raw for raw, u in raw_to_uids.items() if len(u) > 1}
-    return known, raw_unique, raw_amb
-
-
-# (NOTE: _build_term_uid_maps is defined twice above in your original;
-# kept once here by reusing the earlier definition.)
 
 
 def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
@@ -1492,38 +1469,63 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         backend: BaseLLMBackend | None = None
         llm_backend_notes = ""
+        llm_backend_cfg: dict[str, Any] = {}
 
         claim_mode = _env_str("LLMPATH_CLAIM_MODE", "").lower()
         if claim_mode == "llm":
             b = _env_str("LLMPATH_BACKEND", "ollama").lower()
+            llm_backend_cfg["backend"] = b
             try:
                 if b == "openai":
                     api_key = _env_str("LLMPATH_OPENAI_API_KEY", "")
+                    llm_backend_cfg.update(
+                        {
+                            "model_name": _env_str("LLMPATH_OPENAI_MODEL", "gpt-4o"),
+                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
+                            "seed": int(cfg.seed or 42),
+                        }
+                    )
                     if api_key:
                         backend = OpenAIBackend(
                             api_key=api_key,
-                            model_name=_env_str("LLMPATH_OPENAI_MODEL", "gpt-4o"),
-                            temperature=float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
-                            seed=int(cfg.seed or 42),
+                            model_name=str(llm_backend_cfg["model_name"]),
+                            temperature=float(llm_backend_cfg["temperature"]),
+                            seed=int(llm_backend_cfg["seed"]),
                         )
                     else:
                         llm_backend_notes = "missing LLMPATH_OPENAI_API_KEY"
                 elif b == "gemini":
                     api_key = _env_str("LLMPATH_GEMINI_API_KEY", "")
+                    llm_backend_cfg.update(
+                        {
+                            "model_name": _env_str(
+                                "LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"
+                            ),
+                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
+                        }
+                    )
                     if api_key:
                         backend = GeminiBackend(
                             api_key=api_key,
-                            model_name=_env_str("LLMPATH_GEMINI_MODEL", "models/gemini-2.0-flash"),
-                            temperature=float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
+                            model_name=str(llm_backend_cfg["model_name"]),
+                            temperature=float(llm_backend_cfg["temperature"]),
                         )
                     else:
                         llm_backend_notes = "missing LLMPATH_GEMINI_API_KEY"
                 else:
+                    llm_backend_cfg.update(
+                        {
+                            "host": os.environ.get("LLMPATH_OLLAMA_HOST", None),
+                            "model_name": os.environ.get("LLMPATH_OLLAMA_MODEL", None),
+                            "temperature": float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
+                            "timeout": float(_env_str("LLMPATH_OLLAMA_TIMEOUT", "120")),
+                        }
+                    )
                     backend = OllamaBackend(
-                        host=os.environ.get("LLMPATH_OLLAMA_HOST", None),
-                        model_name=os.environ.get("LLMPATH_OLLAMA_MODEL", None),
-                        temperature=float(_env_str("LLMPATH_TEMPERATURE", "0.0")),
-                        timeout=float(_env_str("LLMPATH_OLLAMA_TIMEOUT", "120")),
+                        host=llm_backend_cfg["host"],
+                        model_name=llm_backend_cfg["model_name"],
+                        temperature=float(llm_backend_cfg["temperature"]),
+                        timeout=float(llm_backend_cfg["timeout"]),
                     )
             except Exception as e:
                 backend = None
@@ -1534,6 +1536,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "backend_env": _env_str("LLMPATH_BACKEND", "ollama").lower(),
             "backend_enabled": bool(backend is not None),
             "backend_notes": llm_backend_notes,
+            "backend_config": llm_backend_cfg,
         }
 
         k_eff, k_meta = _resolve_k_claims(cfg, card)
@@ -1555,17 +1558,13 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             outdir=str(outdir),
         )
 
-        # Enforce claim payload + claim_id contract BEFORE context/stress/audit/report
         proposed = _ensure_claim_payload_and_id(proposed, card)
 
-        # Resolve gate/review modes (single truth)
         context_gate_mode = _resolve_context_gate_mode(card, default="soft")
         context_review_mode = _resolve_context_review_mode(card, default="proxy")
 
-        # Ensure context columns exist
         proposed = _ensure_context_review_fields(proposed, gate_mode=context_gate_mode)
 
-        # Apply context review (writes back into claim_json too)
         seed0 = int(cfg.seed or 42)
         proposed, ctx_review_meta = _apply_context_review(
             proposed,
@@ -1576,7 +1575,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             seed=seed0,
         )
 
-        # Canonicalize after review write-back
         proposed = _canonicalize_claim_json_column(proposed)
 
         meta["inputs"]["claims"].update(
@@ -1661,7 +1659,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 seed=int(seed0),
                 max_extra=int(contra_cap),
             )
-            # Canonicalize because we mutated claim_json
             proposed = _canonicalize_claim_json_column(proposed)
         else:
             contra_meta = {
@@ -1679,23 +1676,17 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _write_json(meta_path, meta)
 
         # -------------------------
-        # Excel-safe ID columns
+        # Excel-safe ID columns (DO NOT overwrite machine-readable columns)
         # -------------------------
         if "gene_ids" in proposed.columns:
-            proposed["gene_ids_str"] = proposed["gene_ids"].map(_excel_safe_ids)
+            proposed["gene_ids_excel"] = proposed["gene_ids"].map(_excel_safe_ids)
         elif "gene_ids_str" in proposed.columns:
-            proposed["gene_ids_str"] = proposed["gene_ids_str"].map(_excel_safe_ids)
+            proposed["gene_ids_excel"] = proposed["gene_ids_str"].map(_excel_safe_ids)
 
         if "term_ids" in proposed.columns:
-            proposed["term_ids_str"] = proposed["term_ids"].map(_excel_safe_ids)
+            proposed["term_ids_excel"] = proposed["term_ids"].map(_excel_safe_ids)
         elif "term_ids_str" in proposed.columns:
-            proposed["term_ids_str"] = proposed["term_ids_str"].map(_excel_safe_ids)
-
-        # Keep canonical display columns if they exist
-        if "gene_ids_str" in proposed.columns:
-            proposed["gene_ids"] = proposed["gene_ids_str"]
-        if "term_ids_str" in proposed.columns:
-            proposed["term_ids"] = proposed["term_ids_str"]
+            proposed["term_ids_excel"] = proposed["term_ids_str"].map(_excel_safe_ids)
 
         # -------------------------
         # Add display-only gene symbols (optional)
@@ -1706,7 +1697,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         except Exception:
             id2sym = {}
 
-        # Optional external mapping (TSV) if provided
         try:
             map_path = _env_str("LLMPATH_GENE_ID_MAP_TSV", "")
             if map_path:
@@ -1731,7 +1721,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _mark_step("audit")
         audited = _call_compat(audit_claims, proposed, distilled2, card, tau=effective_tau)
 
-        # If audit dropped claim payload cols, restore them from proposed
         audited = _restore_claim_payload_into_audit_log(audited, proposed)
 
         for c in ["abstain_reason", "fail_reason", "audit_notes", "module_reason"]:
