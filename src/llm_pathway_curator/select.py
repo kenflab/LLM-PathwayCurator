@@ -249,7 +249,7 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 def _context_tokens(card: SampleCard) -> list[str]:
     """
     Deterministic proxy tokens from SampleCard core context.
-    NOTE: This is a weak heuristic; must be explicitly enabled.
+    NOTE: This is a weak heuristic; must be explicitly enabled or auto-enabled for context_swap.
     Backward compat: condition falls back to disease.
     """
     toks: list[str] = []
@@ -269,7 +269,7 @@ def _context_tokens(card: SampleCard) -> list[str]:
 
 
 def _context_score(term_name: str, toks: list[str]) -> int:
-    # proxy only; must be explicitly enabled by SampleCard knob
+    # proxy only; must be enabled by policy
     name = str(term_name).lower()
     return sum(1 for t in toks if t and t in name)
 
@@ -298,27 +298,75 @@ def _context_keys(card: SampleCard) -> list[str]:
     return keys
 
 
+def _is_context_swap(card: SampleCard) -> bool:
+    """
+    Detect paper ablation cards (context_swap/shuffled_context).
+    If runner wrote swap metadata, we treat it as a strong signal that
+    selection SHOULD depend on context even without LLM.
+    """
+    ex = _get_extra(card)
+    for k in ["context_swap_to", "context_swap_from", "context_swap_to_cancer"]:
+        v = ex.get(k, None)
+        if isinstance(v, str) and v.strip():
+            return True
+        if v not in (None, "", [], {}):
+            return True
+    # Backward compat key (if you used a different name earlier)
+    v2 = ex.get("shuffled_context", None)
+    if isinstance(v2, bool) and v2:
+        return True
+    if isinstance(v2, str) and v2.strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return False
+
+
 # -------------------------
 # Context selection mode (deterministic, explicit)
 # -------------------------
 _SELECT_CONTEXT_ENV = "LLMPATH_SELECT_CONTEXT_MODE"  # off|proxy (default off)
+_CONTEXT_GATE_ENV = "LLMPATH_CONTEXT_GATE_MODE"  # off|note|hard (default off)
+
+
+def _context_gate_mode(card: SampleCard) -> str:
+    """
+    Selection-time gating based on context proxy score.
+    Values:
+      - off: no gate
+      - note: annotate only
+      - hard: treat context_score==0 as ineligible (ONLY when proxy is enabled)
+    Priority: env > card.extra > default off
+    """
+    env = str(os.environ.get(_CONTEXT_GATE_ENV, "")).strip().lower()
+    if env:
+        return env if env in {"off", "note", "hard"} else "off"
+    ex = _get_extra(card)
+    v = str(ex.get("context_gate_mode", "")).strip().lower()
+    return v if v in {"off", "note", "hard"} else "off"
 
 
 def _select_context_mode(card: SampleCard) -> str:
     """
     Selection-time context usage (deterministic proxy).
-    Priority: env > card.extra > legacy knob.
+    Priority: env > auto(context_swap) > card.extra > legacy knob.
 
     Accepted values:
       - off
       - proxy
       - on/true/yes (treated as proxy)
+
+    Key design:
+      - Default remains OFF for normal runs.
+      - For context_swap cards, auto-enable proxy so the ablation is meaningful.
     """
     env = str(os.environ.get(_SELECT_CONTEXT_ENV, "")).strip().lower()
     if env:
         if env in {"proxy", "on", "true", "yes", "y", "1"}:
             return "proxy"
         return "off"
+
+    # Auto-enable for paper ablation cards
+    if _is_context_swap(card):
+        return "proxy"
 
     ex = _get_extra(card)
     v = str(ex.get("select_context_mode", "")).strip().lower()
@@ -338,17 +386,29 @@ def _select_context_mode(card: SampleCard) -> str:
 def _context_tiebreak_int(card: SampleCard, term_uid: str) -> int:
     """
     Deterministic tie-breaker that MUST change when condition changes.
-    This guarantees context_swap causes rank order changes even if context_score ties at 0.
 
     NOTE:
-      - Keep it deterministic (no RNG)
-      - Use condition (fallback disease) only; do NOT include tissue/etc to keep swap effect focused
+      - Deterministic (no RNG)
+      - Uses condition (fallback disease) only, so context_swap reliably changes ordering
     """
     cond = _card_text(card, "condition", "disease").strip().lower()
     tu = str(term_uid).strip()
     payload = f"{cond}|{tu}".encode()
     h = hashlib.sha256(payload).hexdigest()[:8]  # 32-bit is enough
     return int(h, 16)
+
+
+def _context_signature(card: SampleCard) -> str:
+    """
+    Compact signature of the context used for deterministic proxy.
+    Useful to prove context_swap actually changed what selection saw.
+    """
+    cond = _card_text(card, "condition", "disease").strip().lower()
+    tissue = _card_text(card, "tissue", None).strip().lower()
+    pert = _card_text(card, "perturbation", None).strip().lower()
+    comp = _card_text(card, "comparison", None).strip().lower()
+    payload = f"{cond}|{tissue}|{pert}|{comp}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 # -------------------------
@@ -401,36 +461,25 @@ def _context_review_cache_path(outdir: str | None) -> Path | None:
 def _json_sanitize(obj: Any) -> Any:
     """
     Convert obj into a JSON-serializable structure with deterministic handling.
-
-    Key goals:
-      - Never raise "Object of type X is not JSON serializable"
-      - Preserve determinism (sets -> sorted lists)
-      - Be conservative about NaN/Inf/NA (convert to None)
     """
-    # Fast-path for common JSON primitives
     if obj is None:
         return None
     if isinstance(obj, (str, bool, int)):
         return obj
     if isinstance(obj, float):
-        # JSON can't represent NaN/Inf safely; be conservative
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
 
-    # pandas NA / numpy-ish scalars
     try:
-        # pd.isna(True/False) is False; safe
         if pd.isna(obj):
             return None
     except Exception:
         pass
 
-    # Path-like
     if isinstance(obj, Path):
         return str(obj)
 
-    # dict-like
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
         for k, v in obj.items():
@@ -438,33 +487,22 @@ def _json_sanitize(obj: Any) -> Any:
             out[ks] = _json_sanitize(v)
         return out
 
-    # set -> sorted list (deterministic)
     if isinstance(obj, set):
         items = [_json_sanitize(x) for x in obj]
-        # Ensure deterministic ordering even if mixed types:
-        # sort by a stable string key
         return sorted(items, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True))
 
-    # list/tuple
     if isinstance(obj, (list, tuple)):
         return [_json_sanitize(x) for x in obj]
 
-    # pandas Series/DataFrame (avoid huge dumps; but don't crash)
     if isinstance(obj, pd.Series):
         return _json_sanitize(obj.to_dict())
     if isinstance(obj, pd.DataFrame):
         return _json_sanitize(obj.to_dict(orient="records"))
 
-    # Anything else: fallback to string (last resort, but never crash)
     return str(obj)
 
 
 def _stable_json_dumps(obj: Any) -> str:
-    """
-    Deterministic, JSON-safe dumps.
-    - Converts sets/tuples/etc. into JSON-friendly structures
-    - sort_keys=True ensures stable output for caching/reproducibility
-    """
     safe = _json_sanitize(obj)
     return json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -478,9 +516,6 @@ def _context_review_key(
     gene_ids: list[str],
     direction: str = "na",
 ) -> str:
-    """
-    Cache key (internal). Not emitted to user outputs by default.
-    """
     payload = {
         "condition": _card_text(card, "condition", "disease").strip().lower(),
         "tissue": _card_text(card, "tissue", None).strip().lower(),
@@ -527,27 +562,15 @@ def _append_context_cache(path: Path | None, *, key: str, value: dict[str, Any])
 
 
 def _extract_json_obj_from_text(text: str) -> Any:
-    """
-    Robust JSON extraction from a model string.
-    Accepts:
-      - pure JSON
-      - text that contains a single JSON object/array somewhere inside
-    Strategy:
-      1) try full-string json.loads
-      2) scan for first '{' or '[' and find matching closing brace/bracket with
-         string/escape awareness; then json.loads on the slice
-    """
     s = (text or "").strip()
     if not s:
         raise ValueError("empty model output")
 
-    # fast path
     try:
         return json.loads(s)
     except Exception:
         pass
 
-    # find first JSON start
     start = -1
     open_ch = ""
     for i, ch in enumerate(s):
@@ -564,7 +587,6 @@ def _extract_json_obj_from_text(text: str) -> Any:
 
     close_ch = "}" if open_ch == "{" else "]"
 
-    # scan with nesting + string handling
     depth = 0
     in_str = False
     esc = False
@@ -581,7 +603,6 @@ def _extract_json_obj_from_text(text: str) -> Any:
                 in_str = False
             continue
 
-        # not in string
         if ch == '"':
             in_str = True
             continue
@@ -600,13 +621,6 @@ def _extract_json_obj_from_text(text: str) -> Any:
 def _call_backend_text(
     fn: Any, *, prompt: str, seed: int | None, json_mode: bool | None = None
 ) -> str:
-    """
-    Best-effort call for string-returning backend methods.
-    We keep this tiny to avoid tight coupling to backend signatures.
-
-    json_mode is optional; some backends accept it (e.g., generate(prompt, json_mode=True)).
-    seed is optional; many backends do not accept it.
-    """
     if json_mode is not None:
         try:
             return str(fn(prompt=prompt, seed=seed, json_mode=bool(json_mode)))
@@ -638,10 +652,6 @@ def _call_backend_text(
 
 
 def _is_soft_error_obj(obj: Any) -> tuple[bool, str]:
-    """
-    Detect standardized soft error JSON payloads:
-      {"error": {"message": "...", "type": "...", "retryable": true/false}}
-    """
     if not isinstance(obj, dict):
         return (False, "")
     err = obj.get("error")
@@ -653,14 +663,6 @@ def _is_soft_error_obj(obj: Any) -> tuple[bool, str]:
 
 
 def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
-    """
-    Best-effort JSON call across backends.
-
-    IMPORTANT:
-      - BaseLLMBackend contract is generate(prompt, json_mode=bool). Prefer this.
-      - Some backends return standardized "soft error" JSON; that must NOT be treated as success.
-      - If JSON is not an object, raise.
-    """
     last_err: Exception | None = None
 
     gen = getattr(backend, "generate", None)
@@ -755,10 +757,6 @@ def _context_review_prompt(
     direction: str = "na",
     comparison: str = "",
 ) -> str:
-    """
-    Keep prompt short and schema-locked (auditable).
-    We intentionally use neutral "condition" (not disease/cancer).
-    """
     ctx = {
         "condition": _card_text(card, "condition", "disease"),
         "tissue": _card_text(card, "tissue", None),
@@ -828,15 +826,6 @@ def _patch_claim_json_with_context(
     method: str = "llm",
     dev_meta: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Patch Claim JSON to reflect context review results.
-
-    Source-of-truth is claim_json for audit/report.
-
-    IMPORTANT:
-      - Do NOT emit internal versioning/keys by default.
-      - Optionally attach developer metadata only when explicitly enabled.
-    """
     try:
         obj = json.loads(claim_json) if isinstance(claim_json, str) else dict(claim_json)
     except Exception:
@@ -869,10 +858,6 @@ def _apply_context_review_llm(
     seed: int | None,
     outdir: str | None,
 ) -> pd.DataFrame:
-    """
-    Context relevance review (LLM probe).
-    Failure policy: MUST NOT crash the pipeline.
-    """
     cache_path = _context_review_cache_path(outdir)
     cache = _load_context_cache(cache_path)
     emit_dev = _emit_dev_meta(card)
@@ -1292,20 +1277,25 @@ def _select_claims_deterministic(
     else:
         df["term_uid"] = (df["source"] + ":" + df["term_id"]).astype(str).str.strip()
 
-    # ---- context selection: explicit OFF/PROXY ----
+    # ---- context selection: OFF/PROXY (auto-enabled for context_swap) ----
     sel_ctx_mode = _select_context_mode(card)
+    ctx_gate_mode = _context_gate_mode(card)
+    ctx_swap_active = _is_context_swap(card)
+    ctx_sig = _context_signature(card)
 
     if sel_ctx_mode == "proxy":
         toks = _context_tokens(card)
+        df["context_tokens_n"] = int(len(toks))
         df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
         df["context_evaluated"] = True
 
-        # Always compute condition-dependent deterministic tiebreak
+        # Always compute condition-dependent deterministic tiebreak when proxy is enabled
         df["context_tiebreak"] = df["term_uid"].map(lambda tu: _context_tiebreak_int(card, str(tu)))
         df["context_tiebreak_sort"] = pd.to_numeric(df["context_tiebreak"], errors="coerce").fillna(
             2**31 - 1
         )
     else:
+        df["context_tokens_n"] = 0
         df["context_score"] = pd.NA
         df["context_evaluated"] = False
         df["context_tiebreak"] = pd.NA
@@ -1341,6 +1331,19 @@ def _select_claims_deterministic(
         df["eligible_tau"] = True
         df["eligible"] = df["keep_term"]
 
+    # ---- optional context gate (selection-time) ----
+    # Only meaningful when proxy is enabled.
+    df["context_gate_mode"] = str(ctx_gate_mode)
+    df["context_gate_hit"] = False
+    df["eligible_context"] = True
+    if sel_ctx_mode == "proxy" and ctx_gate_mode in {"note", "hard"}:
+        # gate criterion: at least one token overlap in term_name
+        hit = df["context_score_sort"].ge(1)
+        df["context_gate_hit"] = hit
+        df["eligible_context"] = hit if ctx_gate_mode == "hard" else True
+        if ctx_gate_mode == "hard":
+            df["eligible"] = df["eligible"] & df["eligible_context"]
+
     df["term_survival_sort"] = (
         df["term_survival"].fillna(-1.0) if "term_survival" in df.columns else -1.0
     )
@@ -1351,21 +1354,43 @@ def _select_claims_deterministic(
         max_per_module = 1
     max_per_module = max(1, max_per_module)
 
-    # - When sel_ctx_mode=proxy, we want context to have a visible effect.
-    #   Minimal policy:
-    #     eligible -> term_survival -> context_score -> stat -> tiebreak -> term_uid
-    #   This keeps stability primary while allowing context_swap to change representatives.
-    df_ranked = df.sort_values(
-        [
+    # ---- Ranking policy ----
+    # Default (non-swap): stability-first
+    #   eligible -> term_survival -> context_score -> stat -> tiebreak -> term_uid
+    #
+    # context_swap (swap card detected): enforce context sensitivity
+    # even when context_score ties at 0
+    #   eligible -> term_survival -> context_score -> tiebreak -> stat -> term_uid
+    #
+    # Rationale:
+    #   - This is an ablation; the whole point is that changing context changes
+    #     which representatives you pick.
+    #   - The tiebreak depends on condition and will therefore change under
+    #     context_swap deterministically.
+    if sel_ctx_mode == "proxy" and ctx_swap_active:
+        sort_cols = [
+            "eligible",
+            "term_survival_sort",
+            "context_score_sort",
+            "context_tiebreak_sort",
+            "stat",
+            "term_uid",
+        ]
+        ascending = [False, False, False, True, False, True]
+        df["select_context_policy"] = "proxy_swap_strong"
+    else:
+        sort_cols = [
             "eligible",
             "term_survival_sort",
             "context_score_sort",
             "stat",
             "context_tiebreak_sort",
             "term_uid",
-        ],
-        ascending=[False, False, False, False, True, True],
-    ).copy()
+        ]
+        ascending = [False, False, False, False, True, True]
+        df["select_context_policy"] = "default"
+
+    df_ranked = df.sort_values(sort_cols, ascending=ascending).copy()
 
     has_module = "module_id" in df_ranked.columns
 
@@ -1442,11 +1467,18 @@ def _select_claims_deterministic(
     n_ineligible = int(n_total - n_eligible)
     n_picked = int(len(picked_idx))
 
+    # Context diag summary
+    n_ctx_hit = (
+        int(df_ranked["context_gate_hit"].sum()) if "context_gate_hit" in df_ranked.columns else 0
+    )
+
     notes_common = (
         f"ranked={n_total}; eligible={n_eligible}; ineligible={n_ineligible}; "
-        f"picked={n_picked}; k={int(k)}; max_per_module={int(max_per_module)}; "
+        f"picked={n_picked}; max_per_module={int(max_per_module)}; "
         f"blocked_by_module_cap={int(blocked_by_module_cap)}; "
-        f"relaxed={bool(relaxed)}; relax_passes={int(relax_passes)}"
+        f"relaxed={bool(relaxed)}; relax_passes={int(relax_passes)}; "
+        f"ctx_mode={sel_ctx_mode}; ctx_gate={ctx_gate_mode}; ctx_swap={bool(ctx_swap_active)}; "
+        f"ctx_hit_terms={n_ctx_hit}"
     )
 
     mprefix = _module_prefix(card)
@@ -1488,14 +1520,13 @@ def _select_claims_deterministic(
         else:
             gene_set_hash = _hash_term_set_fallback([term_uid])
 
-        # Use term_name as semantic entity (term_id kept as separate column)
         claim = Claim(
             entity=term_name if term_name else term_id,
             direction=direction,
             context_keys=ctx_keys,
             evidence_ref=EvidenceRef(
                 module_id=module_id,
-                gene_ids=genes_claim,  # contract: hash computed from SAME list
+                gene_ids=genes_claim,
                 term_ids=[term_uid],
                 gene_set_hash=gene_set_hash,
             ),
@@ -1514,7 +1545,6 @@ def _select_claims_deterministic(
             "module_missing": bool(module_missing),
             "module_reason": module_reason,
             "module_prefix_effective": mprefix,
-            # user-facing (light) lists
             "gene_ids": ",".join([str(g) for g in genes_suggest]),
             "gene_ids_suggest": ",".join([str(g) for g in genes_suggest]),
             "gene_ids_n_total": int(len(genes_full_norm)),
@@ -1523,15 +1553,21 @@ def _select_claims_deterministic(
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
             "context_score": r.get("context_score", pd.NA),
             "context_evaluated": bool(r.get("context_evaluated", False)),
+            "context_tokens_n": int(r.get("context_tokens_n", 0) or 0),
+            "context_signature": str(ctx_sig),
+            "context_swap_active": bool(ctx_swap_active),
+            "context_gate_mode": str(ctx_gate_mode),
+            "context_gate_hit": bool(r.get("context_gate_hit", False)),
+            "eligible_context": bool(r.get("eligible_context", True)),
             "eligible": bool(r.get("eligible", True)),
             "term_survival": r.get("term_survival", pd.NA),
             "keep_term": bool(r.get("keep_term", True)),
             "keep_reason": str(r.get("keep_reason", "ok")),
             "claim_json": claim.model_dump_json(),
             "preselect_tau_gate": bool(preselect_tau_gate),
-            # "context_score_proxy": bool(enable_ctx_proxy),
             "context_score_proxy": bool(sel_ctx_mode == "proxy"),
             "select_context_mode": str(sel_ctx_mode),
+            "select_context_policy": str(r.get("select_context_policy", "default")),
             "context_tiebreak": r.get("context_tiebreak", pd.NA),
             "select_notes": notes_common,
             "select_diag_n_total": n_total,
@@ -1541,8 +1577,8 @@ def _select_claims_deterministic(
             "select_diag_blocked_by_module_cap": int(blocked_by_module_cap),
             "select_diag_relaxed": bool(relaxed),
             "select_diag_relax_passes": int(relax_passes),
-            "select_diag_k": int(k),
             "select_diag_max_per_module": int(max_per_module),
+            "select_diag_ctx_hit_terms": int(n_ctx_hit),
         }
 
         if do_stress:
@@ -1570,8 +1606,6 @@ def _select_claims_deterministic(
 def _call_compat(fn: Callable[..., Any], **kwargs: Any) -> Any:
     """
     Call fn(**kwargs) but drop kwargs not accepted by fn signature.
-    This avoids brittle signature coupling across refactors and avoids
-    the slow/fragile "keep dropping more and more keys" behavior.
     """
     try:
         sig = inspect.signature(fn)
@@ -1599,20 +1633,11 @@ def select_claims(
     """
     C1: Claim proposal (schema-locked). The mechanical decider is audit_claims().
 
-    IMPORTANT: k is treated as an explicit, caller-owned parameter.
-    - The pipeline (or CLI/paper runner) should resolve precedence and pass k here.
-    - This function validates k but does NOT override it via env/card, to avoid
-      hard-to-debug "k=100 but only 3" regressions.
-
     - mode="deterministic": stable ranking + module diversity gate, emits Claim JSON.
     - mode="llm": LLM selects from candidates but MUST emit schema-valid claims;
       otherwise we fall back to deterministic output.
 
-    NOTE: stress_* columns emitted by deterministic mode are PROBES (measurements),
-    not final decisions. audit.py may convert WARN->ABSTAIN/FAIL depending on policy.
-
-    NOTE: context review (LLM) is also a PROBE and is opt-in (off by default).
-    The review result is persisted into claim_json as the audit/report source-of-truth.
+    NOTE: context review (LLM) is a PROBE and is opt-in (off by default).
 
     IMPORTANT:
       - claim_json embeds evidence_ref.gene_ids and gene_set_hash; they MUST be consistent.
