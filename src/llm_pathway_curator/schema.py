@@ -1,3 +1,4 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/schema.py
 from __future__ import annotations
 
 import re
@@ -233,7 +234,7 @@ class EvidenceTable:
         - "A,B,C"
         - "A;B;C"
         - "A|B|C"
-        - "A/B/C" (seen in some core_enrichment exports)
+        - "A/B/C" (seen in some core_enrichment exports; only used when no other delimiter present)
         - "['A', 'B']" / '["A","B"]' / "{A,B}"
         """
         s = s.strip()
@@ -249,15 +250,21 @@ class EvidenceTable:
         if _BRACKETED_LIST_RE.match(s):
             s = s.strip().lstrip("[({").rstrip("])}").strip()
 
-        # Normalize delimiters (keep conservative)
+        # Normalize whitespace
         s = s.replace("\n", " ").replace("\t", " ")
         s = " ".join(s.split()).strip()
         if not s:
             return []
 
-        # Common delimiters to comma
-        s = s.replace(";", ",").replace("|", ",").replace("/", ",")
-        # If it looks like JSON-ish list with commas, this now splits fine.
+        # Prefer explicit delimiters first
+        if any(d in s for d in [",", ";", "|"]):
+            s = s.replace(";", ",").replace("|", ",")
+        elif "/" in s:
+            # Use "/" only as a last-resort delimiter (reduces accidental splits)
+            s = s.replace("/", ",")
+        else:
+            # no delimiter
+            pass
 
         if "," in s:
             parts = s.split(",")
@@ -412,6 +419,26 @@ class EvidenceTable:
         if (df["source"] == "").any():
             df.loc[df["source"] == "", "source"] = "unknown"
 
+        # ---- salvage term_id/term_name conservatively (BEFORE invalid marking) ----
+        # Rationale: some exports use "term" to mean name, not id.
+        # We keep ALIASES for backward compatibility, but rescue common cases here.
+        # - If term_id is empty and term_name is present -> copy term_name into term_id.
+        # - If term_name is empty but term_id contains whitespace (looks like a name)
+        #   -> copy term_id into term_name.
+        term_id_empty = df["term_id"].eq("")
+        term_name_empty = df["term_name"].eq("")
+
+        salvage_1 = term_id_empty & (~term_name_empty)
+        n_salvage_1 = int(salvage_1.sum())
+        if n_salvage_1 > 0:
+            df.loc[salvage_1, "term_id"] = df.loc[salvage_1, "term_name"]
+
+        looks_like_name = df["term_id"].astype(str).str.contains(r"\s+", regex=True)
+        salvage_2 = term_name_empty & (~term_id_empty) & looks_like_name
+        n_salvage_2 = int(salvage_2.sum())
+        if n_salvage_2 > 0:
+            df.loc[salvage_2, "term_name"] = df.loc[salvage_2, "term_id"]
+
         # ---- direction normalization ----
         df["direction"] = df["direction"].map(cls._normalize_direction)
 
@@ -440,40 +467,6 @@ class EvidenceTable:
                     f"EvidenceTable has empty required fields at row index={i}. "
                     f"read_mode={rr.read_mode}. "
                     "Fix: ensure term_id/term_name are non-empty. "
-                    f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
-                )
-
-        # ---- salvage term_id/term_name conservatively (after initial marking) ----
-        # Rationale: some exports use "term" to mean name, not id.
-        # We keep ALIASES for backward compatibility, but rescue common cases here.
-        # - If term_id is empty and term_name is present -> copy term_name into term_id.
-        # - If term_name is empty but term_id contains whitespace (looks like a name)
-        #   -> copy term_id into term_name.
-        # This rescue only applies to rows not already invalid for
-        # other reasons beyond empty fields.
-        term_id_empty = df["term_id"].eq("")
-        term_name_empty = df["term_name"].eq("")
-        salvage_1 = term_id_empty & (~term_name_empty)
-        if salvage_1.any():
-            df.loc[salvage_1, "term_id"] = df.loc[salvage_1, "term_name"]
-
-        looks_like_name = df["term_id"].astype(str).str.contains(r"\s+", regex=True)
-        salvage_2 = term_name_empty & (~term_id_empty) & looks_like_name
-        if salvage_2.any():
-            df.loc[salvage_2, "term_name"] = df.loc[salvage_2, "term_id"]
-
-        # Re-evaluate required field validity after salvage
-        bad_required2 = df["term_id"].eq("") | df["term_name"].eq("")
-        if bad_required2.any():
-            df.loc[bad_required2, "is_valid"] = False
-            df.loc[bad_required2, "invalid_reason"] = "EMPTY_REQUIRED_FIELDS"
-            if strict:
-                i = int(df.index[bad_required2][0])
-                bad = df.loc[i].to_dict()
-                raise ValueError(
-                    f"EvidenceTable has empty required fields at row index={i}. "
-                    f"read_mode={rr.read_mode}. "
-                    "Fix: ensure term_id/term_name are non-empty (after salvage still empty). "
                     f"row_term_id={bad.get('term_id')!r} row_term_name={bad.get('term_name')!r}"
                 )
 
@@ -627,6 +620,8 @@ class EvidenceTable:
             "strict": bool(strict),
             "bh_group_cols": list(bh_group_cols),
             "read_mode": rr.read_mode,
+            "n_salvage_term_id_from_name": int(n_salvage_1),
+            "n_salvage_term_name_from_id": int(n_salvage_2),
         }
 
         return cls(df=df)
@@ -662,6 +657,14 @@ class EvidenceTable:
                 return "'" + s
             return s
 
+        def _excel_safe_series(col: str) -> None:
+            if col in out.columns:
+                out[col] = out[col].map(
+                    lambda x: _excel_safe_cell(str(x).strip())
+                    if not EvidenceTable._is_na_scalar(x)
+                    else ""
+                )
+
         def _join_genes(x: object) -> str:
             if EvidenceTable._is_na_scalar(x):
                 return ""
@@ -670,6 +673,10 @@ class EvidenceTable:
             else:
                 s = str(x).strip()
             return _excel_safe_cell(s)
+
+        # Excel-safe for common text columns (people paste these into spreadsheets)
+        for c in ["term_id", "term_name", "source", "direction"]:
+            _excel_safe_series(c)
 
         if "evidence_genes" in out.columns:
             out["evidence_genes_str"] = out["evidence_genes"].map(_join_genes)

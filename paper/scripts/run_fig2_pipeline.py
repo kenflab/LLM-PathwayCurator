@@ -985,13 +985,20 @@ def main() -> None:
                     if not isinstance(extra, dict):
                         extra = {}
 
-                    extra["context_swap_from"] = str(src.get("disease", "")).strip()
-                    extra["context_swap_to"] = str(dst.get("disease", "")).strip()
+                    # Prefer condition (often cancer-specific); fall back to disease.
+                    extra["context_swap_from"] = str(
+                        src.get("condition") or src.get("disease") or ""
+                    ).strip()
+                    extra["context_swap_to"] = str(
+                        dst.get("condition") or dst.get("disease") or ""
+                    ).strip()
+
                     extra["context_swap_to_cancer"] = dst_cancer
                     src["extra"] = extra
 
                     # Counterfactual: swap core context keys (template-only; no external knowledge).
-                    for k in ("disease", "tissue", "perturbation", "comparison"):
+                    # NOTE: include "condition" because many sample cards encode cancer there.
+                    for k in ("condition", "disease", "tissue", "perturbation", "comparison"):
                         v = dst.get(k, "")
                         if isinstance(v, str) and v.strip():
                             src[k] = v

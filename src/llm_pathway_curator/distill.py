@@ -179,9 +179,16 @@ def _hash_gene_set_short12(genes: list[str]) -> str:
 def _get_distill_mode(card: SampleCard) -> str:
     """
     Explicit mode switch. Default keeps v1 semantics (evidence perturbation).
+
     Allowed:
-      - "evidence_perturb" (default)
-      - "replicates_proxy" (requires replicate_id; NOT true LOO enrichment)
+      - "evidence_perturb" (default): perturb evidence genes deterministically
+        (no re-running enrichment)
+      - "replicates_proxy": proxy LOO-like survival using replicate_id
+        (NOT true patient-level LOO enrichment)
+
+    IMPORTANT:
+      Do NOT accept aliases like "loo"/"patient_loo" here: those imply true re-run LOO enrichment.
+      Keep vocabulary unambiguous for reproducibility and paper claims.
     """
     m = _get_distill_knob(card, "mode", None)
     if m is None:
@@ -189,7 +196,7 @@ def _get_distill_mode(card: SampleCard) -> str:
     s = str(m).strip().lower()
     if s in {"evidence", "perturb", "evidence_perturb"}:
         return "evidence_perturb"
-    if s in {"replicates_proxy", "patient_loo", "loo"}:
+    if s in {"replicates_proxy"}:
         return "replicates_proxy"
     return "evidence_perturb"
 
@@ -305,6 +312,10 @@ def _loo_survival_from_replicates(
         - term exists (same term_uid), and
         - direction matches baseline (optional), and
         - evidence_genes similarity to baseline passes gates (jaccard/recall/precision).
+
+    NOTE:
+      This is NOT true patient-level LOO enrichment re-run. It is a proxy
+      based on replicate tables already computed upstream.
     """
     if "replicate_id" not in df.columns:
         raise ValueError("replicate_id column is required for replicates_proxy survival")
@@ -319,6 +330,7 @@ def _loo_survival_from_replicates(
     if base.empty:
         raise ValueError(f"baseline replicate_id='{baseline_id}' not found in evidence table")
 
+    # Baseline map: require 1 row per term_uid (avoid silent union bias).
     base_map_genes: dict[str, set[str]] = {}
     base_map_dir: dict[str, str] = {}
 
@@ -326,12 +338,19 @@ def _loo_survival_from_replicates(
         tu = str(r["term_uid"]).strip()
         if not tu:
             continue
+
+        if tu in base_map_genes:
+            raise ValueError(
+                "replicates_proxy baseline has duplicate term_uid rows. "
+                f"term_uid={tu!r} baseline_id={baseline_id!r}. "
+                "Fix: upstream EvidenceTable should have unique (replicate_id, source, term_id)."
+            )
+
         genes = r["evidence_genes"]
         gset = set(genes) if isinstance(genes, list) else set(_split_genes_loose(genes))
         g_clean = set([_clean_gene_token(g) for g in gset if str(g).strip()])
-        base_map_genes.setdefault(tu, set()).update(g_clean)
-        if tu not in base_map_dir:
-            base_map_dir[tu] = _normalize_direction(r.get("direction"))
+        base_map_genes[tu] = set(g_clean)
+        base_map_dir[tu] = _normalize_direction(r.get("direction"))
 
     reps = sorted(set(df["replicate_id"].astype(str).tolist()))
     reps_nb = [rid for rid in reps if rid != str(baseline_id)]
@@ -361,7 +380,6 @@ def _loo_survival_from_replicates(
 
             if tu in m:
                 d0, g0 = m[tu]
-                # keep direction if already informative; otherwise take current
                 d_eff = d0 if d0 in {"up", "down"} else d
                 m[tu] = (d_eff, set(g0) | set(g_clean))
             else:
@@ -589,6 +607,7 @@ def distill_evidence(
         # ===========================
         # EVIDENCE-LEVEL PERTURBATION
         # ===========================
+        # Build pool from MASKED evidence genes (post apply_gene_masking).
         all_genes: list[str] = []
         for xs in out["evidence_genes"].tolist():
             all_genes.extend(xs)
@@ -726,10 +745,17 @@ def distill_evidence(
     # Optional pre-gate (explicit): distill measures; audit decides.
     pre_gate_mode = _get_distill_pre_gate_mode(card, default="off")
 
-    tau = _get_distill_knob(card, "tau", None)
-    if tau is not None:
+    # IMPORTANT:
+    #  - do NOT reuse audit_tau here.
+    #  - pre-gate is a convenience filter, so we namespace its threshold explicitly.
+    pre_gate_tau = _get_distill_knob(card, "pre_gate_tau", None)
+    if pre_gate_tau is None:
+        # legacy fallback: tolerate distill_tau / tau if previously shipped
+        pre_gate_tau = _get_distill_knob(card, "tau", None)
+
+    if pre_gate_tau is not None:
         try:
-            tau_f = float(tau)
+            tau_f = float(pre_gate_tau)
             surv = pd.to_numeric(out["term_survival_agg"], errors="coerce")
             unstable = surv < tau_f
 

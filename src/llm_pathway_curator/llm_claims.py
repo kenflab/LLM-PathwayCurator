@@ -241,6 +241,14 @@ def _module_hash_like_modules_py_12hex(term_uids: list[str], genes: list[str]) -
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _strict_k_enabled() -> bool:
+    """
+    If enabled, require LLM to return exactly k claims (paper / fig reproducibility).
+    Default: OFF for backward compatibility.
+    """
+    return _as_bool_env("LLMPATH_LLM_STRICT_K", False)
+
+
 # -------------------------
 # Backend calling (robust across Ollama/OpenAI/Gemini)
 # -------------------------
@@ -335,11 +343,26 @@ def _extract_json_fragment(text: str) -> str | None:
 
 def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
     """
-    Best-effort JSON call:
-      1) Try explicit JSON methods (complete_json/chat_json/...)
-      2) Try text methods and extract JSON fragment
+    Best-effort JSON call.
+
+    Preferred path (stable contract):
+      - backend.generate(prompt, json_mode=True) returns either:
+          (a) valid JSON string, or
+          (b) standardized soft error JSON {"error": {...}}
+
+    Fallback paths exist only for legacy adapters.
     """
-    # A) explicit json-returning methods (if any)
+    # 0) Prefer BaseLLMBackend contract first
+    try:
+        if hasattr(backend, "generate") and callable(backend.generate):
+            out = _try_call(backend.generate, prompt=prompt, json_mode=True, seed=seed)
+            s = out if isinstance(out, str) else str(out)
+            frag = _extract_json_fragment(s) or s.strip()
+            return json.loads(frag)
+    except Exception:
+        pass
+
+    # A) explicit json-returning methods (legacy)
     json_candidates = [
         "complete_json",
         "chat_json",
@@ -364,7 +387,7 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
             last_err = e
             continue
 
-    # B) text-returning methods (most common)
+    # B) text-returning methods (legacy)
     text_candidates = [
         "generate",
         "chat",
@@ -576,8 +599,6 @@ def _validate_claims_json(
             and ("term_id" in it)
             and ("evidence_ref" not in it)
         ):
-            # This path is conservative; only salvage if it clearly looks like candidate row JSON
-            # and the caller provided ctx_keys_resolved (or we fall back later).
             cdict = _coerce_candidate_row_to_claim_dict(
                 it, ctx_keys_resolved=list(ctx_keys_resolved or [])
             )
@@ -601,23 +622,21 @@ def _post_validate_against_candidates(
     Guardrails beyond schema:
       - term_ids exactly one term_uid existing in candidates
       - entity matches candidate term_id
-      - tool fills evidence_ref.gene_set_hash from candidates (LLM output may omit or be wrong)
-      - gene_ids (if provided) subset of candidate gene_ids_suggest
+      - tool fills evidence_ref fields deterministically from candidates:
+          module_id, gene_ids (capped for size), gene_set_hash (identity; MUST be stable)
       - unique term_uid across returned claims
       - context_keys projected to resolved keys (stable)
       - claim_id is TOOL-OWNED by Claim schema; do NOT generate or overwrite here
 
-    IMPORTANT (NbTx-friendly, reproducible):
-      - LLM is allowed to omit gene_set_hash.
-      - Even if LLM returns gene_set_hash, the TOOL treats candidates (distilled-derived)
-        as source-of-truth and OVERWRITES it deterministically.
-      - Therefore gene_set_hash mismatch MUST NOT fail the run.
+    IMPORTANT (Nat Biotech-friendly, reproducible):
+      - gene_set_hash is an IDENTITY KEY for evidence linking.
+        It MUST be consistent with candidates / distilled-derived truth.
+      - gene_ids are supportive payload; they MAY be capped for size, and MUST NOT change identity.
     """
     cand2 = cand.copy()
 
     cand2["term_uid"] = cand2.get("term_uid", pd.Series([""] * len(cand2))).astype(str).str.strip()
     cand2["term_id"] = cand2.get("term_id", pd.Series([""] * len(cand2))).astype(str).str.strip()
-
     cand2 = cand2.drop_duplicates(subset=["term_uid"], keep="first")
 
     if "gene_set_hash" not in cand2.columns:
@@ -627,24 +646,21 @@ def _post_validate_against_candidates(
     if "gene_ids_suggest" not in cand2.columns:
         cand2["gene_ids_suggest"] = [[] for _ in range(len(cand2))]
 
-    def _as_suggest_set(v: Any) -> set[str]:
-        genes = _parse_gene_list(v)
-        return {g.strip().upper() for g in genes if g.strip()}
-
     def _candidate_truth_hash(row: pd.Series) -> str:
         """
-        Candidate-side source-of-truth.
-        If precomputed gene_set_hash is present/valid, use it;
-        else compute from candidate gene_ids_suggest (full evidence genes),
-        else term_uid fallback.
+        Candidate-side source-of-truth identity hash.
+        Priority:
+          1) precomputed gene_set_hash if valid 12-hex
+          2) compute from FULL gene_ids_suggest (NOT capped)
+          3) fallback from term_uid
         """
         gsh0 = str(row.get("gene_set_hash", "") or "").strip().lower()
         if _looks_like_12hex(gsh0):
             return gsh0
 
-        genes = _parse_gene_list(row.get("gene_ids_suggest", []))
-        if genes:
-            return _hash_gene_set_12hex(genes)
+        genes_full = _parse_gene_list(row.get("gene_ids_suggest", []))
+        if genes_full:
+            return _hash_gene_set_12hex(genes_full)
 
         tu = str(row.get("term_uid", "") or "").strip()
         return _hash_term_set_fallback_12hex([tu]) if tu else ""
@@ -654,8 +670,9 @@ def _post_validate_against_candidates(
     seen_uid: set[str] = set()
     normalized: list[Claim] = []
 
+    cap = _max_gene_ids_in_claim(card)
+
     for c in claims:
-        # TOOL-OWNED: context_keys are deterministic and MUST match resolved keys
         ck_proj = list(ctx_keys_resolved or [])
 
         term_ids = list(c.evidence_ref.term_ids or [])
@@ -672,60 +689,33 @@ def _post_validate_against_candidates(
 
         row = by_uid.loc[term_uid]
 
-        # ---- TOOL-OWNED evidence_ref (module_id / gene_ids / gene_set_hash) ----
+        term_id_expected = str(row.get("term_id", "")).strip()
+        if term_id_expected and str(c.entity).strip() != term_id_expected:
+            return (False, f"entity != term_id for term_uid={term_uid}", [])
+
+        # identity hash (tool-owned)
+        gsh_expected = _candidate_truth_hash(row)
+        if require_gene_set_hash and (not _looks_like_12hex(gsh_expected)):
+            return (False, f"candidate gene_set_hash missing/invalid for term_uid={term_uid}", [])
+
+        # genes payload (tool-owned; may be capped)
         genes_full = _parse_gene_list(row.get("gene_ids_suggest", []))
         genes_full = [_norm_gene_id(g) for g in genes_full if str(g).strip()]
-        # dedup preserve order
         seen_g: set[str] = set()
         genes_full2: list[str] = []
         for g in genes_full:
             if g and g not in seen_g:
                 seen_g.add(g)
                 genes_full2.append(g)
-
-        cap = _max_gene_ids_in_claim(card)
         genes_claim = genes_full2[:cap]
 
+        # module_id: prefer candidate module_id; else deterministic fallback
         mid = str(row.get("module_id", "") or "").strip()
         if (not mid) or (mid.lower() in _NA_TOKENS_L):
-            mh = _module_hash_like_modules_py_12hex([term_uid], genes_claim)
+            mh = _module_hash_like_modules_py_12hex(
+                [term_uid], genes_full2 if genes_full2 else genes_claim
+            )
             mid = f"{_module_prefix(card)}{mh}"
-
-        # IMPORTANT: gene_set_hash must match genes_claim stored in claim_json
-        gsh_tool = (
-            _hash_gene_set_12hex(genes_claim)
-            if genes_claim
-            else _hash_term_set_fallback_12hex([term_uid])
-        )
-
-        term_id_expected = str(row.get("term_id", "")).strip()
-        if term_id_expected and str(c.entity).strip() != term_id_expected:
-            return (False, f"entity != term_id for term_uid={term_uid}", [])
-
-        # ---- tool-owned gene_set_hash (source-of-truth is candidates) ----
-        gsh_expected = _candidate_truth_hash(row)
-        if require_gene_set_hash:
-            if (not gsh_expected) or (not _looks_like_12hex(gsh_expected)):
-                return (
-                    False,
-                    f"candidate gene_set_hash missing/invalid for term_uid={term_uid}",
-                    [],
-                )
-
-        # If LLM provided a hash, we do NOT fail on mismatch; we ignore it.
-        # (Optional: we could later record a warning in meta; here we only normalize.)
-        genes = [str(x).strip().upper() for x in (c.evidence_ref.gene_ids or []) if str(x).strip()]
-        if genes:
-            sug_set = _as_suggest_set(row.get("gene_ids_suggest", []))
-            bad = [g for g in genes if g not in sug_set]
-            if bad:
-                return (
-                    False,
-                    f"gene_ids not in gene_ids_suggest for term_uid={term_uid}: {bad[:3]}",
-                    [],
-                )
-
-        # gsh_final = gsh_expected or str(c.evidence_ref.gene_set_hash or "").strip().lower() or ""
 
         update: dict[str, Any] = {"context_keys": ck_proj}
         try:
@@ -734,7 +724,7 @@ def _post_validate_against_candidates(
                     "module_id": mid,
                     "gene_ids": genes_claim,
                     "term_ids": [term_uid],
-                    "gene_set_hash": gsh_tool,
+                    "gene_set_hash": gsh_expected,
                 }
             )
             update["evidence_ref"] = ev
@@ -747,7 +737,7 @@ def _post_validate_against_candidates(
                 d_ev["module_id"] = mid
                 d_ev["gene_ids"] = genes_claim
                 d_ev["term_ids"] = [term_uid]
-                d_ev["gene_set_hash"] = gsh_tool
+                d_ev["gene_set_hash"] = gsh_expected
                 d["evidence_ref"] = d_ev
             c2 = Claim.model_validate(d)
 
@@ -844,12 +834,12 @@ def propose_claims_llm(
         df["context_score_sort"] = 0.0
 
     # ---- LLM mode should be LIGHT by default ----
-    # default 12, clamp 5..60
+    # default 50, clamp 3..100
     try:
-        top_n = int(str(os.environ.get("LLMPATH_LLM_TOPN", "12")).strip())
+        top_n = int(str(os.environ.get("LLMPATH_LLM_TOPN", "50")).strip())
     except Exception:
-        top_n = 12
-    top_n = max(5, min(top_n, 60))
+        top_n = 50
+    top_n = max(3, min(top_n, 100))
 
     df_rank = df.sort_values(
         ["keep_term", "term_survival_sort", "context_score_sort", "stat_sort", "term_uid"],
@@ -873,6 +863,7 @@ def propose_claims_llm(
         "notes": "",
         "backend_class": type(backend).__name__,
         "artifact_tag": (artifact_tag or ""),
+        "strict_k": bool(_strict_k_enabled()),
     }
 
     def _write_artifacts(*, raw_text: str, meta_obj: dict[str, Any]) -> None:
@@ -895,11 +886,11 @@ def propose_claims_llm(
             _safe_write_json(od / f"llm_claims.{artifact_tag}.meta.json", meta_obj)
 
     raw_text = ""
+    obj: dict[str, Any] | None = None
     try:
         obj = _backend_call_json(backend, prompt=prompt, seed=seed)
         raw_text = _stable_json_dumps(obj)
     except Exception as e:
-        # Never write empty raw: persist a machine-readable error payload.
         msg = str(e)
         meta["notes"] = f"backend_call_failed: {type(e).__name__}"
         meta["exception_type"] = type(e).__name__
@@ -916,6 +907,21 @@ def propose_claims_llm(
 
     _write_artifacts(raw_text=raw_text, meta_obj=meta)
 
+    # If backend produced a soft error JSON (standard contract), treat as fallback immediately.
+    # Note: obj is dict at this point; raw_text is stable JSON text.
+    if isinstance(obj, dict) and isinstance(obj.get("error"), dict):
+        msg = str((obj.get("error") or {}).get("message", ""))
+        meta["notes"] = f"soft_error: {msg[:200]}"
+        _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        return LLMClaimResult(
+            claims=[],
+            raw_text=raw_text,
+            used_fallback=True,
+            notes=meta["notes"],
+            meta=meta,
+        )
+
+    # Also keep the legacy safety net in case raw_text was modified externally
     soft = _parse_soft_error_json(raw_text)
     if soft is not None:
         msg = str((soft.get("error") or {}).get("message", ""))
@@ -942,6 +948,21 @@ def propose_claims_llm(
             meta=meta,
         )
 
+    # Optional strict-k guardrail (paper/figure reproducibility)
+    if _strict_k_enabled():
+        # allow fewer only if candidates fewer
+        k_eff = min(int(k), int(len(df_rank)))
+        if len(claims) != k_eff:
+            meta["notes"] = f"strict_k_failed: expected={k_eff} got={len(claims)}"
+            _write_artifacts(raw_text=raw_text, meta_obj=meta)
+            return LLMClaimResult(
+                claims=[],
+                raw_text=raw_text,
+                used_fallback=True,
+                notes=meta["notes"],
+                meta=meta,
+            )
+
     ok, why, claims_norm = _post_validate_against_candidates(
         claims=claims,
         cand=df_rank,
@@ -953,7 +974,11 @@ def propose_claims_llm(
         meta["notes"] = f"post_validate_failed: {why}"
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
         return LLMClaimResult(
-            claims=[], raw_text=raw_text, used_fallback=True, notes=meta["notes"], meta=meta
+            claims=[],
+            raw_text=raw_text,
+            used_fallback=True,
+            notes=meta["notes"],
+            meta=meta,
         )
 
     meta["notes"] = "ok"
