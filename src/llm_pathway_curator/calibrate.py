@@ -14,18 +14,32 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 # -----------------------------
 # Core definitions: Risk/Coverage
 # -----------------------------
+_ALLOWED = {"PASS", "FAIL", "ABSTAIN"}
+_NA_TOKENS_L = {"", "na", "nan", "none", "null"}
+
+
 def _normalize_status(s: pd.Series) -> pd.Series:
+    """
+    Normalize a status column to uppercase strings.
+
+    Notes:
+      - pd.NA/NaN become "NA" strings after astype(str); we treat those as invalid.
+      - This is intentionally strict because downstream risk/coverage denominators
+        must be auditable.
+    """
     return s.astype(str).str.strip().str.upper()
 
 
 def _validate_status_values(s_norm: pd.Series) -> None:
-    allowed = {"PASS", "FAIL", "ABSTAIN"}
-    bad = sorted(set(s_norm.unique().tolist()) - allowed)
+    bad = sorted(set(s_norm.unique().tolist()) - _ALLOWED)
     if bad:
-        raise ValueError(f"invalid status values: {bad} (allowed={sorted(allowed)})")
+        raise ValueError(f"invalid status values: {bad} (allowed={sorted(_ALLOWED)})")
 
 
 def compute_counts(status: pd.Series) -> dict[str, int]:
+    """
+    Count PASS/FAIL/ABSTAIN/TOTAL from a status series (strict validation).
+    """
     s = _normalize_status(status)
     _validate_status_values(s)
 
@@ -44,6 +58,9 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
       - coverage_pass_total = PASS / TOTAL
         (ABSTAIN is included in TOTAL)
 
+    Coverage (decided subset size; ABSTAIN excluded):
+      - coverage_decided_total = (PASS + FAIL) / TOTAL
+
     Risk (answered-subset risk; ABSTAIN excluded):
       - risk_fail_given_decided = FAIL / (PASS + FAIL)
 
@@ -60,19 +77,71 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
     decided = c["PASS"] + c["FAIL"]
 
     coverage_pass_total = (c["PASS"] / total) if total > 0 else float("nan")
+    coverage_decided_total = (decided / total) if total > 0 else float("nan")
     risk_fail_total = (c["FAIL"] / total) if total > 0 else float("nan")
     risk_fail_given_decided = (c["FAIL"] / decided) if decided > 0 else float("nan")
 
     return {
         "coverage_pass_total": float(coverage_pass_total),
+        "coverage_decided_total": float(coverage_decided_total),
         "risk_fail_given_decided": float(risk_fail_given_decided),
         "risk_fail_total": float(risk_fail_total),
         "fail_rate_total": float(risk_fail_total),  # keep old key stable
         "n_pass": float(c["PASS"]),
         "n_fail": float(c["FAIL"]),
         "n_abstain": float(c["ABSTAIN"]),
+        "n_decided": float(decided),
         "n_total": float(c["TOTAL"]),
     }
+
+
+def _validate_numeric_series(x: pd.Series, *, name: str) -> pd.Series:
+    """
+    Strict numeric validation for curve inputs.
+    Raises with actionable messages (count + example indices).
+    """
+    v = pd.to_numeric(x, errors="coerce")
+    if v.isna().any():
+        bad_idx = v.index[v.isna()].tolist()
+        head = bad_idx[:10]
+        raise ValueError(
+            f"{name}: non-numeric values detected (n_bad={len(bad_idx)}). example_indices={head}"
+        )
+    arr = v.to_numpy(dtype=float)
+    if not np.isfinite(arr).all():
+        bad = np.where(~np.isfinite(arr))[0]
+        head = bad[:10].tolist()
+        raise ValueError(
+            f"{name}: non-finite values detected (n_bad={len(bad)}). example_positions={head}"
+        )
+    return v
+
+
+def _default_thresholds_from_scores(
+    scores: np.ndarray,
+    *,
+    max_thresholds: int = 200,
+) -> list[float]:
+    """
+    Build a stable set of thresholds from the *score distribution* (not unique values).
+
+    Policy:
+      - If unique values are small, use all unique values (stable).
+      - Otherwise use quantiles over the full score distribution.
+    """
+    if scores.size == 0:
+        raise ValueError("risk_coverage_curve: empty score array")
+
+    uniq = np.unique(scores)
+    uniq = np.sort(uniq)
+
+    if uniq.size <= max_thresholds:
+        thrs = [float(x) for x in uniq.tolist()]
+        return sorted(set(thrs))
+
+    qs = np.linspace(0.0, 1.0, max_thresholds)
+    thrs = np.quantile(scores, qs).astype(float).tolist()
+    return sorted(set(float(x) for x in thrs))
 
 
 def risk_coverage_curve(
@@ -84,6 +153,7 @@ def risk_coverage_curve(
     pass_if_score_ge: bool = True,
     promote_abstain: bool = True,
     fail_on_degenerate: bool = False,
+    max_thresholds: int = 200,
 ) -> pd.DataFrame:
     """
     Build a Risk–Coverage curve by sweeping a PASS threshold.
@@ -103,62 +173,57 @@ def risk_coverage_curve(
       - ABSTAIN must NOT enter risk denominator (handled by risk_coverage_from_status).
       - score must be finite numeric.
       - status must be in {PASS, ABSTAIN, FAIL}.
+
+    Output (stable + interpretable):
+      - includes coverage_decided_total and n_decided to expose denominators
+      - includes promote_abstain flag per threshold row
     """
     if score_col not in df.columns:
         raise ValueError(f"risk_coverage_curve: missing score_col={score_col}")
     if status_col not in df.columns:
         raise ValueError(f"risk_coverage_curve: missing status_col={status_col}")
+    if max_thresholds < 10:
+        raise ValueError("risk_coverage_curve: max_thresholds must be >= 10")
 
-    scores = pd.to_numeric(df[score_col], errors="coerce")
-    if scores.isna().any():
-        i = int(scores.index[scores.isna()][0])
-        raise ValueError(f"risk_coverage_curve: non-numeric score at row index={i}")
-    if not np.isfinite(scores.to_numpy()).all():
-        raise ValueError("risk_coverage_curve: score contains non-finite values")
+    scores_s = _validate_numeric_series(
+        df[score_col], name=f"risk_coverage_curve.score_col={score_col}"
+    )
+    scores = scores_s.to_numpy(dtype=float)
 
     base_status = _normalize_status(df[status_col])
     _validate_status_values(base_status)
 
+    # thresholds
     if decision_thresholds is not None:
         if len(decision_thresholds) == 0:
             raise ValueError("risk_coverage_curve: decision_thresholds is empty")
-        decision_thresholds = [float(x) for x in decision_thresholds]
-        # keep stable ordering + dedupe
-        decision_thresholds = sorted(set(decision_thresholds))
+        thrs = sorted(set(float(x) for x in decision_thresholds))
     else:
-        uniq = np.unique(scores.to_numpy())
-        uniq = np.sort(uniq)
-        if len(uniq) == 0:
-            raise ValueError("risk_coverage_curve: empty score array")
-
-        if len(uniq) <= 400:
-            decision_thresholds = [float(x) for x in uniq.tolist()]
-        else:
-            qs = np.quantile(uniq, np.linspace(0, 1, 200))
-            decision_thresholds = [float(x) for x in qs.tolist()]
-
-        decision_thresholds = sorted(set(decision_thresholds))
+        thrs = _default_thresholds_from_scores(scores, max_thresholds=int(max_thresholds))
 
     # Degenerate curve guardrail (paper-facing)
-    if len(decision_thresholds) <= 1:
+    if len(thrs) <= 1:
         msg = (
             "risk_coverage_curve: degenerate thresholds (score has <=1 unique value). "
-            f"score_col={score_col}"
+            f"score_col={score_col} unique={len(np.unique(scores))}"
         )
         if fail_on_degenerate:
             raise ValueError(msg)
-        if len(decision_thresholds) == 0:
-            decision_thresholds = [float(scores.iloc[0])]
-        # else keep the single threshold
+        # Keep at least one threshold so downstream doesn't crash
+        if len(thrs) == 0:
+            thrs = [float(scores[0])]
 
     out_rows: list[dict[str, Any]] = []
 
-    for thr in decision_thresholds:
-        s = base_status.copy()
+    # SAFETY: never change FAIL
+    is_fail = base_status == "FAIL"
+    not_fail = ~is_fail
 
-        # SAFETY: never change FAIL
-        is_fail = s == "FAIL"
-        not_fail = ~is_fail
+    # Precompute "was_pass" for promote_abstain=False gating mode
+    was_pass = base_status == "PASS"
+
+    for thr in thrs:
+        s = base_status.copy()
 
         if pass_if_score_ge:
             pass_mask = not_fail & (scores >= float(thr))
@@ -171,12 +236,14 @@ def risk_coverage_curve(
             s = s.where(~pass_mask, other="PASS")
         else:
             # Only allow gating of already-PASS items
-            was_pass = s == "PASS"
             to_abstain = was_pass & not_fail & (~pass_mask)
             s = s.where(~to_abstain, other="ABSTAIN")
 
         m = risk_coverage_from_status(s)
         m["threshold"] = float(thr)
+        m["score_col"] = str(score_col)
+        m["status_col"] = str(status_col)
+        m["pass_if_score_ge"] = bool(pass_if_score_ge)
         m["promote_abstain"] = bool(promote_abstain)
         out_rows.append(m)
 
@@ -251,8 +318,8 @@ def fit_temperature_scaling(
       - coarse log-space grid search over T
     """
     _validate_calibration_inputs(probs, y_true, allow_unlabeled=False)
-    p = _clip01(probs)
-    y = y_true.astype(float)
+    p = _clip01(np.asarray(probs, dtype=float))
+    y = np.asarray(y_true, dtype=float)
     z = _logit(p)
 
     def nll(T: float) -> float:
@@ -270,16 +337,21 @@ def fit_temperature_scaling(
 
     Ts = np.exp(np.linspace(np.log(t_min), np.log(t_max), n))
     losses = np.array([nll(T) for T in Ts], dtype=float)
-    T_best = float(Ts[int(np.argmin(losses))])
+    best_i = int(np.argmin(losses))
+    T_best = float(Ts[best_i])
 
+    # keep within a conservative, interpretable range
     return float(np.clip(T_best, 0.25, 10.0))
 
 
 def apply_temperature_scaling(probs: np.ndarray, T: float) -> np.ndarray:
+    """
+    Apply temperature scaling to probability-like scores in [0,1].
+    """
     if not np.isfinite(T) or T <= 0:
         raise ValueError("apply_temperature_scaling: T must be finite and > 0")
     z = _logit(_clip01(np.asarray(probs, dtype=float)))
-    return _sigmoid(z / float(T))
+    return _clip01(_sigmoid(z / float(T)))
 
 
 def fit_isotonic_regression(
@@ -300,7 +372,7 @@ def fit_isotonic_regression(
         ) from e
 
     ir = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-    ir.fit(probs.astype(float), y_true.astype(float))
+    ir.fit(np.asarray(probs, dtype=float), np.asarray(y_true, dtype=float))
     return ir
 
 
@@ -338,6 +410,10 @@ def calibrate_probs(
       - If y_true is None and allow_unlabeled is False => refuse to fit
       - If y_true is None and allow_unlabeled is True => return method="none"
       - Otherwise fit requested method.
+
+    Design intent:
+      - Keep dependencies optional (no scipy).
+      - Provide deterministic fitting for temperature scaling.
     """
     p = np.asarray(probs, dtype=float)
 
@@ -379,25 +455,47 @@ def extract_probs_and_labels(
     """
     if prob_col not in audit_log.columns:
         raise ValueError(f"extract_probs_and_labels: missing prob_col={prob_col}")
-    probs = pd.to_numeric(audit_log[prob_col], errors="coerce")
-    if probs.isna().any():
-        i = int(probs.index[probs.isna()][0])
-        raise ValueError(f"extract_probs_and_labels: non-numeric prob at row index={i}")
-    if not np.isfinite(probs.to_numpy()).all():
-        raise ValueError("extract_probs_and_labels: prob contains non-finite values")
+
+    probs_s = pd.to_numeric(audit_log[prob_col], errors="coerce")
+    if probs_s.isna().any():
+        bad_idx = probs_s.index[probs_s.isna()].tolist()
+        head = bad_idx[:10]
+        raise ValueError(
+            f"extract_probs_and_labels: non-numeric prob detected (n_bad={len(bad_idx)}). "
+            f"example_indices={head}"
+        )
+    probs = probs_s.to_numpy(dtype=float)
+    if not np.isfinite(probs).all():
+        bad = np.where(~np.isfinite(probs))[0]
+        head = bad[:10].tolist()
+        raise ValueError(
+            f"extract_probs_and_labels: prob contains non-finite values (n_bad={len(bad)}). "
+            f"example_positions={head}"
+        )
 
     y = None
     if label_col is not None:
         if label_col not in audit_log.columns:
             raise ValueError(f"extract_probs_and_labels: missing label_col={label_col}")
+
         yv = pd.to_numeric(audit_log[label_col], errors="coerce")
         if yv.isna().any():
-            i = int(yv.index[yv.isna()][0])
-            raise ValueError(f"extract_probs_and_labels: non-numeric label at row index={i}")
-        if not np.isfinite(yv.to_numpy()).all():
-            raise ValueError("extract_probs_and_labels: label contains non-finite values")
+            bad_idx = yv.index[yv.isna()].tolist()
+            head = bad_idx[:10]
+            raise ValueError(
+                f"extract_probs_and_labels: non-numeric label detected (n_bad={len(bad_idx)}). "
+                f"example_indices={head}"
+            )
 
-        y_arr = yv.to_numpy().astype(float)
+        y_arr = yv.to_numpy(dtype=float)
+        if not np.isfinite(y_arr).all():
+            bad = np.where(~np.isfinite(y_arr))[0]
+            head = bad[:10].tolist()
+            raise ValueError(
+                f"extract_probs_and_labels: label contains non-finite values (n_bad={len(bad)}). "
+                f"example_positions={head}"
+            )
+
         uniq = set(np.unique(y_arr).tolist())
         if uniq - {0.0, 1.0}:
             raise ValueError(
@@ -405,4 +503,4 @@ def extract_probs_and_labels(
             )
         y = y_arr.astype(int)
 
-    return probs.to_numpy().astype(float), (None if y is None else y)
+    return probs.astype(float), (None if y is None else y)

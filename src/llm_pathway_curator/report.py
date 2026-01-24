@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .audit_reasons import (
@@ -33,6 +34,11 @@ from .utils import build_id_to_symbol_from_distilled, load_id_map_tsv, map_ids_t
 _NA_TOKENS = {"", "na", "nan", "none", "NA"}
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 _ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
+
+# Keep stress_tag delimiter consistent across layers.
+# masking.apply_evidence_stress uses comma-joined tags;
+# modules.attach_module_drift_stress_tag tolerates '+' but canonicalizes to comma.
+STRESS_TAG_DELIM = ","
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -173,34 +179,78 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     TSV-safe conversion for list-like columns.
     - If a <col>_str already exists, prefer it.
     - Otherwise stringify list/tuple/set as separator-joined.
-    - Scalar NA -> "" to stabilize artifacts.
+    - Scalar NA handling MUST NOT break numeric dtypes.
 
     IMPORTANT:
       Use ';' as the list separator to reduce Excel auto-formatting risk.
-    """
-    LIST_SEP = ";"
 
+    Contract (paper/repro):
+      - numeric columns stay numeric (missing -> NaN)
+      - object scalar columns may use "" for missing (TSV readability)
+      - list-like columns get a companion <col>_str, do not overwrite original by default
+    """
+    from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+    LIST_SEP = ";"
     out = df.copy()
-    for c in list(out.columns):
-        if c.endswith("_str"):
+
+    # IMPORTANT:
+    # If out has duplicate column names, out[c] returns a DataFrame (not Series),
+    # which breaks on .dtype. Iterate by *position* to always get a Series.
+    n_cols = int(out.shape[1])
+    for j in range(n_cols):
+        c = out.columns[j]
+        c_name = str(c)
+
+        # skip already-string columns
+        if c_name.endswith("_str"):
             continue
-        c_str = f"{c}_str"
+
+        # honor pre-existing <col>_str
+        c_str = f"{c_name}_str"
         if c_str in out.columns:
             continue
 
-        s = out[c]
-        if s.dtype == "object":
+        s = out.iloc[:, j]
+
+        # Decide dtype category robustly
+        try:
+            is_obj = s.dtype == "object"
+        except Exception:
+            is_obj = True
+
+        if is_obj:
+            # object dtype: either list-like or scalar-like
             sample = s.dropna().head(20).tolist()
             if any(isinstance(x, (list, tuple, set)) for x in sample):
+                # Create a stable companion string column; keep original list-like column intact.
                 out[c_str] = s.map(
                     lambda x: LIST_SEP.join(map(str, x))
                     if isinstance(x, (list, tuple, set))
                     else ("" if _is_na_scalar(x) else str(x))
                 )
             else:
-                out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
+                # scalar object column: keep dtype=object, make missing printable as ""
+                out.iloc[:, j] = s.map(lambda x: "" if _is_na_scalar(x) else x)
+
         else:
-            out[c] = s.map(lambda x: "" if _is_na_scalar(x) else x)
+            # Non-object columns: keep dtype stable; missing -> NaN for numeric,
+            # pd.NA for bool-like.
+            try:
+                if is_numeric_dtype(s.dtype):
+                    mapped = s.map(lambda x: np.nan if _is_na_scalar(x) else x)
+                    # Ensure we never assign object series into numeric column
+                    out.iloc[:, j] = pd.to_numeric(mapped, errors="coerce")
+                elif is_bool_dtype(s.dtype):
+                    # boolean extension can hold pd.NA; keep it boolean-ish
+                    out.iloc[:, j] = s.map(lambda x: pd.NA if _is_na_scalar(x) else bool(x))
+                else:
+                    # other extension dtype: best-effort preserve
+                    out.iloc[:, j] = s.map(lambda x: pd.NA if _is_na_scalar(x) else x)
+            except Exception:
+                # last resort: keep original series unchanged
+                out.iloc[:, j] = s
+
     return out
 
 
@@ -264,6 +314,31 @@ def _normalize_status(raw: Any) -> str:
     return s
 
 
+def _normalize_stress_tag(raw: Any) -> str:
+    """
+    Canonicalize stress_tag across historical artifacts.
+
+    Policy:
+      - Accept comma-delimited (current) or '+'-delimited (legacy).
+      - Normalize to comma-delimited unique tags preserving order.
+    """
+    if _is_na_scalar(raw):
+        return ""
+    s = str(raw or "").strip()
+    if not s or s.lower() in _NA_TOKENS_L:
+        return ""
+    s = s.replace("+", STRESS_TAG_DELIM)
+    parts = [p.strip() for p in s.split(STRESS_TAG_DELIM) if p.strip()]
+    # de-dup preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return STRESS_TAG_DELIM.join(out)
+
+
 def _decision_from_audit_row(row: pd.Series) -> Decision:
     """
     Decision is derived mechanically from audit_log row (no free-text generation).
@@ -299,6 +374,15 @@ def _decision_from_audit_row(row: pd.Series) -> Decision:
     for k in ["stress_status", "stress_reason", "stress_notes"]:
         if k in row.index and (not _is_na_scalar(row.get(k))):
             details[k] = row.get(k)
+
+    # best-effort: include stress_tag / contradiction flip if present
+    if "stress_tag" in row.index and (not _is_na_scalar(row.get("stress_tag"))):
+        details["stress_tag"] = _normalize_stress_tag(row.get("stress_tag"))
+    if "contradiction_flip" in row.index and (not _is_na_scalar(row.get("contradiction_flip"))):
+        try:
+            details["contradiction_flip"] = bool(row.get("contradiction_flip"))
+        except Exception:
+            details["contradiction_flip"] = str(row.get("contradiction_flip"))
 
     return Decision(status=st, reason=str(reason), details=details)
 
@@ -555,6 +639,7 @@ def _synthesize_claim_json_from_audit_log(
 def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
     out = audit_out.copy()
 
+    # Normalize stress_status
     if "stress_status" in out.columns:
         s = out["stress_status"].map(lambda x: "" if _is_na_scalar(x) else str(x).strip().upper())
         out["stress_status"] = s
@@ -567,6 +652,12 @@ def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
             out["stress_evaluated"] = False
         if "stress_ok" not in out.columns:
             out["stress_ok"] = False
+
+    # Normalize stress_tag for display/debug (do NOT overwrite raw field)
+    if "stress_tag" in out.columns:
+        out["stress_tag_norm"] = out["stress_tag"].map(_normalize_stress_tag)
+    elif "stress_tag_norm" not in out.columns:
+        out["stress_tag_norm"] = ""
 
     return out
 
@@ -618,6 +709,7 @@ def write_report_jsonl(
       - term_survival_agg, context_score, stat, tau_used, stability_scope,
         module_id_effective, gene_set_hash_effective
       - stress_status/stress_reason/stress_notes
+      - stress_tag / contradiction_flip (if present)
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -733,6 +825,21 @@ def write_report_jsonl(
 
             ctx_review = _extract_context_review_fields(claim_raw)
 
+            # best-effort stress fields
+            stress_tag = (
+                _normalize_stress_tag(row_raw.get("stress_tag"))
+                if ("stress_tag" in audit0.columns)
+                else ""
+            )
+            contradiction_flip = None
+            if "contradiction_flip" in audit0.columns and (
+                not _is_na_scalar(row_raw.get("contradiction_flip"))
+            ):
+                try:
+                    contradiction_flip = bool(row_raw.get("contradiction_flip"))
+                except Exception:
+                    contradiction_flip = str(row_raw.get("contradiction_flip"))
+
             rec: dict[str, Any] = {
                 "created_at": created_at,
                 "run_id": str(run_id),
@@ -757,6 +864,8 @@ def write_report_jsonl(
                     ).strip(),
                     "stress_status": str(row_raw.get("stress_status") or "").strip(),
                     "stress_reason": str(row_raw.get("stress_reason") or "").strip(),
+                    "stress_tag": stress_tag,
+                    "contradiction_flip": contradiction_flip,
                     "context_status": str(ctx_review.get("context_status", "") or "").strip(),
                     "context_confidence": _to_float_or_none(ctx_review.get("context_confidence")),
                 },
@@ -829,6 +938,12 @@ def _ensure_canonical_audit_cols(audit_log: pd.DataFrame, card: SampleCard) -> p
     for c in ["stress_status", "stress_reason", "stress_notes"]:
         if c not in out.columns:
             out[c] = ""
+
+    # stress tag / contradiction flip (best-effort, stable presence for report/debug)
+    if "stress_tag" not in out.columns:
+        out["stress_tag"] = ""
+    if "contradiction_flip" not in out.columns:
+        out["contradiction_flip"] = pd.NA
 
     # ---- context review columns (exist even if UNEVALUATED) ----
     for c in ["context_status", "context_reason", "context_confidence"]:
@@ -1066,6 +1181,8 @@ def write_report(
                     "context_confidence",
                     "stress_status",
                     "stress_reason",
+                    "stress_tag_norm",
+                    "contradiction_flip",
                     "stress_evaluated",
                     "stress_ok",
                 ],
@@ -1095,6 +1212,8 @@ def write_report(
                     "gene_set_hash_effective",
                     "stress_status",
                     "stress_reason",
+                    "stress_tag_norm",
+                    "contradiction_flip",
                     "stress_evaluated",
                     "stress_ok",
                     "term_survival_agg",
@@ -1130,6 +1249,8 @@ def write_report(
                     "gene_set_hash_effective",
                     "stress_status",
                     "stress_reason",
+                    "stress_tag_norm",
+                    "contradiction_flip",
                     "context_status",
                     "context_reason",
                     "context_confidence",
@@ -1143,7 +1264,8 @@ def write_report(
 
     lines.append("## Audit log (top)")
     lines.append("")
-    lines.append(_safe_table_md(_stringify_list_columns(audit_log), n=20))
+    # IMPORTANT: show canonicalized audit_out (matches TSV artifacts)
+    lines.append(_safe_table_md(_stringify_list_columns(audit_out), n=20))
     lines.append("")
 
     lines.append("## Reproducible artifacts")

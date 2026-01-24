@@ -1,3 +1,4 @@
+# LLM-PathwayCurator/src/llm_pathway_curator/sample_card.py
 from __future__ import annotations
 
 import json

@@ -21,6 +21,10 @@ _NA_TOKENS = {"", "na", "nan", "none"}
 # Conservative gene-like token heuristic (align with schema.py spirit)
 _GENE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# Keep stress_tag delimiter consistent across layers.
+# masking.apply_evidence_stress uses comma-joined tags.
+STRESS_TAG_DELIM = ","
+
 
 # -------------------------
 # Normalization (align with schema/distill: trim-only; NO forced uppercasing)
@@ -523,11 +527,13 @@ def factorize_modules_connected_components(
     elif method == "term_jaccard_cc":
         max_terms_for_pairwise = 1200
         try:
+            # Best-effort (attrs can be lost across merges/copies); default is explicit.
             max_terms_for_pairwise = int(
                 getattr(evidence_df, "attrs", {}).get("max_terms_for_pairwise", 1200)
             )
         except Exception:
-            pass
+            max_terms_for_pairwise = 1200
+
         edges_f.attrs["modules"]["max_terms_for_pairwise"] = int(max_terms_for_pairwise)
 
         if n_terms > int(max_terms_for_pairwise):
@@ -785,7 +791,8 @@ def attach_module_drift_stress_tag(
     Contract:
       - distilled_df must have term_uid
       - drift_df must have term_uid and module_drift (bool)
-      - does NOT overwrite existing non-empty stress_tag (append with '+')
+      - does NOT overwrite existing non-empty stress_tag (append with delimiter)
+      - delimiter is normalized to STRESS_TAG_DELIM (comma), but we tolerate legacy '+' in input
     """
     if term_id_col not in distilled_df.columns:
         raise ValueError(f"distilled_df missing column: {term_id_col}")
@@ -802,13 +809,23 @@ def attach_module_drift_stress_tag(
     if stress_col not in out.columns:
         out[stress_col] = ""
 
-    def _append(old: object, add: str) -> str:
-        s = "" if old is None else str(old).strip()
+    def _split_tags(s: str) -> list[str]:
+        # tolerate legacy '+', but canonicalize to comma
+        s = (s or "").strip()
         if not s:
-            return add
-        if add in s.split("+"):
-            return s
-        return s + "+" + add
+            return []
+        s = s.replace("+", STRESS_TAG_DELIM)
+        parts = [p.strip() for p in s.split(STRESS_TAG_DELIM) if p.strip()]
+        return _dedup_preserve_order(parts)
+
+    def _join_tags(tags: list[str]) -> str:
+        return STRESS_TAG_DELIM.join([t for t in tags if str(t).strip()])
+
+    def _append(old: object, add: str) -> str:
+        tags0 = _split_tags("" if old is None else str(old))
+        if add not in tags0:
+            tags0.append(add)
+        return _join_tags(tags0)
 
     mask = out["module_drift"].astype(bool)
     out.loc[mask, stress_col] = out.loc[mask, stress_col].map(lambda x: _append(x, tag))

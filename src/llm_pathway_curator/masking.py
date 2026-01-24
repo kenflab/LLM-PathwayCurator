@@ -13,6 +13,10 @@ from .noise_lists import NOISE_LISTS, NOISE_PATTERNS
 
 RESCUE_MODULES_DEFAULT = ("LINC_Noise", "Hemo_Contam")
 
+# Single source of truth for TSV-friendly join delimiter across layers.
+# Use ';' (rare in gene symbols; safer than ',' which is often CSV delimiter).
+GENE_JOIN_DELIM = ";"
+
 
 # -------------------------
 # Results
@@ -68,6 +72,13 @@ def _validate_frac(name: str, x: float) -> float:
     return v
 
 
+def _safe_int(x: Any, default: int) -> int:
+    try:
+        return int(x)
+    except Exception:
+        return int(default)
+
+
 def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str, str]:
     if whitelist is None:
         whitelist = []
@@ -75,10 +86,10 @@ def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str,
     reasons: dict[str, str] = {}
     for module_name, genes in NOISE_LISTS.items():
         for g in genes:
-            reasons[g] = f"Module_{module_name}"
+            reasons[str(g).strip()] = f"Module_{module_name}"
 
     for g in whitelist:
-        reasons.pop(g, None)
+        reasons.pop(str(g).strip(), None)
 
     return reasons
 
@@ -109,6 +120,27 @@ def _pick_k(rng: random.Random, xs: list[str], k: int) -> list[str]:
     return rng.sample(xs, k)
 
 
+def _row_id_for_events(row: pd.Series, idx: Any) -> int:
+    """
+    Prefer stable provenance if upstream provided it.
+    - distill.py creates raw_index; keep that if present.
+    Fallback: current DataFrame index.
+    """
+    if "raw_index" in row.index:
+        try:
+            return int(row["raw_index"])
+        except Exception:
+            pass
+    try:
+        return int(idx)
+    except Exception:
+        return 0
+
+
+def _join_genes(xs: list[str]) -> str:
+    return GENE_JOIN_DELIM.join([str(g).strip() for g in xs if str(g).strip()])
+
+
 # -------------------------
 # v0: deterministic masking (kept for backward compatibility)
 # -------------------------
@@ -119,6 +151,8 @@ def apply_gene_masking(
     rescue_modules: tuple[str, ...] | None = None,
     whitelist: list[str] | None = None,
     seed: int | None = None,
+    # advanced knobs (default keep v0 behavior)
+    pattern_mode: str = "match",  # "match" (prefix) or "search" (substring)
 ) -> MaskResult:
     """
     v0 behavior: deterministic "noise gene" masking by lists/patterns.
@@ -142,6 +176,9 @@ def apply_gene_masking(
     import re
 
     compiled = {k: re.compile(pat) for k, pat in NOISE_PATTERNS.items()}
+    pattern_mode = str(pattern_mode or "match").strip().lower()
+    if pattern_mode not in {"match", "search"}:
+        raise ValueError("pattern_mode must be 'match' or 'search'")
 
     wl = set([str(g).strip() for g in whitelist if str(g).strip()])
 
@@ -157,13 +194,14 @@ def apply_gene_masking(
     for idx, row in out.iterrows():
         genes = _as_gene_list(row[genes_col])
         before = genes[:]
+        row_id = _row_id_for_events(row, idx)
 
         if not genes:
             masked_lists.append([])
             masked_counts.append(0)
             events.append(
                 {
-                    "row_index": int(idx),
+                    "row_index": int(row_id),
                     "mode": "clean",
                     "before_n": 0,
                     "after_n": 0,
@@ -188,7 +226,11 @@ def apply_gene_masking(
 
         kept2 = kept[:]
         for module_name, rx in compiled.items():
-            matches = [g for g in kept2 if (g not in wl) and bool(rx.match(g))]
+            if pattern_mode == "search":
+                matches = [g for g in kept2 if (g not in wl) and bool(rx.search(g))]
+            else:
+                matches = [g for g in kept2 if (g not in wl) and bool(rx.match(g))]
+
             if not matches:
                 continue
 
@@ -208,14 +250,14 @@ def apply_gene_masking(
             if g not in gene_reasons:
                 gene_reasons[g] = reason
 
-        after = kept2[:]
+        after = _dedup_preserve_order(kept2[:])
         masked_lists.append(after)
         masked_counts.append(len(removed))
 
         dropped = [g for g, _ in removed]
         events.append(
             {
-                "row_index": int(idx),
+                "row_index": int(row_id),
                 "mode": "clean",
                 "before_n": int(len(before)),
                 "after_n": int(len(after)),
@@ -228,7 +270,8 @@ def apply_gene_masking(
         )
 
     out[genes_col] = masked_lists
-    out["evidence_genes_str"] = out[genes_col].map(lambda xs: ",".join(xs))
+    # IMPORTANT: keep delimiter consistent across layers for reproducibility.
+    out["evidence_genes_str"] = out[genes_col].map(_join_genes)
     out["masked_genes_count"] = masked_counts
 
     term_events = pd.DataFrame(events)
@@ -238,6 +281,8 @@ def apply_gene_masking(
         "mode": "clean",
         "rescue_modules": list(rescue_modules),
         "whitelist_n": int(len(whitelist)),
+        "pattern_mode": pattern_mode,
+        "gene_join_delim": GENE_JOIN_DELIM,
         "notes": "deterministic masking by NOISE_LISTS/NOISE_PATTERNS",
     }
 
@@ -262,6 +307,10 @@ def apply_evidence_stress(
     # safety knobs
     min_genes_after: int = 1,
     whitelist: list[str] | None = None,
+    # NEW (defaults preserve current behavior: floor-based k can be 0)
+    dropout_min_k: int = 0,
+    noise_min_k: int = 0,
+    max_inject_k: int | None = None,
 ) -> MaskResult:
     """
     Fig2 v4: stress that targets evidence identity.
@@ -287,6 +336,11 @@ def apply_evidence_stress(
     dropout_frac = _validate_frac("dropout_frac", dropout_frac)
     noise_frac = _validate_frac("noise_frac", noise_frac)
     contradiction_frac = _validate_frac("contradiction_frac", contradiction_frac)
+
+    dropout_min_k = max(0, _safe_int(dropout_min_k, 0))
+    noise_min_k = max(0, _safe_int(noise_min_k, 0))
+    if max_inject_k is not None:
+        max_inject_k = max(0, _safe_int(max_inject_k, 0))
 
     out = distilled.copy()
 
@@ -325,22 +379,24 @@ def apply_evidence_stress(
         genes0 = _as_gene_list(row[genes_col])
         genes0 = [g for g in genes0 if g]  # safety
         before = genes0[:]
+        row_id = _row_id_for_events(row, idx)
 
         # If term_uid is empty, include row_index as a fallback
         # to avoid identical per-term RNG streams.
         seed_payload = {
             "seed": seed,
             "term_uid": term_uid,
-            "row_index": int(idx) if not term_uid else None,
+            "row_index": int(row_id) if not term_uid else None,
         }
         term_seed = int(_sha256_short(seed_payload, n=12), 16) % (2**31 - 1)
         trng = random.Random(term_seed)
 
-        # 1) dropout (floor-based)
+        # 1) dropout (floor-based + optional min k)
         genes = before[:]
         dropped: list[str] = []
         if dropout_frac > 0.0 and len(genes) > int(min_genes_after):
             k = int(len(genes) * float(dropout_frac))
+            k = max(k, dropout_min_k)
             # never drop below min_genes_after
             k = min(k, max(0, len(genes) - int(min_genes_after)))
             to_drop = set(_pick_k(trng, genes, k))
@@ -351,12 +407,16 @@ def apply_evidence_stress(
                     if g not in gene_reasons:
                         gene_reasons[g] = "stress_dropout"
 
-        # 2) noise injection (floor-based)
+        # 2) noise injection (floor-based + optional min k + optional max clamp)
         injected: list[str] = []
         if noise_frac > 0.0 and noise_pool:
             base = max(1, len(genes))
             k_inj = int(base * float(noise_frac))
+            k_inj = max(k_inj, noise_min_k)
+            if max_inject_k is not None:
+                k_inj = min(k_inj, int(max_inject_k))
             k_inj = max(0, k_inj)
+
             if k_inj > 0:
                 cand = [g for g in noise_pool if g not in wl and g not in set(genes)]
                 inj = _pick_k(trng, cand, k_inj)
@@ -391,7 +451,8 @@ def apply_evidence_stress(
 
         events.append(
             {
-                "row_index": int(idx),
+                "row_index": int(row_id),
+                "df_index": int(idx) if str(idx).isdigit() else str(idx),
                 "term_uid": term_uid,
                 "mode": "stress",
                 "seed": int(seed),
@@ -408,7 +469,8 @@ def apply_evidence_stress(
         )
 
     out[genes_col] = stressed_lists
-    out["evidence_genes_str"] = out[genes_col].map(lambda xs: ",".join(xs))
+    # IMPORTANT: keep delimiter consistent across layers for reproducibility.
+    out["evidence_genes_str"] = out[genes_col].map(_join_genes)
     out["stress_tag"] = stress_tags
     out["contradiction_flip"] = contradiction_tags
 
@@ -421,8 +483,12 @@ def apply_evidence_stress(
         "noise_frac": float(noise_frac),
         "contradiction_frac": float(contradiction_frac),
         "min_genes_after": int(min_genes_after),
+        "dropout_min_k": int(dropout_min_k),
+        "noise_min_k": int(noise_min_k),
+        "max_inject_k": (None if max_inject_k is None else int(max_inject_k)),
         "whitelist_n": int(len(wl)),
         "noise_pool_n": int(len(noise_pool)),
+        "gene_join_delim": GENE_JOIN_DELIM,
         "notes": "evidence identity stress for Fig2 v4",
     }
 

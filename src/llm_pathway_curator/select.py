@@ -3,13 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import json
-import math
 import os
 import re
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -108,7 +105,7 @@ def _validate_k(k: Any) -> int:
 
 
 def _norm_gene_id(g: str) -> str:
-    # align with audit.py to avoid spurious drift
+    # align with audit.py/pipeline.py to avoid spurious drift
     return str(g).strip().upper()
 
 
@@ -172,7 +169,7 @@ def _hash_gene_set_audit(genes: list[str]) -> str:
     """
     Audit-grade fingerprint should be SET-stable:
       - same gene set -> same hash, regardless of order
-      - normalize IDs to reduce casing drift (align with audit.py)
+      - normalize IDs to reduce casing drift
     """
     payload = ",".join(sorted({_norm_gene_id(g) for g in genes if str(g).strip()}))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
@@ -181,8 +178,7 @@ def _hash_gene_set_audit(genes: list[str]) -> str:
 def _hash_term_set_fallback(term_uids: list[str]) -> str:
     """
     Fallback when evidence genes are missing/empty.
-    Keep it deterministic and set-stable across ordering.
-    This is term-driven (not gene-driven).
+    Deterministic and set-stable.
     """
     canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
     payload = ",".join(canon)
@@ -197,21 +193,6 @@ def _debug_enabled() -> bool:
 def _dlog(msg: str) -> None:
     if _debug_enabled():
         print(msg, file=sys.stderr)
-
-
-def _emit_dev_meta(card: SampleCard) -> bool:
-    """
-    Developer-only metadata emission switch.
-    Default OFF to avoid leaking internal versions/keys into user-facing outputs.
-    Enable via:
-      - env: LLMPATH_DEV_META=1
-      - card.extra: {"emit_developer_meta": true}
-    """
-    env = str(os.environ.get("LLMPATH_DEV_META", "")).strip().lower()
-    if env:
-        return env in {"1", "true", "t", "yes", "y", "on"}
-    ex = _get_extra(card)
-    return _as_bool(ex.get("emit_developer_meta", None), False)
 
 
 def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> str:
@@ -229,7 +210,7 @@ def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> s
 def _max_gene_ids_in_claim(card: SampleCard) -> int:
     """
     Bound the number of evidence genes embedded in claim_json.
-    This must remain >=1 to keep EvidenceRef meaningful.
+    Must remain >=1 to keep EvidenceRef meaningful.
     """
     ex = _get_extra(card)
     env = str(os.environ.get("LLMPATH_MAX_GENE_IDS_IN_CLAIM", "")).strip()
@@ -244,14 +225,10 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 
 
 # -------------------------
-# Context proxy (deterministic)
+# Context proxy (deterministic) - selection-time only
+# (NOTE: context REVIEW belongs to pipeline.py; this is only for ranking/tiebreak.)
 # -------------------------
 def _context_tokens(card: SampleCard) -> list[str]:
-    """
-    Deterministic proxy tokens from SampleCard core context.
-    NOTE: This is a weak heuristic; must be explicitly enabled or auto-enabled for context_swap.
-    Backward compat: condition falls back to disease.
-    """
     toks: list[str] = []
     for v in [
         _card_text(card, "condition", "disease"),
@@ -269,7 +246,6 @@ def _context_tokens(card: SampleCard) -> list[str]:
 
 
 def _context_score(term_name: str, toks: list[str]) -> int:
-    # proxy only; must be enabled by policy
     name = str(term_name).lower()
     return sum(1 for t in toks if t and t in name)
 
@@ -280,8 +256,6 @@ def _context_keys(card: SampleCard) -> list[str]:
     Backward compat: if disease exists but condition missing, still emit "condition".
     """
     keys: list[str] = []
-
-    # condition (primary) / disease (fallback)
     cond = _card_text(card, "condition", "disease").strip().lower()
     if cond and cond not in _NA_TOKENS_L:
         keys.append("condition")
@@ -301,8 +275,6 @@ def _context_keys(card: SampleCard) -> list[str]:
 def _is_context_swap(card: SampleCard) -> bool:
     """
     Detect paper ablation cards (context_swap/shuffled_context).
-    If runner wrote swap metadata, we treat it as a strong signal that
-    selection SHOULD depend on context even without LLM.
     """
     ex = _get_extra(card)
     for k in ["context_swap_to", "context_swap_from", "context_swap_to_cancer"]:
@@ -311,7 +283,6 @@ def _is_context_swap(card: SampleCard) -> bool:
             return True
         if v not in (None, "", [], {}):
             return True
-    # Backward compat key (if you used a different name earlier)
     v2 = ex.get("shuffled_context", None)
     if isinstance(v2, bool) and v2:
         return True
@@ -324,39 +295,20 @@ def _is_context_swap(card: SampleCard) -> bool:
 # Context selection mode (deterministic, explicit)
 # -------------------------
 _SELECT_CONTEXT_ENV = "LLMPATH_SELECT_CONTEXT_MODE"  # off|proxy (default off)
-_CONTEXT_GATE_ENV = "LLMPATH_CONTEXT_GATE_MODE"  # off|note|hard (default off)
 
+# IMPORTANT:
+# Avoid collision with pipeline's LLMPATH_CONTEXT_GATE_MODE semantics.
+# select.py uses a separate env name for selection-time context gating.
+_SELECT_CONTEXT_GATE_ENV = "LLMPATH_SELECT_CONTEXT_GATE_MODE"  # off|note|hard (default off)
 
-def _context_gate_mode(card: SampleCard) -> str:
-    """
-    Selection-time gating based on context proxy score.
-    Values:
-      - off: no gate
-      - note: annotate only
-      - hard: treat context_score==0 as ineligible (ONLY when proxy is enabled)
-    Priority: env > card.extra > default off
-    """
-    env = str(os.environ.get(_CONTEXT_GATE_ENV, "")).strip().lower()
-    if env:
-        return env if env in {"off", "note", "hard"} else "off"
-    ex = _get_extra(card)
-    v = str(ex.get("context_gate_mode", "")).strip().lower()
-    return v if v in {"off", "note", "hard"} else "off"
+# Legacy fallback ONLY if values match this file's vocabulary.
+_LEGACY_CONTEXT_GATE_ENV = "LLMPATH_CONTEXT_GATE_MODE"
 
 
 def _select_context_mode(card: SampleCard) -> str:
     """
     Selection-time context usage (deterministic proxy).
     Priority: env > auto(context_swap) > card.extra > legacy knob.
-
-    Accepted values:
-      - off
-      - proxy
-      - on/true/yes (treated as proxy)
-
-    Key design:
-      - Default remains OFF for normal runs.
-      - For context_swap cards, auto-enable proxy so the ablation is meaningful.
     """
     env = str(os.environ.get(_SELECT_CONTEXT_ENV, "")).strip().lower()
     if env:
@@ -364,7 +316,6 @@ def _select_context_mode(card: SampleCard) -> str:
             return "proxy"
         return "off"
 
-    # Auto-enable for paper ablation cards
     if _is_context_swap(card):
         return "proxy"
 
@@ -375,7 +326,6 @@ def _select_context_mode(card: SampleCard) -> str:
     if v in {"off", "disable", "disabled", "none"}:
         return "off"
 
-    # legacy knob: enable_context_score_proxy(default=False)
     try:
         legacy = bool(card.enable_context_score_proxy(default=False))
         return "proxy" if legacy else "off"
@@ -383,25 +333,46 @@ def _select_context_mode(card: SampleCard) -> str:
         return "off"
 
 
+def _context_gate_mode(card: SampleCard) -> str:
+    """
+    Selection-time gating based on context proxy score.
+    Values:
+      - off: no gate
+      - note: annotate only
+      - hard: treat context_score==0 as ineligible (ONLY when proxy is enabled)
+    Priority: new env > card.extra > legacy env (limited) > default off
+    """
+    env = str(os.environ.get(_SELECT_CONTEXT_GATE_ENV, "")).strip().lower()
+    if env:
+        return env if env in {"off", "note", "hard"} else "off"
+
+    ex = _get_extra(card)
+    v = str(ex.get("context_gate_mode", "")).strip().lower()
+    if v in {"off", "note", "hard"}:
+        return v
+
+    # Legacy env fallback only if it matches off|note|hard (ignore "soft" etc.)
+    env2 = str(os.environ.get(_LEGACY_CONTEXT_GATE_ENV, "")).strip().lower()
+    if env2 in {"off", "note", "hard"}:
+        return env2
+
+    return "off"
+
+
 def _context_tiebreak_int(card: SampleCard, term_uid: str) -> int:
     """
     Deterministic tie-breaker that MUST change when condition changes.
-
-    NOTE:
-      - Deterministic (no RNG)
-      - Uses condition (fallback disease) only, so context_swap reliably changes ordering
     """
     cond = _card_text(card, "condition", "disease").strip().lower()
     tu = str(term_uid).strip()
     payload = f"{cond}|{tu}".encode()
-    h = hashlib.sha256(payload).hexdigest()[:8]  # 32-bit is enough
+    h = hashlib.sha256(payload).hexdigest()[:8]
     return int(h, 16)
 
 
 def _context_signature(card: SampleCard) -> str:
     """
     Compact signature of the context used for deterministic proxy.
-    Useful to prove context_swap actually changed what selection saw.
     """
     cond = _card_text(card, "condition", "disease").strip().lower()
     tissue = _card_text(card, "tissue", None).strip().lower()
@@ -432,556 +403,9 @@ def _resolve_mode(card: SampleCard, mode: str | None) -> str:
 
 
 # ===========================
-# Context relevance review (LLM probe + cache)
-# ===========================
-_CONTEXT_ALLOWED = {"PASS", "WARN", "FAIL"}
-_CONTEXT_REVIEW_ENV = "LLMPATH_CONTEXT_REVIEW_MODE"  # off|llm (default off)
-_CONTEXT_REVIEW_VERSION = "context_review_v1"  # internal only (do not emit by default)
-
-
-def _context_review_mode(card: SampleCard) -> str:
-    # Priority: env > card.extra > default off
-    env = str(os.environ.get(_CONTEXT_REVIEW_ENV, "")).strip().lower()
-    if env:
-        return env if env in {"off", "llm"} else "off"
-    ex = _get_extra(card)
-    v = str(ex.get("context_review_mode", "")).strip().lower()
-    return v if v in {"off", "llm"} else "off"
-
-
-def _context_review_cache_path(outdir: str | None) -> Path | None:
-    # IMPORTANT: avoid any filesystem work unless explicitly enabled by ctx_review==llm
-    if not outdir:
-        return None
-    p = Path(str(outdir)).resolve() / "context_review_cache.jsonl"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def _json_sanitize(obj: Any) -> Any:
-    """
-    Convert obj into a JSON-serializable structure with deterministic handling.
-    """
-    if obj is None:
-        return None
-    if isinstance(obj, (str, bool, int)):
-        return obj
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return None
-        return obj
-
-    try:
-        if pd.isna(obj):
-            return None
-    except Exception:
-        pass
-
-    if isinstance(obj, Path):
-        return str(obj)
-
-    if isinstance(obj, dict):
-        out: dict[str, Any] = {}
-        for k, v in obj.items():
-            ks = str(k)
-            out[ks] = _json_sanitize(v)
-        return out
-
-    if isinstance(obj, set):
-        items = [_json_sanitize(x) for x in obj]
-        return sorted(items, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True))
-
-    if isinstance(obj, (list, tuple)):
-        return [_json_sanitize(x) for x in obj]
-
-    if isinstance(obj, pd.Series):
-        return _json_sanitize(obj.to_dict())
-    if isinstance(obj, pd.DataFrame):
-        return _json_sanitize(obj.to_dict(orient="records"))
-
-    return str(obj)
-
-
-def _stable_json_dumps(obj: Any) -> str:
-    safe = _json_sanitize(obj)
-    return json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _context_review_key(
-    *,
-    card: SampleCard,
-    term_uid: str,
-    term_name: str,
-    source: str,
-    gene_ids: list[str],
-    direction: str = "na",
-) -> str:
-    payload = {
-        "condition": _card_text(card, "condition", "disease").strip().lower(),
-        "tissue": _card_text(card, "tissue", None).strip().lower(),
-        "perturbation": _card_text(card, "perturbation", None).strip().lower(),
-        "comparison": _card_text(card, "comparison", None).strip().lower(),
-        "term_uid": str(term_uid).strip(),
-        "term_name": str(term_name).strip().lower(),
-        "source": str(source).strip().lower(),
-        "direction": str(direction).strip().lower(),
-        "gene_ids": [str(g).strip().upper() for g in gene_ids if str(g).strip()],
-        "version": _CONTEXT_REVIEW_VERSION,
-    }
-    return hashlib.sha256(_stable_json_dumps(payload).encode("utf-8")).hexdigest()[:16]
-
-
-def _load_context_cache(path: Path | None) -> dict[str, dict[str, Any]]:
-    if path is None or (not path.exists()):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                k = str(rec.get("key", "")).strip()
-                v = rec.get("value", None)
-                if k and isinstance(v, dict):
-                    out[k] = v
-    except Exception:
-        return {}
-    return out
-
-
-def _append_context_cache(path: Path | None, *, key: str, value: dict[str, Any]) -> None:
-    if path is None:
-        return
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(_stable_json_dumps({"key": key, "value": value}) + "\n")
-    except Exception:
-        return
-
-
-def _extract_json_obj_from_text(text: str) -> Any:
-    s = (text or "").strip()
-    if not s:
-        raise ValueError("empty model output")
-
-    try:
-        return json.loads(s)
-    except Exception:
-        pass
-
-    start = -1
-    open_ch = ""
-    for i, ch in enumerate(s):
-        if ch == "{":
-            start = i
-            open_ch = "{"
-            break
-        if ch == "[":
-            start = i
-            open_ch = "["
-            break
-    if start < 0:
-        raise ValueError(f"no JSON object/array start found (first 200 chars): {s[:200]!r}")
-
-    close_ch = "}" if open_ch == "{" else "]"
-
-    depth = 0
-    in_str = False
-    esc = False
-    for j in range(start, len(s)):
-        ch = s[j]
-        if in_str:
-            if esc:
-                esc = False
-                continue
-            if ch == "\\":
-                esc = True
-                continue
-            if ch == '"':
-                in_str = False
-            continue
-
-        if ch == '"':
-            in_str = True
-            continue
-        if ch == open_ch:
-            depth += 1
-            continue
-        if ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                cand = s[start : j + 1].strip()
-                return json.loads(cand)
-
-    raise ValueError("unterminated JSON (no matching closing brace/bracket found)")
-
-
-def _call_backend_text(
-    fn: Any, *, prompt: str, seed: int | None, json_mode: bool | None = None
-) -> str:
-    if json_mode is not None:
-        try:
-            return str(fn(prompt=prompt, seed=seed, json_mode=bool(json_mode)))
-        except TypeError:
-            pass
-        try:
-            return str(fn(prompt=prompt, json_mode=bool(json_mode)))
-        except TypeError:
-            pass
-
-    try:
-        return str(fn(prompt=prompt, seed=seed))
-    except TypeError:
-        pass
-    try:
-        return str(fn(prompt=prompt))
-    except TypeError:
-        pass
-
-    if json_mode is not None:
-        try:
-            return str(fn(prompt, bool(json_mode)))
-        except TypeError:
-            pass
-    try:
-        return str(fn(prompt))
-    except TypeError as e:
-        raise e
-
-
-def _is_soft_error_obj(obj: Any) -> tuple[bool, str]:
-    if not isinstance(obj, dict):
-        return (False, "")
-    err = obj.get("error")
-    if isinstance(err, dict):
-        msg = err.get("message", "")
-        if isinstance(msg, str) and msg.strip():
-            return (True, msg.strip())
-    return (False, "")
-
-
-def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
-    last_err: Exception | None = None
-
-    gen = getattr(backend, "generate", None)
-    if callable(gen):
-        try:
-            raw = _call_backend_text(gen, prompt=prompt, seed=seed, json_mode=True)
-            obj0 = _extract_json_obj_from_text(raw)
-            if isinstance(obj0, dict):
-                is_err, msg = _is_soft_error_obj(obj0)
-                if is_err:
-                    raise RuntimeError(f"backend soft-error JSON: {msg}")
-                return obj0
-            raise ValueError(
-                f"backend generate(json_mode=True) returned non-object type={type(obj0).__name__}"
-            )
-        except Exception as e:
-            last_err = e
-
-    candidates_json = [
-        "complete_json",
-        "chat_json",
-        "generate_json",
-        "call_json",
-        "run_json",
-        "json",
-    ]
-    for name in candidates_json:
-        fn = getattr(backend, name, None)
-        if fn is None or (not callable(fn)):
-            continue
-        try:
-            out = fn(prompt=prompt, seed=seed)  # type: ignore[misc]
-            if isinstance(out, dict):
-                is_err, msg = _is_soft_error_obj(out)
-                if is_err:
-                    raise RuntimeError(f"backend soft-error JSON: {msg}")
-                return out
-            if isinstance(out, str):
-                obj = _extract_json_obj_from_text(out)
-                if isinstance(obj, dict):
-                    is_err, msg = _is_soft_error_obj(obj)
-                    if is_err:
-                        raise RuntimeError(f"backend soft-error JSON: {msg}")
-                    return obj
-                raise ValueError(f"backend JSON returned non-object type={type(obj).__name__}")
-            obj2 = _extract_json_obj_from_text(str(out))
-            if isinstance(obj2, dict):
-                is_err, msg = _is_soft_error_obj(obj2)
-                if is_err:
-                    raise RuntimeError(f"backend soft-error JSON: {msg}")
-                return obj2
-            raise ValueError(f"backend JSON returned non-object type={type(obj2).__name__}")
-        except Exception as e:
-            last_err = e
-            continue
-
-    candidates_text = ["chat", "complete", "call", "run", "__call__"]
-    for name in candidates_text:
-        fn = getattr(backend, name, None)
-        if fn is None or (not callable(fn)):
-            continue
-        try:
-            raw = _call_backend_text(fn, prompt=prompt, seed=seed, json_mode=True)
-            obj = _extract_json_obj_from_text(raw)
-            if isinstance(obj, dict):
-                is_err, msg = _is_soft_error_obj(obj)
-                if is_err:
-                    raise RuntimeError(f"backend soft-error JSON: {msg}")
-                return obj
-            raise ValueError(f"backend text parsed non-object type={type(obj).__name__}")
-        except Exception as e:
-            last_err = e
-            continue
-
-    err_msg = ""
-    if last_err is not None:
-        err_msg = f"{type(last_err).__name__}: {str(last_err)[:200]}"
-    raise RuntimeError(
-        "context_review: backend JSON call failed "
-        f"(tried generate(json_mode=True), json={candidates_json}, text={candidates_text}). "
-        f"last_error={err_msg}"
-    ) from last_err
-
-
-def _context_review_prompt(
-    *,
-    card: SampleCard,
-    term_name: str,
-    term_id: str,
-    source: str,
-    gene_ids: list[str],
-    direction: str = "na",
-    comparison: str = "",
-) -> str:
-    ctx = {
-        "condition": _card_text(card, "condition", "disease"),
-        "tissue": _card_text(card, "tissue", None),
-        "perturbation": _card_text(card, "perturbation", None),
-        "comparison": _card_text(card, "comparison", None),
-    }
-    g = [str(x).strip().upper() for x in gene_ids if str(x).strip()]
-    payload = {
-        "context": ctx,
-        "pathway_term": {
-            "term_name": str(term_name).strip(),
-            "term_id": str(term_id).strip(),
-            "source": str(source).strip(),
-        },
-        "claim": {
-            "direction": str(direction).strip().lower(),
-            "comparison": str(comparison).strip(),
-        },
-        "evidence_gene_ids": g[:10],
-        "task": (
-            "Judge whether this pathway term is context-relevant AND whether the claimed "
-            "direction (up/down/na) seems consistent with the evidence genes and the comparison. "
-            "Do NOT use external knowledge. If direction cannot be assessed from the given inputs, "
-            "use WARN (not FAIL). Return JSON ONLY with keys: context_status (PASS|WARN|FAIL), "
-            "context_reason (short code), context_notes (<=200 chars), confidence (0-1)."
-        ),
-        "output_schema": {
-            "context_status": "PASS|WARN|FAIL",
-            "context_reason": "string",
-            "context_notes": "string",
-            "confidence": "number",
-        },
-    }
-    return (
-        "You are a careful biomedical pathway reviewer. "
-        "Do not invent evidence. If uncertain, use WARN.\n"
-        "Return JSON only.\n\n" + _stable_json_dumps(payload)
-    )
-
-
-def _normalize_context_review(obj: dict[str, Any]) -> dict[str, Any]:
-    st = str(obj.get("context_status", "")).strip().upper()
-    if st not in _CONTEXT_ALLOWED:
-        st = "WARN"
-    reason = str(obj.get("context_reason", "")).strip()
-    notes = str(obj.get("context_notes", "")).strip()
-    try:
-        conf = float(obj.get("confidence", 0.0))
-    except Exception:
-        conf = 0.0
-    conf = min(max(conf, 0.0), 1.0)
-    return {
-        "context_status": st,
-        "context_reason": reason or ("ok" if st == "PASS" else "uncertain"),
-        "context_notes": notes[:200],
-        "context_confidence": conf,
-    }
-
-
-def _patch_claim_json_with_context(
-    claim_json: Any,
-    *,
-    status: str,
-    reason: str,
-    notes: str,
-    confidence: float,
-    method: str = "llm",
-    dev_meta: dict[str, Any] | None = None,
-) -> str:
-    try:
-        obj = json.loads(claim_json) if isinstance(claim_json, str) else dict(claim_json)
-    except Exception:
-        obj = {}
-
-    obj["context_evaluated"] = True
-    obj["context_method"] = str(method)
-    st = str(status).strip().upper()
-    obj["context_status"] = st if st in _CONTEXT_ALLOWED else "WARN"
-    obj["context_reason"] = str(reason).strip() if reason is not None else None
-    obj["context_notes"] = str(notes).strip()[:200] if notes is not None else None
-
-    try:
-        obj["context_confidence"] = float(confidence)
-    except Exception:
-        obj["context_confidence"] = 0.0
-
-    if dev_meta and isinstance(dev_meta, dict):
-        for k, v in dev_meta.items():
-            obj[k] = v
-
-    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _apply_context_review_llm(
-    df_claims: pd.DataFrame,
-    *,
-    card: SampleCard,
-    backend: BaseLLMBackend,
-    seed: int | None,
-    outdir: str | None,
-) -> pd.DataFrame:
-    cache_path = _context_review_cache_path(outdir)
-    cache = _load_context_cache(cache_path)
-    emit_dev = _emit_dev_meta(card)
-
-    out = df_claims.copy()
-
-    for col, default in [
-        ("context_review_evaluated", False),
-        ("context_review_status", pd.NA),
-        ("context_review_reason", pd.NA),
-        ("context_review_notes", pd.NA),
-        ("context_review_confidence", pd.NA),
-        ("context_review_mode", "off"),
-        ("context_review_method", pd.NA),
-    ]:
-        if col not in out.columns:
-            out[col] = default
-
-    if emit_dev:
-        for col, default in [
-            ("context_review_key", pd.NA),
-            ("context_review_version", _CONTEXT_REVIEW_VERSION),
-            ("context_review_error", pd.NA),
-        ]:
-            if col not in out.columns:
-                out[col] = default
-
-    for idx, r in out.iterrows():
-        term_uid = str(r.get("term_uid", "")).strip()
-        term_name = str(r.get("term_name", "")).strip()
-        term_id = str(r.get("term_id", "")).strip()
-        source = str(r.get("source", "")).strip()
-
-        genes = _as_gene_list(r.get("gene_ids", ""))
-        genes = [str(g).strip().upper() for g in genes if str(g).strip()]
-        direction = str(r.get("direction", "na")).strip().lower()
-
-        key = _context_review_key(
-            card=card,
-            term_uid=term_uid,
-            term_name=term_name,
-            source=source,
-            gene_ids=genes[:10],
-            direction=direction,
-        )
-
-        out.at[idx, "context_review_mode"] = "llm"
-        out.at[idx, "context_review_method"] = "llm"
-        if emit_dev:
-            out.at[idx, "context_review_key"] = key
-            out.at[idx, "context_review_version"] = _CONTEXT_REVIEW_VERSION
-            out.at[idx, "context_review_error"] = pd.NA
-
-        norm: dict[str, Any] | None = None
-        from_cache = False
-        if key in cache and isinstance(cache.get(key), dict):
-            norm = cache[key]
-            from_cache = True
-
-        if norm is None:
-            prompt = _context_review_prompt(
-                card=card,
-                term_name=term_name,
-                term_id=term_id,
-                source=source,
-                gene_ids=genes[:10],
-                direction=direction,
-                comparison=_card_text(card, "comparison", None),
-            )
-            try:
-                raw = _backend_call_json(backend, prompt=prompt, seed=seed)
-                norm = _normalize_context_review(raw)
-                cache[key] = norm
-                _append_context_cache(cache_path, key=key, value=norm)
-            except Exception as e:
-                msg = f"{type(e).__name__}: {str(e)[:180]}"
-                norm = {
-                    "context_status": "WARN",
-                    "context_reason": "backend_error",
-                    "context_notes": msg,
-                    "context_confidence": 0.0,
-                }
-                if emit_dev:
-                    out.at[idx, "context_review_error"] = msg
-
-        st = str(norm.get("context_status", "WARN")).strip().upper()
-        rsn = str(norm.get("context_reason", "uncertain")).strip()
-        nts = str(norm.get("context_notes", "")).strip()
-        try:
-            conf = float(norm.get("context_confidence", 0.0))
-        except Exception:
-            conf = 0.0
-
-        out.at[idx, "context_review_evaluated"] = True
-        out.at[idx, "context_review_status"] = st
-        out.at[idx, "context_review_reason"] = rsn
-        out.at[idx, "context_review_notes"] = nts
-        out.at[idx, "context_review_confidence"] = conf
-
-        if "claim_json" in out.columns:
-            cj = out.at[idx, "claim_json"]
-            if not _is_na_scalar(cj) and str(cj).strip():
-                dev_meta = None
-                if emit_dev:
-                    dev_meta = {
-                        "context_review_key": str(key),
-                        "context_review_version": _CONTEXT_REVIEW_VERSION,
-                        "context_review_cache_hit": bool(from_cache),
-                    }
-                out.at[idx, "claim_json"] = _patch_claim_json_with_context(
-                    cj,
-                    status=st,
-                    reason=rsn,
-                    notes=nts,
-                    confidence=conf,
-                    method="llm",
-                    dev_meta=dev_meta,
-                )
-
-    return out
-
-
-# ===========================
-# Stress suite (identity collapse) - PROBE
+# Stress suite (optional dev probe)
+# NOTE: pipeline.py owns user-facing stress (dropout/contradiction).
+# This remains opt-in and should stay OFF by default.
 # ===========================
 def _stress_enabled(card: SampleCard) -> bool:
     env = str(os.environ.get("LLMPATH_STRESS_GENERATE", "")).strip().lower()
@@ -989,15 +413,6 @@ def _stress_enabled(card: SampleCard) -> bool:
         return env in {"1", "true", "t", "yes", "y", "on"}
     ex = _get_extra(card)
     return _as_bool(ex.get("stress_generate", None), False)
-
-
-def _module_prefix(card: SampleCard) -> str:
-    env = str(os.environ.get("LLMPATH_MODULE_PREFIX", "")).strip()
-    if env:
-        return env
-    ex = _get_extra(card)
-    p = str(ex.get("module_prefix", "")).strip()
-    return p or "M"
 
 
 def _seed_for_claim(seed: int | None, claim_id: str) -> int:
@@ -1035,7 +450,6 @@ def _perturb_gene_set(
         return set()
 
     g_arr = np.array(genes, dtype=object)
-
     keep_mask = rng.random(len(g_arr)) >= float(p_drop)
     kept = g_arr[keep_mask].tolist()
     out = set([_norm_gene_id(g) for g in kept if str(g).strip()])
@@ -1052,13 +466,6 @@ def _perturb_gene_set(
                 out.update([_norm_gene_id(g) for g in add.tolist() if str(g).strip()])
 
     return out
-
-
-def _module_hash_like_modules_py(terms: list[str], genes: list[str]) -> str:
-    t = sorted([str(x).strip() for x in terms if str(x).strip()])
-    g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
-    payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
@@ -1084,43 +491,12 @@ def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
     return m
 
 
-def _build_module_terms_genes(
-    distilled: pd.DataFrame, term_to_genes: dict[str, set[str]]
-) -> dict[str, tuple[list[str], set[str]]]:
-    out: dict[str, tuple[list[str], set[str]]] = {}
-    if "module_id" not in distilled.columns or "term_uid" not in distilled.columns:
-        return out
-
-    mod_to_terms: dict[str, set[str]] = {}
-    for tu, mid in zip(
-        distilled["term_uid"].astype(str).tolist(),
-        distilled["module_id"].astype(str).tolist(),
-        strict=True,
-    ):
-        t = str(tu).strip()
-        m0 = str(mid).strip()
-        if not t or not m0 or m0.lower() in _NA_TOKENS_L:
-            continue
-        mod_to_terms.setdefault(m0, set()).add(t)
-
-    for m0, terms_set in mod_to_terms.items():
-        terms = sorted(list(terms_set))
-        genes_u: set[str] = set()
-        for t in terms:
-            genes_u |= set(term_to_genes.get(t, set()))
-        out[m0] = (terms, genes_u)
-
-    return out
-
-
 def _evaluate_stress_for_claim(
     *,
     claim_id: str,
-    term_ids: list[str],
-    module_id: str,
+    term_uids: list[str],
     gene_set_hash: str,
     term_to_genes: dict[str, set[str]],
-    module_to_terms_genes: dict[str, tuple[list[str], set[str]]],
     gene_pool: np.ndarray,
     seed: int | None,
     card: SampleCard,
@@ -1138,7 +514,7 @@ def _evaluate_stress_for_claim(
     surv_thr = min(max(_as_float(ex.get("stress_survival_thr", None), 0.80), 0.0), 1.0)
 
     base_genes: set[str] = set()
-    for t in term_ids:
+    for t in term_uids:
         base_genes |= set(term_to_genes.get(str(t).strip(), set()))
 
     if not base_genes:
@@ -1146,7 +522,7 @@ def _evaluate_stress_for_claim(
             "stress_status": "ABSTAIN",
             "stress_ok": False,
             "stress_reason": "stress_missing_baseline_genes",
-            "stress_notes": "no baseline evidence genes for referenced term_ids",
+            "stress_notes": "no baseline evidence genes for referenced term_uids",
         }
 
     base_hash_claim = str(gene_set_hash).strip()
@@ -1158,6 +534,7 @@ def _evaluate_stress_for_claim(
             "stress_notes": "claim gene_set_hash missing",
         }
 
+    # IMPORTANT: baseline hash must match the embedded claim hash
     base_hash_calc = _hash_gene_set_audit(sorted(list(base_genes)))
     if base_hash_calc != base_hash_claim:
         return {
@@ -1167,8 +544,7 @@ def _evaluate_stress_for_claim(
             "stress_notes": f"claim_hash={base_hash_claim} != baseline_hash={base_hash_calc}",
         }
 
-    rng_term = np.random.default_rng(_seed_for_claim(seed, claim_id))
-    rng_mod = np.random.default_rng(_seed_for_claim(seed, claim_id) + 1)
+    rng = np.random.default_rng(_seed_for_claim(seed, claim_id))
 
     ok = 0
     js: list[float] = []
@@ -1178,7 +554,7 @@ def _evaluate_stress_for_claim(
     base_list = sorted(list(base_genes))
     for _ in range(int(n)):
         pert = _perturb_gene_set(
-            base_list, gene_pool=gene_pool, rng=rng_term, p_drop=p_drop, p_add=p_add
+            base_list, gene_pool=gene_pool, rng=rng, p_drop=p_drop, p_add=p_add
         )
         j, rr, pp = _similarity(base_genes, pert)
         js.append(j)
@@ -1189,28 +565,7 @@ def _evaluate_stress_for_claim(
 
     surv = ok / float(n) if n > 0 else 0.0
 
-    module_ok = True
-    module_note = ""
-    if module_id and module_id.lower() not in _NA_TOKENS_L:
-        mtg = module_to_terms_genes.get(module_id)
-        if mtg is not None:
-            terms_m, genes_m = mtg
-            if terms_m and genes_m:
-                genes_m_list = sorted(list(genes_m))
-                pert_m = _perturb_gene_set(
-                    genes_m_list,
-                    gene_pool=gene_pool,
-                    rng=rng_mod,
-                    p_drop=p_drop,
-                    p_add=p_add,
-                )
-                h0 = _module_hash_like_modules_py(terms_m, genes_m_list)
-                h1 = _module_hash_like_modules_py(terms_m, sorted(list(pert_m)))
-                if h0 != h1 and surv < float(surv_thr):
-                    module_ok = False
-                    module_note = f"module_id_drift_proxy: hash {h0}->{h1}"
-
-    if surv >= float(surv_thr) and module_ok:
+    if surv >= float(surv_thr):
         return {
             "stress_status": "PASS",
             "stress_ok": True,
@@ -1223,25 +578,17 @@ def _evaluate_stress_for_claim(
             ),
         }
 
-    reason = "stress_identity_collapse"
-    if not module_ok:
-        reason = "stress_module_id_drift"
-
-    note = (
-        f"identity_survival={surv:.3f} < thr={float(surv_thr):.2f} "
-        f"(n_ok={ok}/{n}); "
-        f"mean_j={float(np.mean(js)):.3f} "
-        f"mean_r={float(np.mean(rs)):.3f} "
-        f"mean_p={float(np.mean(ps)):.3f}"
-    )
-    if module_note:
-        note += f"; {module_note}"
-
     return {
         "stress_status": "WARN",
         "stress_ok": False,
-        "stress_reason": reason,
-        "stress_notes": note,
+        "stress_reason": "stress_identity_collapse",
+        "stress_notes": (
+            f"identity_survival={surv:.3f} < thr={float(surv_thr):.2f} "
+            f"(n_ok={ok}/{n}); "
+            f"mean_j={float(np.mean(js)):.3f} "
+            f"mean_r={float(np.mean(rs)):.3f} "
+            f"mean_p={float(np.mean(ps)):.3f}"
+        ),
     }
 
 
@@ -1283,25 +630,41 @@ def _select_claims_deterministic(
     ctx_swap_active = _is_context_swap(card)
     ctx_sig = _context_signature(card)
 
+    # Preserve pipeline-owned context_score if present; never overwrite provenance.
+    # select.py proxy scores are stored in select_context_* columns.
+    if "context_score" in df.columns:
+        df["context_score"] = pd.to_numeric(df["context_score"], errors="coerce")
+    else:
+        df["context_score"] = pd.NA
+
+    if "context_evaluated" in df.columns:
+        # keep if already present (pipeline may set it)
+        df["context_evaluated"] = df["context_evaluated"].fillna(False).astype(bool)
+    else:
+        df["context_evaluated"] = False
+
     if sel_ctx_mode == "proxy":
         toks = _context_tokens(card)
-        df["context_tokens_n"] = int(len(toks))
-        df["context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
-        df["context_evaluated"] = True
+        df["select_context_tokens_n"] = int(len(toks))
+        df["select_context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
+        df["select_context_evaluated"] = True
 
-        # Always compute condition-dependent deterministic tiebreak when proxy is enabled
-        df["context_tiebreak"] = df["term_uid"].map(lambda tu: _context_tiebreak_int(card, str(tu)))
-        df["context_tiebreak_sort"] = pd.to_numeric(df["context_tiebreak"], errors="coerce").fillna(
-            2**31 - 1
+        df["select_context_tiebreak"] = df["term_uid"].map(
+            lambda tu: _context_tiebreak_int(card, str(tu))
         )
+        df["select_context_tiebreak_sort"] = pd.to_numeric(
+            df["select_context_tiebreak"], errors="coerce"
+        ).fillna(2**31 - 1)
     else:
-        df["context_tokens_n"] = 0
-        df["context_score"] = pd.NA
-        df["context_evaluated"] = False
-        df["context_tiebreak"] = pd.NA
-        df["context_tiebreak_sort"] = 2**31 - 1  # neutral (worst)
+        df["select_context_tokens_n"] = 0
+        df["select_context_score"] = pd.NA
+        df["select_context_evaluated"] = False
+        df["select_context_tiebreak"] = pd.NA
+        df["select_context_tiebreak_sort"] = 2**31 - 1
 
-    df["context_score_sort"] = pd.to_numeric(df["context_score"], errors="coerce").fillna(-1)
+    df["select_context_score_sort"] = pd.to_numeric(
+        df["select_context_score"], errors="coerce"
+    ).fillna(-1)
 
     # ---- Evidence hygiene gates ----
     if "keep_term" in df.columns:
@@ -1331,22 +694,20 @@ def _select_claims_deterministic(
         df["eligible_tau"] = True
         df["eligible"] = df["keep_term"]
 
-    # ---- optional context gate (selection-time) ----
-    # Only meaningful when proxy is enabled.
+    # ---- optional context gate (selection-time; proxy only) ----
     df["context_gate_mode"] = str(ctx_gate_mode)
     df["context_gate_hit"] = False
     df["eligible_context"] = True
+
+    # Gate must be defined on selection-time proxy score only (never pipeline score).
     if sel_ctx_mode == "proxy" and ctx_gate_mode in {"note", "hard"}:
-        # gate criterion: at least one token overlap in term_name
-        hit = df["context_score_sort"].ge(1)
+        hit = df["select_context_score_sort"].ge(1)
         df["context_gate_hit"] = hit
         df["eligible_context"] = hit if ctx_gate_mode == "hard" else True
         if ctx_gate_mode == "hard":
             df["eligible"] = df["eligible"] & df["eligible_context"]
 
-    df["term_survival_sort"] = (
-        df["term_survival"].fillna(-1.0) if "term_survival" in df.columns else -1.0
-    )
+    df["term_survival_sort"] = df["term_survival"].fillna(-1.0)
 
     try:
         max_per_module = int(card.max_per_module(default=1))
@@ -1355,24 +716,12 @@ def _select_claims_deterministic(
     max_per_module = max(1, max_per_module)
 
     # ---- Ranking policy ----
-    # Default (non-swap): stability-first
-    #   eligible -> term_survival -> context_score -> stat -> tiebreak -> term_uid
-    #
-    # context_swap (swap card detected): enforce context sensitivity
-    # even when context_score ties at 0
-    #   eligible -> term_survival -> context_score -> tiebreak -> stat -> term_uid
-    #
-    # Rationale:
-    #   - This is an ablation; the whole point is that changing context changes
-    #     which representatives you pick.
-    #   - The tiebreak depends on condition and will therefore change under
-    #     context_swap deterministically.
     if sel_ctx_mode == "proxy" and ctx_swap_active:
         sort_cols = [
             "eligible",
             "term_survival_sort",
-            "context_score_sort",
-            "context_tiebreak_sort",
+            "select_context_score_sort",
+            "select_context_tiebreak_sort",
             "stat",
             "term_uid",
         ]
@@ -1382,15 +731,15 @@ def _select_claims_deterministic(
         sort_cols = [
             "eligible",
             "term_survival_sort",
-            "context_score_sort",
+            "select_context_score_sort",
             "stat",
-            "context_tiebreak_sort",
+            "select_context_tiebreak_sort",
             "term_uid",
         ]
         ascending = [False, False, False, False, True, True]
         df["select_context_policy"] = "default"
 
-    df_ranked = df.sort_values(sort_cols, ascending=ascending).copy()
+    df_ranked = df.sort_values(sort_cols, ascending=ascending, kind="mergesort").copy()
 
     has_module = "module_id" in df_ranked.columns
 
@@ -1447,11 +796,9 @@ def _select_claims_deterministic(
 
     df_pick = df_ranked.loc[picked_idx].copy()
 
-    # ---- prepare stress lookups (optional) ----
+    # ---- optional stress lookups (dev-only; opt-in) ----
     do_stress = _stress_enabled(card)
     term_to_genes = _build_term_gene_map(df_ranked) if do_stress else {}
-    module_to_terms_genes = _build_module_terms_genes(df_ranked, term_to_genes) if do_stress else {}
-
     gene_pool = np.array([], dtype=object)
     if do_stress:
         all_genes: list[str] = []
@@ -1467,7 +814,6 @@ def _select_claims_deterministic(
     n_ineligible = int(n_total - n_eligible)
     n_picked = int(len(picked_idx))
 
-    # Context diag summary
     n_ctx_hit = (
         int(df_ranked["context_gate_hit"].sum()) if "context_gate_hit" in df_ranked.columns else 0
     )
@@ -1481,7 +827,6 @@ def _select_claims_deterministic(
         f"ctx_hit_terms={n_ctx_hit}"
     )
 
-    mprefix = _module_prefix(card)
     max_gene_ids = _max_gene_ids_in_claim(card)
 
     for _, r in df_pick.iterrows():
@@ -1492,7 +837,6 @@ def _select_claims_deterministic(
 
         term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
 
-        # FULL genes for claim_json contract (bounded, deduped, normalized)
         genes_full_raw = _as_gene_list(r.get("evidence_genes"))
         genes_full_norm = [_norm_gene_id(g) for g in genes_full_raw]
         genes_full_norm = [g for g in genes_full_norm if str(g).strip()]
@@ -1509,12 +853,13 @@ def _select_claims_deterministic(
             module_id = str(r.get("module_id")).strip()
 
         if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
-            content_hash = _module_hash_like_modules_py([term_uid], genes_claim)
-            module_id = f"{mprefix}{content_hash}"
+            # Stable fallback module id (content-derived)
+            payload = "T:" + term_uid + "\n" + "G:" + "|".join(sorted(genes_claim))
+            content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+            module_id = f"M{content_hash}"
             module_reason = "missing_module_id"
             module_missing = True
 
-        # IMPORTANT: gene_set_hash must match genes_claim stored in claim_json
         if genes_claim:
             gene_set_hash = _hash_gene_set_audit(genes_claim)
         else:
@@ -1532,6 +877,8 @@ def _select_claims_deterministic(
             ),
         )
 
+        gene_snippet = ",".join([str(g) for g in genes_suggest])
+
         rec: dict[str, Any] = {
             "claim_id": claim.claim_id,
             "entity": claim.entity,
@@ -1544,16 +891,21 @@ def _select_claims_deterministic(
             "module_id": claim.evidence_ref.module_id,
             "module_missing": bool(module_missing),
             "module_reason": module_reason,
-            "module_prefix_effective": mprefix,
-            "gene_ids": ",".join([str(g) for g in genes_suggest]),
-            "gene_ids_suggest": ",".join([str(g) for g in genes_suggest]),
+            "gene_ids": gene_snippet,  # legacy compact snippet
+            "gene_ids_suggest": gene_snippet,
+            "gene_ids_snippet": gene_snippet,
             "gene_ids_n_total": int(len(genes_full_norm)),
             "gene_ids_n_in_claim": int(len(genes_claim)),
             "term_ids": ",".join(claim.evidence_ref.term_ids),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
+            # Pipeline-owned (review) context signals (if present in distilled). Never overwritten.
             "context_score": r.get("context_score", pd.NA),
             "context_evaluated": bool(r.get("context_evaluated", False)),
-            "context_tokens_n": int(r.get("context_tokens_n", 0) or 0),
+            # Selection-time proxy context signals (deterministic; used for ranking/tiebreak/gate)
+            "select_context_score": r.get("select_context_score", pd.NA),
+            "select_context_evaluated": bool(r.get("select_context_evaluated", False)),
+            "select_context_tokens_n": int(r.get("select_context_tokens_n", 0) or 0),
+            "select_context_tiebreak": r.get("select_context_tiebreak", pd.NA),
             "context_signature": str(ctx_sig),
             "context_swap_active": bool(ctx_swap_active),
             "context_gate_mode": str(ctx_gate_mode),
@@ -1568,7 +920,6 @@ def _select_claims_deterministic(
             "context_score_proxy": bool(sel_ctx_mode == "proxy"),
             "select_context_mode": str(sel_ctx_mode),
             "select_context_policy": str(r.get("select_context_policy", "default")),
-            "context_tiebreak": r.get("context_tiebreak", pd.NA),
             "select_notes": notes_common,
             "select_diag_n_total": n_total,
             "select_diag_n_eligible": n_eligible,
@@ -1584,11 +935,9 @@ def _select_claims_deterministic(
         if do_stress:
             st = _evaluate_stress_for_claim(
                 claim_id=claim.claim_id,
-                term_ids=[term_uid],
-                module_id=module_id,
+                term_uids=[term_uid],
                 gene_set_hash=claim.evidence_ref.gene_set_hash,
                 term_to_genes=term_to_genes,
-                module_to_terms_genes=module_to_terms_genes,
                 gene_pool=gene_pool,
                 seed=seed,
                 card=card,
@@ -1637,18 +986,17 @@ def select_claims(
     - mode="llm": LLM selects from candidates but MUST emit schema-valid claims;
       otherwise we fall back to deterministic output.
 
-    NOTE: context review (LLM) is a PROBE and is opt-in (off by default).
-
     IMPORTANT:
       - claim_json embeds evidence_ref.gene_ids and gene_set_hash; they MUST be consistent.
       - user-facing columns may show a compact gene snippet (gene_ids_suggest) for readability.
+
+    NOTE:
+      - Context REVIEW (proxy/llm/off) is owned by pipeline.py.
+      - select.py only provides selection-time context proxy for ranking/tiebreak.
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
-    ctx_review = _context_review_mode(card)
-    _dlog(
-        f"[select] ctx_review={ctx_review} mode_eff={mode_eff} backend={'yes' if backend else 'no'}"
-    )
+    _dlog(f"[select] mode_eff={mode_eff} backend={'yes' if backend else 'no'} k={k_eff}")
 
     # ---- LLM mode ----
     if mode_eff == "llm":
@@ -1656,8 +1004,6 @@ def select_claims(
             out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
             out_det["claim_mode"] = "deterministic"
             out_det["llm_notes"] = "llm requested but backend=None; deterministic used"
-            if ctx_review == "llm":
-                out_det["context_review_mode"] = "off"
             return out_det
 
         res = None
@@ -1708,29 +1054,15 @@ def select_claims(
             out_llm = out_llm.copy()
             out_llm["claim_mode"] = "llm"
             out_llm["llm_notes"] = notes
-            if ctx_review == "llm":
-                out_llm = _apply_context_review_llm(
-                    out_llm, card=card, backend=backend, seed=seed, outdir=outdir
-                )
             return out_llm
 
         out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
         out_det["claim_mode"] = "deterministic_fallback"
         out_det["llm_notes"] = notes or "llm returned fallback/empty; deterministic used"
-        if ctx_review == "llm":
-            out_det = _apply_context_review_llm(
-                out_det, card=card, backend=backend, seed=seed, outdir=outdir
-            )
         return out_det
 
     # ---- Deterministic ----
     out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
-
-    if ctx_review == "llm" and backend is not None:
-        out_det = _apply_context_review_llm(
-            out_det, card=card, backend=backend, seed=seed, outdir=outdir
-        )
-
     return out_det
