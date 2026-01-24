@@ -35,6 +35,10 @@ class RunConfig:
     run_meta_name: str = "run_meta.json"
     tau: float | None = None
     k_claims: int | None = None
+    stress_evidence_dropout_p: float | None = None
+    stress_evidence_dropout_min_keep: int | None = None
+    stress_contradictory_p: float | None = None
+    stress_contradictory_max_extra: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1743,10 +1747,26 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("stress")
 
-        p_drop = _env_float("LLMPATH_STRESS_EVIDENCE_DROPOUT_P", 0.0)
-        min_keep = _env_int("LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP", 1)
-        p_contra = _env_float("LLMPATH_STRESS_CONTRADICTORY_P", 0.0)
-        contra_cap = _env_int("LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA", 0)
+        p_drop = float(
+            cfg.stress_evidence_dropout_p
+            if cfg.stress_evidence_dropout_p is not None
+            else _env_float("LLMPATH_STRESS_EVIDENCE_DROPOUT_P", 0.0)
+        )
+        min_keep = int(
+            cfg.stress_evidence_dropout_min_keep
+            if cfg.stress_evidence_dropout_min_keep is not None
+            else _env_int("LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP", 1)
+        )
+        p_contra = float(
+            cfg.stress_contradictory_p
+            if cfg.stress_contradictory_p is not None
+            else _env_float("LLMPATH_STRESS_CONTRADICTORY_P", 0.0)
+        )
+        contra_cap = int(
+            cfg.stress_contradictory_max_extra
+            if cfg.stress_contradictory_max_extra is not None
+            else _env_int("LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA", 0)
+        )
 
         meta["inputs"]["stress"] = {
             "evidence_dropout_p": float(p_drop),

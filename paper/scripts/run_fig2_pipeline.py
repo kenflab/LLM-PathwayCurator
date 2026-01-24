@@ -584,6 +584,10 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None
             run_meta_name="run_meta.json",
             tau=float(job.tau),
             k_claims=int(job.k_claims),
+            stress_evidence_dropout_p=float(job.stress_evidence_dropout_p),
+            stress_evidence_dropout_min_keep=int(job.stress_evidence_dropout_min_keep),
+            stress_contradictory_p=float(job.stress_contradictory_p),
+            stress_contradictory_max_extra=int(job.stress_contradictory_max_extra),
         )
         run_pipeline(cfg)
 
@@ -964,19 +968,36 @@ def main() -> None:
                     if not dst_cancer:
                         _die("[run_fig2] internal error: context swap map missing cancer")
 
+                    # Source card (same cancer as evidence_table)
                     src_sc_path = CARD_DIR / f"{cancer}.{gate_mode}.sample_card.json"
                     src = _read_json(src_sc_path)
+
+                    # Destination card (swap-in context keys)
+                    dst_sc_path = CARD_DIR / f"{dst_cancer}.{gate_mode}.sample_card.json"
+                    if not dst_sc_path.exists():
+                        _die(
+                            f"[run_fig2] context_swap target card missing: {dst_sc_path} "
+                            f"(dst_cancer={dst_cancer}, gate_mode={gate_mode})"
+                        )
+                    dst = _read_json(dst_sc_path)
 
                     extra = src.get("extra", {})
                     if not isinstance(extra, dict):
                         extra = {}
 
                     extra["context_swap_from"] = str(src.get("disease", "")).strip()
-                    extra["context_swap_to"] = dst_cancer
+                    extra["context_swap_to"] = str(dst.get("disease", "")).strip()
+                    extra["context_swap_to_cancer"] = dst_cancer
                     src["extra"] = extra
 
-                    # Counterfactual: swap disease field (template-only).
-                    src["disease"] = dst_cancer
+                    # Counterfactual: swap core context keys (template-only; no external knowledge).
+                    for k in ("disease", "tissue", "perturbation", "comparison"):
+                        v = dst.get(k, "")
+                        if isinstance(v, str) and v.strip():
+                            src[k] = v
+                        elif v not in (None, "", []):
+                            # allow non-str (e.g., structured comparisons) if present
+                            src[k] = v
 
                     # Ensure tau + k_claims are set in the card copy.
                     src = _set_audit_tau(src, float(tau), k_claims=int(args.k_claims))

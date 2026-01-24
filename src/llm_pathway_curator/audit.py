@@ -252,6 +252,43 @@ def _get_context_proxy_pass_min(card: SampleCard, default: int = 1) -> int:
         return int(default)
 
 
+def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.2) -> float:
+    ex = _get_extra(card)
+    v = ex.get("context_proxy_warn_p", None)
+    if v is None:
+        return float(default)
+    try:
+        p = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, p))
+
+
+def _get_context_proxy_key_fields(
+    card: SampleCard, default: str = "context_keys,term_uid"
+) -> list[str]:
+    """
+    Comma-separated list of fields to build deterministic proxy key.
+    Allowed:
+    context_keys,
+    term_uid,
+    module_id,
+    gene_set_hash,
+    comparison,
+    cancer,
+    disease,
+    tissue,
+    perturbation,
+    condition
+    """
+    ex = _get_extra(card)
+    s = ex.get("context_proxy_key_fields", default)
+    if _is_na_scalar(s):
+        s = default
+    items = [t.strip().lower() for t in str(s).split(",") if t.strip()]
+    return items or [t.strip().lower() for t in str(default).split(",") if t.strip()]
+
+
 def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
     Tool contract (user-facing):
@@ -916,6 +953,53 @@ def _deterministic_uniform_0_1(key: str, salt: str = "") -> float:
     return (x % 1_000_000) / 1_000_000.0
 
 
+def _proxy_context_status(
+    *,
+    card: SampleCard,
+    row: pd.Series,
+    term_ids: list[str],
+    module_id: str,
+    gene_set_hash: str,
+) -> tuple[bool, str, str]:
+    """
+    Deterministic proxy context review:
+      - returns evaluated=True
+      - status is PASS for most, WARN for a small fraction (p_warn)
+    This avoids 'all WARN' collapse when context_score is uninformative.
+    """
+    p_warn = _get_context_proxy_warn_p(card, default=0.2)
+    key_fields = _get_context_proxy_key_fields(card, default="context_keys,term_uid")
+
+    # Build a stable key
+    parts: list[str] = []
+    for f in key_fields:
+        if f == "context_keys":
+            v = row.get("context_keys", "")
+            if not _is_na_scalar(v):
+                parts.append(str(v).strip())
+        elif f == "term_uid":
+            # resolved term_uids are preferred
+            parts.append(",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()})))
+        elif f == "module_id":
+            parts.append(str(module_id or "").strip())
+        elif f == "gene_set_hash":
+            parts.append(str(gene_set_hash or "").strip())
+        elif f in {"comparison", "cancer", "disease", "tissue", "perturbation", "condition"}:
+            parts.append(str(row.get(f, "")).strip())
+        else:
+            # ignore unknown fields silently
+            continue
+
+    key = "|".join([p for p in parts if p])
+    if not key:
+        key = str(gene_set_hash or "") or ",".join(term_ids)
+
+    u = _deterministic_uniform_0_1(key, salt="proxy_context_v2")
+    if u < float(p_warn):
+        return True, "WARN", f"proxy_context_v2: u={u:.3f} < p_warn={p_warn:.3f} key={key_fields}"
+    return True, "PASS", f"proxy_context_v2: u={u:.3f} >= p_warn={p_warn:.3f} key={key_fields}"
+
+
 def _apply_internal_evidence_dropout(
     *,
     genes: list[str],
@@ -1472,26 +1556,27 @@ def audit_claims(
         # FALLBACK = row context_review_* (LLM probe) or legacy row fields.
         c_eval, c_status, c_note = _extract_context_review_from_claim_json(cj_str)
 
-        # --- proxy promotion: if we only have context_score (no LLM review),
-        # turn it into PASS/WARN deterministically ---
-        if (not c_eval) and (not str(c_status or "").strip()):
-            if "context_score" in row.index:
-                cs_raw = row.get("context_score")
-                try:
-                    cs = None if _is_na_scalar(cs_raw) else float(cs_raw)
-                except Exception:
-                    cs = None
+        # --- proxy mode: avoid "all WARN" collapse.
+        # Use proxy ONLY when explicitly requested OR when context_score is a valid number.
+        context_review_mode = str(row.get("context_review_mode", "")).strip().lower()
 
-                if cs is not None:
-                    pass_min = _get_context_proxy_pass_min(card, default=1)
-                    if cs >= float(pass_min):
-                        c_eval = True
-                        c_status = "PASS"
-                        c_note = f"proxy_context: context_score={cs:g} >= pass_min={pass_min}"
-                    else:
-                        c_eval = True
-                        c_status = "WARN"
-                        c_note = f"proxy_context: context_score={cs:g} < pass_min={pass_min}"
+        cs_val = None
+        if "context_score" in row.index:
+            cs_raw = row.get("context_score")
+            try:
+                cs_val = None if _is_na_scalar(cs_raw) else float(cs_raw)
+            except Exception:
+                cs_val = None
+
+        if (not c_eval) and (not str(c_status or "").strip()):
+            if (context_review_mode == "proxy") or (cs_val is not None):
+                c_eval, c_status, c_note = _proxy_context_status(
+                    card=card,
+                    row=row,
+                    term_ids=term_ids,
+                    module_id=str(module_id or ""),
+                    gene_set_hash=str(gsh_norm or ""),
+                )
 
         # Row fallback (covers select._apply_context_review_llm output
         # even when claim_json not patched)

@@ -51,6 +51,7 @@ TOOL_KNOBS = {
     "max_per_module",
     "preselect_tau_gate",
     "enable_context_score_proxy",
+    "context_review_mode",
     # gate behavior only; generation happens elsewhere
     "context_gate_mode",
     "stress_gate_mode",
