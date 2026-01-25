@@ -50,6 +50,44 @@ def _getint(*names: str, default: int) -> int:
         return int(default)
 
 
+def _gettimeout_pair(
+    *,
+    connect_names: tuple[str, ...],
+    read_names: tuple[str, ...],
+    legacy_names: tuple[str, ...],
+    default_connect: float,
+    default_read: float,
+) -> tuple[float, float]:
+    """
+    Resolve (connect_timeout, read_timeout) from env with backward compatibility.
+
+    Priority:
+      1) explicit connect/read envs
+      2) legacy single timeout envs (applies to both)
+      3) defaults
+    """
+    c = _getfloat(*connect_names, default=float(default_connect))
+    r = _getfloat(*read_names, default=float(default_read))
+
+    # Legacy single timeout applies only if connect/read are not explicitly set.
+    legacy = _getenv(*legacy_names, default=None)
+    if legacy is not None:
+        try:
+            v = float(legacy)
+            # only override if explicit env not present
+            if _getenv(*connect_names, default=None) is None:
+                c = v
+            if _getenv(*read_names, default=None) is None:
+                r = v
+        except Exception:
+            pass
+
+    # sanity
+    c = max(0.5, float(c))
+    r = max(1.0, float(r))
+    return c, r
+
+
 def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
     """
     Create backend based on env.
@@ -477,13 +515,30 @@ class OllamaBackend(BaseLLMBackend):
         )
         if temperature is None:
             temperature = float(os.environ.get("LLMPATH_OLLAMA_TEMPERATURE", "0.0"))
-        if timeout is None:
-            timeout = float(os.environ.get("LLMPATH_OLLAMA_TIMEOUT", "120"))
+
+        # Backward compatibility:
+        # - timeout arg (if provided) applies to both connect/read
+        # - legacy env: LLMPATH_OLLAMA_TIMEOUT / LPC_OLLAMA_TIMEOUT
+        # New envs:
+        # - LLMPATH_OLLAMA_CONNECT_TIMEOUT / LPC_OLLAMA_CONNECT_TIMEOUT
+        # - LLMPATH_OLLAMA_READ_TIMEOUT / LPC_OLLAMA_READ_TIMEOUT
+        if timeout is not None:
+            connect_timeout = float(timeout)
+            read_timeout = float(timeout)
+        else:
+            connect_timeout, read_timeout = _gettimeout_pair(
+                connect_names=("LPC_OLLAMA_CONNECT_TIMEOUT", "LLMPATH_OLLAMA_CONNECT_TIMEOUT"),
+                read_names=("LPC_OLLAMA_READ_TIMEOUT", "LLMPATH_OLLAMA_READ_TIMEOUT"),
+                legacy_names=("LPC_OLLAMA_TIMEOUT", "LLMPATH_OLLAMA_TIMEOUT"),
+                default_connect=10.0,
+                default_read=120.0,
+            )
 
         self.host = str(host).rstrip("/")
         self.model_name = str(model_name)
         self.temperature = float(temperature)
-        self.timeout = float(timeout)
+        self.connect_timeout = float(connect_timeout)
+        self.read_timeout = float(read_timeout)
 
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
@@ -498,68 +553,86 @@ class OllamaBackend(BaseLLMBackend):
                 "options": {"temperature": self.temperature},
             }
             data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+
+            # Adaptive read-timeout escalation (deterministic ladder).
+            # NOTE: urllib urlopen() timeout is a SINGLE float seconds (no (connect,read) tuple).
+            max_escalations = _getint(
+                "LPC_OLLAMA_TIMEOUT_ESCALATIONS",
+                "LLMPATH_OLLAMA_TIMEOUT_ESCALATIONS",
+                default=2,
             )
-            try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    raw = resp.read().decode("utf-8", errors="replace")
-                obj = json.loads(raw)
-                content = (obj.get("response") or "").strip()
+            factor = _getfloat(
+                "LPC_OLLAMA_TIMEOUT_FACTOR",
+                "LLMPATH_OLLAMA_TIMEOUT_FACTOR",
+                default=2.0,
+            )
+            max_read = _getfloat(
+                "LPC_OLLAMA_READ_TIMEOUT_MAX",
+                "LLMPATH_OLLAMA_READ_TIMEOUT_MAX",
+                default=1800.0,
+            )
 
-                # Enforce json_mode contract: return valid JSON or soft error JSON
-                try:
-                    json.loads(content)
-                    return content
-                except Exception:
-                    # Often transient / sampling variance -> retryable
-                    return _soft_error_json(
-                        f"Ollama(/api/generate) returned non-JSON in json_mode: {content[:200]}",
-                        err_type="ollama_non_json",
-                        retryable=True,
-                    )
-            except Exception as e:
-                msg = str(e)
-                retryable = any(
-                    h in msg.lower() for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+            read_timeout = float(self.read_timeout)
+            escalations_used = 0
+
+            while True:
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
-                return _soft_error_json(msg, err_type="ollama_error", retryable=retryable)
+                try:
+                    # urllib accepts only float timeout (seconds)
+                    with urllib.request.urlopen(req, timeout=float(read_timeout)) as resp:
+                        raw = resp.read().decode("utf-8", errors="replace")
 
-        # --- non-json_mode: keep /api/chat ---
-        url = f"{self.host}/api/chat"
-        payload = {
-            "model": self.model_name,
-            "stream": False,
-            "messages": [{"role": "user", "content": prompt}],
-            "options": {"temperature": self.temperature},
-        }
+                    obj = json.loads(raw)
+                    content = (obj.get("response") or "").strip()
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+                    # Enforce json_mode contract: return valid JSON or soft error JSON
+                    try:
+                        json.loads(content)
+                        return content
+                    except Exception:
+                        return _soft_error_json(
+                            (
+                                "Ollama(/api/generate) returned non-JSON in json_mode: "
+                                f"{content[:200]}"
+                            ),
+                            err_type="ollama_non_json",
+                            retryable=True,
+                            extra={
+                                "connect_timeout_ignored_by_urllib": float(self.connect_timeout),
+                                "read_timeout": float(read_timeout),
+                                "escalations_used": int(escalations_used),
+                            },
+                        )
 
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-            obj = json.loads(raw)
+                except Exception as e:
+                    msg = str(e)
+                    is_timeout = ("timed out" in msg.lower()) or ("timeout" in msg.lower())
 
-            content = ""
-            if isinstance(obj, dict):
-                msg = obj.get("message") or {}
-                if isinstance(msg, dict):
-                    content = (msg.get("content") or "").strip()
-            return content if content else raw.strip()
+                    # escalate only for timeout-ish errors
+                    if is_timeout and escalations_used < int(max_escalations):
+                        escalations_used += 1
+                        read_timeout = min(float(max_read), float(read_timeout) * float(factor))
+                        continue
 
-        except Exception as e:
-            msg = str(e)
-            return f"Ollama Error: {msg}"
+                    retryable = any(
+                        h in msg.lower()
+                        for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+                    )
+                    return _soft_error_json(
+                        msg,
+                        err_type="ollama_error",
+                        retryable=retryable,
+                        extra={
+                            "connect_timeout_ignored_by_urllib": float(self.connect_timeout),
+                            "read_timeout": float(read_timeout),
+                            "escalations_used": int(escalations_used),
+                        },
+                    )
 
 
 class LocalLLMBackend(BaseLLMBackend):
