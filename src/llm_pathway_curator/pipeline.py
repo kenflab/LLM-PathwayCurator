@@ -100,6 +100,34 @@ def _safe_mkdir_outdir(outdir: str, force: bool) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
+def _dump_model(obj: Any) -> Any:
+    """
+    pydantic v2/v1 + 素のdict を吸収して JSON-able にする。
+    """
+    if obj is None:
+        return None
+    # pydantic v2
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        try:
+            return obj.model_dump()
+        except Exception:
+            pass
+    # pydantic v1
+    if hasattr(obj, "dict") and callable(obj.dict):
+        try:
+            return obj.dict()
+        except Exception:
+            pass
+    # already dict-like
+    if isinstance(obj, dict):
+        return obj
+    # best-effort fallback
+    try:
+        return json.loads(json.dumps(obj, default=str))
+    except Exception:
+        return str(obj)
+
+
 def _write_json(path: str | Path, obj: Any) -> None:
     """Atomic-ish JSON write: write temp then replace."""
     path = Path(path)
@@ -290,8 +318,22 @@ def _parse_ids(x: Any) -> list[str]:
     return uniq
 
 
-def _norm_gene_id(g: str) -> str:
-    return str(g).strip().upper()
+def _clean_gene_token(g: Any) -> str:
+    s = str(g).strip().strip('"').strip("'")
+    s = " ".join(s.split())
+    s = s.strip(",;|")
+    return s
+
+
+def _norm_gene_id(g: Any) -> str:
+    """
+    Canonical gene id normalization.
+
+    CONTRACT (must match audit.py / modules.py):
+      - trim quotes/whitespace/punctuation
+      - UPPERCASE to avoid casing drift across sources
+    """
+    return _clean_gene_token(g).upper()
 
 
 def _hash_gene_set_12(genes: list[str]) -> str:
@@ -462,39 +504,6 @@ def _card_condition(card: SampleCard) -> str:
 # -------------------------
 # Gate/review mode resolution (pipeline-owned; normalized)
 # -------------------------
-def _resolve_gate_review_compat(card: SampleCard) -> dict[str, Any]:
-    """
-    Guardrail:
-      hard gate + review off => guaranteed all-ABSTAIN (or all non-PASS)
-
-    Policy:
-      - If gate=hard and review is off/empty/invalid, auto-set review to 'proxy'
-    IMPORTANT:
-      - This function may adjust card.extra to make the *effective* card explicit.
-      - The pipeline MUST record this in run_meta and MUST also persist a resolved card.
-    """
-    ex = _get_card_extra(card)
-    gate_raw = str(ex.get("context_gate_mode", "") or "").strip().lower()
-    review_raw = str(ex.get("context_review_mode", "") or "").strip().lower()
-
-    gate = _norm_gate_mode(gate_raw, default="soft")
-    review = _norm_review_mode(review_raw, default="proxy")
-
-    if gate != "hard":
-        return {"compat_action": "none", "gate_mode": gate, "review_mode": review}
-
-    if review == "off":
-        _set_card_extra(card, "context_review_mode", "proxy")
-        return {
-            "compat_action": "auto_enable_context_review_proxy",
-            "gate_mode": "hard",
-            "review_mode_before": review_raw,
-            "review_mode_after": "proxy",
-        }
-
-    return {"compat_action": "none", "gate_mode": "hard", "review_mode": review}
-
-
 def _resolve_context_gate_mode(card: SampleCard, *, default: str = "soft") -> str:
     env_v = _env_str("LLMPATH_CONTEXT_GATE_MODE", "").strip().lower()
     if env_v:
@@ -511,6 +520,38 @@ def _resolve_context_review_mode(card: SampleCard, *, default: str = "proxy") ->
     ex = _get_card_extra(card)
     v = str(ex.get("context_review_mode", "") or "").strip().lower()
     return _norm_review_mode(v, default=default)
+
+
+def _enforce_gate_review_compat_effective(
+    card: SampleCard, *, gate_mode: str, review_mode: str
+) -> dict[str, Any]:
+    """
+    Guardrail:
+      hard gate + review off => guaranteed all-ABSTAIN (or all non-PASS)
+
+    Policy:
+      - If gate=hard and review is off, auto-set review to 'proxy'
+    IMPORTANT:
+      - Apply AFTER env>card resolution so incompatibility cannot reappear.
+      - Persist into card.extra for auditability.
+    """
+    gm = _norm_gate_mode(gate_mode, default="soft")
+    rm = _norm_review_mode(review_mode, default="proxy")
+
+    if gm != "hard":
+        return {"compat_action": "none", "gate_mode": gm, "review_mode": rm}
+
+    if rm == "off":
+        _set_card_extra(card, "context_gate_mode", "hard")
+        _set_card_extra(card, "context_review_mode", "proxy")
+        return {
+            "compat_action": "auto_enable_context_review_proxy",
+            "gate_mode": "hard",
+            "review_mode_before": "off",
+            "review_mode_after": "proxy",
+        }
+
+    return {"compat_action": "none", "gate_mode": "hard", "review_mode": rm}
 
 
 # -------------------------
@@ -1163,8 +1204,7 @@ def _ctx_ids_from_card(card: SampleCard) -> dict[str, str]:
         (swap_from if present else card condition)
       - ctx_id_effective: derived from "effective" condition
         (swap_to if present else original)
-    We keep tissue/perturbation/comparison unchanged
-    (unless you later decide to swap them too).
+    We keep tissue/perturbation/comparison unchanged.
     """
     swap = _context_swap_info(card)
     base_condition = str(_card_condition(card) or "").strip()
@@ -1188,14 +1228,6 @@ def _ctx_ids_from_card(card: SampleCard) -> dict[str, str]:
         "swap_from": cond_original if swap["swap_from"] else "",
         "swap_to": cond_effective if swap["swap_to"] else "",
     }
-
-
-def _ctx_id_from_card(card: SampleCard) -> str:
-    """
-    Backward-compatible helper used by older code paths.
-    IMPORTANT: returns the *effective scoring* ctx_id (swap applied if present).
-    """
-    return _ctx_ids_from_card(card)["ctx_id_effective"]
 
 
 def _read_json_quiet(path: str | Path) -> dict[str, Any]:
@@ -1646,14 +1678,11 @@ def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in extracted_df.columns:
         if col not in out.columns:
-            # create as object so we can store lists/dicts/strings safely
             out[col] = pd.Series([pd.NA] * len(out), index=out.index, dtype="object")
         else:
-            # ensure destination dtype is compatible
             if out[col].dtype != "object":
                 out[col] = out[col].astype("object")
 
-        # always treat extracted values as objects (may include list/dict)
         if extracted_df[col].dtype != "object":
             extracted_df[col] = extracted_df[col].astype("object")
 
@@ -1684,7 +1713,7 @@ def _ensure_context_review_fields(proposed: pd.DataFrame, *, gate_mode: str) -> 
     if "context_notes" not in out.columns:
         out["context_notes"] = ""
     if "context_confidence" not in out.columns:
-        out["context_confidence"] = pd.NA  # numeric slot
+        out["context_confidence"] = pd.NA
     else:
         out["context_confidence"] = pd.to_numeric(out["context_confidence"], errors="coerce")
 
@@ -1737,12 +1766,11 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
             if k in row.index and not _is_na_scalar(row.get(k)):
                 v = row.get(k)
 
-                # normalize types for JSON
                 if k == "context_confidence":
                     try:
                         v = float(v)
                     except Exception:
-                        continue  # don't write garbage
+                        continue
 
                 if isinstance(v, (pd.Timestamp,)):
                     v = str(v)
@@ -1840,17 +1868,34 @@ def _ensure_proxy_context_score_columns(
 
     out = proposed.copy()
 
-    # Use explicit ctx_id when the pipeline wants to swap the scoring context.
-    # This makes context_swap runs *guaranteed* to change proxy scores.
+    def _split_ctx_id(ctx_id: str) -> tuple[str, str, str, str]:
+        # ctx_id is "condition|tissue|perturbation|comparison" but be tolerant.
+        parts = [p.strip() for p in str(ctx_id or "").split("|")]
+        while len(parts) < 4:
+            parts.append("")
+        return parts[0], parts[1], parts[2], parts[3]
+
+    # Decide ctx_id (effective scoring context)
     if ctx_id_override is not None and str(ctx_id_override).strip():
         ctx_id = str(ctx_id_override).strip()
-        condition = ctx_id.split("|", 1)[0] if "|" in ctx_id else ctx_id
+        condition, tissue, perturb, comp = _split_ctx_id(ctx_id)
     else:
         condition = _card_condition(card)
         tissue = str(getattr(card, "tissue", "") or "").strip()
         perturb = str(getattr(card, "perturbation", "") or "").strip()
         comp = str(getattr(card, "comparison", "") or "").strip()
         ctx_id = f"{condition}|{tissue}|{perturb}|{comp}"
+
+    # If already attached by earlier steps, follow that ctx_id for consistency
+    existing_ctx_id = None
+    if "context_ctx_id" in out.columns and len(out):
+        v = out["context_ctx_id"].iloc[0]
+        if not _is_na_scalar(v) and str(v).strip():
+            existing_ctx_id = str(v).strip()
+
+    if existing_ctx_id:
+        ctx_id = existing_ctx_id
+        condition, tissue, perturb, comp = _split_ctx_id(ctx_id)
 
     if "context_ctx_id" not in out.columns:
         out["context_ctx_id"] = ctx_id
@@ -1859,12 +1904,14 @@ def _ensure_proxy_context_score_columns(
             lambda x: ctx_id if _is_na_scalar(x) or (not str(x).strip()) else str(x)
         )
 
+    # deterministic signature + token count
     toks: list[str] = []
     try:
         for s in (condition, tissue, perturb, comp):
             toks.extend(_tokenize_context_text(s))
     except Exception:
         toks = []
+
     tok_n = int(len(toks))
     sig_payload = (ctx_id + "|" + ",".join(toks)).encode("utf-8")
     sig12 = hashlib.sha256(sig_payload).hexdigest()[:12]
@@ -1883,6 +1930,7 @@ def _ensure_proxy_context_score_columns(
             lambda x: sig12 if _is_na_scalar(x) or (not str(x).strip()) else str(x)
         )
 
+    # term_uid for u01
     if "term_uid" not in out.columns:
         if {"source", "term_id"}.issubset(set(out.columns)):
             out["term_uid"] = (
@@ -1891,11 +1939,15 @@ def _ensure_proxy_context_score_columns(
         elif "term_id" in out.columns:
             out["term_uid"] = out["term_id"].astype(str).str.strip()
         else:
-            # cannot compute u01
             if "context_score_proxy_u01" not in out.columns:
                 out["context_score_proxy_u01"] = 0.0
             if "context_score_proxy_u01_norm" not in out.columns:
                 out["context_score_proxy_u01_norm"] = out["context_score_proxy_u01"]
+            # backward-compat
+            if "context_score_proxy" not in out.columns:
+                out["context_score_proxy"] = out["context_score_proxy_u01"]
+            if "context_score_proxy_norm" not in out.columns:
+                out["context_score_proxy_norm"] = out["context_score_proxy_u01_norm"]
             return out
 
     context_keys = ["condition", "tissue", "perturbation", "comparison"]
@@ -1928,13 +1980,11 @@ def _ensure_context_score_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
 
-    # Ensure numeric confidence exists (do NOT overwrite non-NA)
     if "context_confidence" in out.columns:
         conf = pd.to_numeric(out["context_confidence"], errors="coerce")
     else:
         conf = pd.Series([pd.NA] * len(out), index=out.index, dtype="float")
 
-    # Preferred fallback order
     proxy_norm = (
         pd.to_numeric(out["context_score_proxy_norm"], errors="coerce")
         if "context_score_proxy_norm" in out.columns
@@ -1946,13 +1996,11 @@ def _ensure_context_score_columns(df: pd.DataFrame) -> pd.DataFrame:
         else pd.Series([pd.NA] * len(out), index=out.index, dtype="float")
     )
 
-    # Materialize context_score
     if "context_score" in out.columns:
         cs = pd.to_numeric(out["context_score"], errors="coerce")
     else:
         cs = pd.Series([pd.NA] * len(out), index=out.index, dtype="float")
 
-    # Fill only where missing
     cs = cs.where(~cs.isna(), conf)
     cs = cs.where(~cs.isna(), proxy_norm)
     cs = cs.where(~cs.isna(), u01_norm)
@@ -2128,10 +2176,13 @@ def _proxy_context_review(
         }
         return out, meta
 
-    # ensure u01 columns exist (and do NOT overwrite weight-based context_score_proxy)
-    out = _ensure_proxy_context_score_columns(out, card, ctx_id_override=None)
+    ctx_id_override = None
+    if "context_ctx_id" in out.columns and len(out):
+        v = out["context_ctx_id"].iloc[0]
+        if not _is_na_scalar(v) and str(v).strip():
+            ctx_id_override = str(v).strip()
+    out = _ensure_proxy_context_score_columns(out, card, ctx_id_override=ctx_id_override)
 
-    # thresholds
     p_fail = float(_env_float("LLMPATH_PROXY_CONTEXT_P_FAIL", 0.05))
     p_warn = float(_env_float("LLMPATH_PROXY_CONTEXT_P_WARN", 0.20))
     p_fail = max(0.0, min(1.0, p_fail))
@@ -2139,7 +2190,6 @@ def _proxy_context_review(
     if p_warn < p_fail:
         p_warn = p_fail
 
-    # optional anchor info
     anchor_info = (
         _build_anchor_modules_from_distilled(distilled_for_proxy, card)
         if distilled_for_proxy is not None
@@ -2178,7 +2228,6 @@ def _proxy_context_review(
         out.at[i, "context_evaluated"] = True
         out.at[i, "context_confidence"] = u
 
-        # base decision by u01
         if u < p_fail:
             st = "FAIL"
             rsn = "PROXY_U01_LOW_FAIL"
@@ -2189,7 +2238,6 @@ def _proxy_context_review(
             st = "PASS"
             rsn = "PROXY_U01_OK"
 
-        # anchor sanity (conservative: PASS -> ABSTAIN only)
         mid = ""
         if claim_mod_col is not None:
             mid = (
@@ -2220,8 +2268,6 @@ def _proxy_context_review(
         out.at[i, "context_status"] = st
         out.at[i, "context_reason"] = rsn
 
-        # notes
-
         ctx_sig = ""
         if "context_signature" in out.columns:
             ctx_sig = str(out.at[i, "context_signature"])
@@ -2231,7 +2277,6 @@ def _proxy_context_review(
             f"u={u:.3f} p_fail={p_fail:.3f} p_warn={p_warn:.3f} "
             f"key={key_list} ctx_sig={ctx_sig}"
         )
-
         if anchor_note:
             notes = notes + " " + anchor_note
         out.at[i, "context_notes"] = notes
@@ -2297,7 +2342,6 @@ def _apply_context_review(
         }
 
     if rm == "llm" and backend is None:
-        # Reviewer-proof: do not pretend LLM mode ran.
         out, meta = _proxy_context_review(
             proposed,
             card,
@@ -2363,10 +2407,6 @@ def _restore_context_scores_into_audit_log(
     """
     Ensure audit_log.tsv always contains context_score
     (and key proxy fields) if they exist in proposed.
-
-    Rationale (paper/reviewer-proof):
-      - audit_claims may drop columns depending on implementation/version.
-      - downstream report/figures should not have variant-dependent missing columns.
     """
     out = audited.copy()
     if out is None or out.empty:
@@ -2433,18 +2473,38 @@ def _apply_context_gate_to_audited(
     if "claim_id" not in out.columns or "claim_id" not in proposed.columns:
         return out
 
+    # --- Build proposed status table (source of truth for hard gating) ---
     p = proposed[["claim_id"]].copy()
-    p["context_status"] = proposed["context_status"] if "context_status" in proposed.columns else ""
-    p = p.drop_duplicates(subset=["claim_id"], keep="first")
-    out2 = out.merge(p, on="claim_id", how="left", suffixes=("", "_from_proposed"))
-
-    if "context_status" in out2.columns:
-        ctx = out2["context_status"].astype(str).str.strip().str.upper()
-    elif "context_status_from_proposed" in out2.columns:
-        ctx = out2["context_status_from_proposed"].astype(str).str.strip().str.upper()
+    if "context_status" in proposed.columns:
+        p["context_status_from_proposed"] = (
+            proposed["context_status"].astype(str).fillna("").map(lambda s: str(s).strip())
+        )
     else:
-        return out
+        p["context_status_from_proposed"] = ""
 
+    p = p.drop_duplicates(subset=["claim_id"], keep="first")
+
+    # If audited already has this column, drop it to avoid merge suffixing.
+    if "context_status_from_proposed" in out.columns:
+        out = out.drop(columns=["context_status_from_proposed"])
+
+    out2 = out.merge(p, on="claim_id", how="left", suffixes=("", "_p"))
+
+    # If merge still suffixed (extremely defensive), recover the column.
+    if "context_status_from_proposed" not in out2.columns:
+        for cand in (
+            "context_status_from_proposed_p",
+            "context_status_from_proposed_x",
+            "context_status_from_proposed_y",
+        ):
+            if cand in out2.columns:
+                out2["context_status_from_proposed"] = out2[cand]
+                break
+        else:
+            # Nothing to gate with
+            return out2
+
+    ctx = out2["context_status_from_proposed"].astype(str).str.strip().str.upper()
     force = ~ctx.eq("PASS")
 
     if "status" not in out2.columns:
@@ -2459,6 +2519,7 @@ def _apply_context_gate_to_audited(
 
     if downgrade.any():
         out2.loc[downgrade, "status"] = "ABSTAIN"
+
         ar = out2.loc[downgrade, "abstain_reason"].astype(str)
         out2.loc[downgrade, "abstain_reason"] = ar.mask(
             ar.str.len() > 0, ar + ";CONTEXT_GATE"
@@ -2543,19 +2604,31 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["step"] = step
         _write_json(meta_path, meta)
 
-    def _call_compat(fn, /, *args, **kwargs):
+    def _call_compat(fn: Any, *args: Any, **kwargs: Any) -> Any:
         """
-        Call fn(*args, **kwargs) but drop kwargs not accepted by fn signature.
-        IMPORTANT: do NOT swallow exceptions raised inside fn.
+        Call fn(*args, **kwargs) but drop kwargs not accepted by fn signature,
+        UNLESS fn accepts **kwargs (VAR_KEYWORD), in which case pass all kwargs.
+
+        This keeps pipeline resilient across incremental refactors.
         """
         try:
             sig = inspect.signature(fn)
         except (TypeError, ValueError):
             return fn(*args, **kwargs)
 
+        # If callee has **kwargs, do not filter.
+        for p in sig.parameters.values():
+            if p.kind == inspect.Parameter.VAR_KEYWORD:
+                return fn(*args, **kwargs)
+
         allowed = set(sig.parameters.keys())
         filt = {k: v for k, v in kwargs.items() if k in allowed}
         return fn(*args, **filt)
+
+    def _need_llm_backend(*, claim_mode: str, context_review_mode: str) -> bool:
+        cm = str(claim_mode).strip().lower()
+        rm = str(context_review_mode).strip().lower()
+        return (cm == "llm") or (rm == "llm")
 
     try:
         _mark_step("normalize_inputs")
@@ -2570,19 +2643,11 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         ev = ev_tbl.df.copy()
 
-        # Keep original card separate from the effective (possibly compat-adjusted) card.
         card_original = SampleCard.from_json(cfg.sample_card)
         try:
-            # pydantic v2
-            card = card_original.model_copy(deep=True)
+            card = card_original.model_copy(deep=True)  # pydantic v2
         except Exception:
-            # best-effort fallback
-            card = card_original
-
-        compat = _resolve_gate_review_compat(card)
-        meta.setdefault("inputs", {}).setdefault("claims", {})
-        meta["inputs"]["claims"]["context_gate_review_compat"] = compat
-        _write_json(meta_path, meta)
+            card = card_original  # best-effort fallback
 
         condition = _card_condition(card)
 
@@ -2607,14 +2672,13 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         effective_tau = _resolve_tau(cfg.tau, card)
 
-        # Persist BOTH: original and resolved card, to make compat-adjustments auditable.
         sc_original_path = outdir / "sample_card.original.json"
-        _write_json(sc_original_path, card_original.model_dump())
+        _write_json(sc_original_path, _dump_model(card_original))
         meta["artifacts"]["sample_card_original_json"] = str(sc_original_path)
         meta["inputs"]["sample_card_original_sha256"] = _sha256_file(sc_original_path)
 
         sc_path = outdir / "sample_card.resolved.json"
-        _write_json(sc_path, card.model_dump())
+        _write_json(sc_path, _dump_model(card))
         meta["artifacts"]["sample_card_resolved_json"] = str(sc_path)
         meta["inputs"]["sample_card_resolved_sha256"] = _sha256_file(sc_path)
 
@@ -2676,46 +2740,54 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("select_claims")
 
-        context_gate_mode = _resolve_context_gate_mode(card, default="soft")
-        context_review_mode = _resolve_context_review_mode(card, default="proxy")
+        # Resolve gate/review modes (env > card.extra),
+        # then enforce compatibility on the FINAL modes.
+        context_gate_mode = _norm_gate_mode(
+            _resolve_context_gate_mode(card, default="soft"), default="soft"
+        )
+        context_review_mode = _norm_review_mode(
+            _resolve_context_review_mode(card, default="proxy"), default="proxy"
+        )
 
-        # normalize (reviewer-proof)
-        context_gate_mode = _norm_gate_mode(context_gate_mode, default="soft")
-        context_review_mode = _norm_review_mode(context_review_mode, default="proxy")
+        # Final guardrail: hard + off => auto enable proxy review (reviewer-proof)
+        compat_final: dict[str, Any] = {"compat_action": "none"}
+        if context_gate_mode == "hard" and context_review_mode == "off":
+            context_review_mode = "proxy"
+            _set_card_extra(card, "context_review_mode", "proxy")
+            compat_final = {
+                "compat_action": "auto_enable_context_review_proxy",
+                "gate_mode": "hard",
+                "review_mode_before": "off",
+                "review_mode_after": "proxy",
+                "source": "final_modes(env>card.extra)",
+            }
+
+        meta.setdefault("inputs", {}).setdefault("claims", {})
+        meta["inputs"]["claims"]["context_gate_review_compat_final"] = compat_final
+        _write_json(meta_path, meta)
 
         seed0 = int(cfg.seed or 42)
 
-        claim_backend: BaseLLMBackend | None = None
-        claim_notes = ""
         claim_mode_env = _env_str("LLMPATH_CLAIM_MODE", "").strip().lower()
+        mode_arg = "llm" if claim_mode_env == "llm" else "deterministic"
 
-        if claim_mode_env == "llm":
+        # Backend: init once if either claim or review needs it.
+        shared_backend: BaseLLMBackend | None = None
+        shared_notes = ""
+        if _need_llm_backend(claim_mode=claim_mode_env, context_review_mode=context_review_mode):
             try:
-                claim_backend = get_backend_from_env(seed=seed0)
+                shared_backend = get_backend_from_env(seed=seed0)
             except Exception as e:
-                claim_backend = None
-                claim_notes = f"claim_backend_init_error:{type(e).__name__}"
+                shared_backend = None
+                shared_notes = f"backend_init_error:{type(e).__name__}"
 
-        review_backend: BaseLLMBackend | None = None
-        review_notes = ""
-        if context_review_mode == "llm":
-            try:
-                review_backend = get_backend_from_env(seed=seed0)
-            except Exception as e:
-                review_backend = None
-                review_notes = f"review_backend_init_error:{type(e).__name__}"
+        claim_backend = shared_backend if claim_mode_env == "llm" else None
+        review_backend = shared_backend if context_review_mode == "llm" else None
 
-        # IMPORTANT: if claims are deterministic but review is llm, we still want a backend
-        # available to select.py
-        backend_for_select: BaseLLMBackend | None = claim_backend
-        backend_for_select_role = "claim" if claim_backend is not None else ""
-        if (
-            backend_for_select is None
-            and context_review_mode == "llm"
-            and review_backend is not None
-        ):
-            backend_for_select = review_backend
-            backend_for_select_role = "review"
+        backend_for_select: BaseLLMBackend | None = claim_backend or review_backend
+        backend_for_select_role = (
+            "claim" if claim_backend is not None else ("review" if review_backend else "none")
+        )
 
         meta["inputs"]["llm"] = {
             "claim": {
@@ -2723,18 +2795,18 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 "claim_mode_env": claim_mode_env,
                 "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
                 "backend_enabled": bool(claim_backend is not None),
-                "backend_notes": claim_notes,
+                "backend_notes": shared_notes if (claim_mode_env == "llm") else "",
             },
             "review": {
                 "enabled": (context_review_mode == "llm"),
                 "review_mode": context_review_mode,
                 "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
                 "backend_enabled": bool(review_backend is not None),
-                "backend_notes": review_notes,
+                "backend_notes": shared_notes if (context_review_mode == "llm") else "",
             },
             "select_entrypoint": {
                 "backend_attached": bool(backend_for_select is not None),
-                "backend_role": backend_for_select_role or "none",
+                "backend_role": backend_for_select_role,
             },
         }
 
@@ -2749,10 +2821,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 "context_review_mode": context_review_mode,
             }
         )
+        _write_json(meta_path, meta)
 
-        mode_arg = "llm" if claim_mode_env == "llm" else "deterministic"
-
-        # Pass context/review knobs into select_claims in a backward-compatible way.
         proposed = _call_compat(
             select_claims,
             distilled2,
@@ -2789,13 +2859,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed = _ensure_claim_payload_and_id(proposed, card)
         proposed = _ensure_context_review_fields(proposed, gate_mode=context_gate_mode)
 
-        # -------------------------
-        # Context-score (default-on):
-        #   - always compute u01 proxy (later)
-        #   - optionally compute module×context weights proxy if corpus available
-        #   - IMPORTANT: if context_swap is present, scoring uses ctx_id_effective (swap applied)
-        # AFTER claim payload enforcement, BEFORE context review
-        # -------------------------
+        # Context-score: compute proxies (weights if available) BEFORE review
         ctx_ids = _ctx_ids_from_card(card)
         ctx_id_original = ctx_ids["ctx_id_original"]
         ctx_id_effective = ctx_ids["ctx_id_effective"]
@@ -2855,7 +2919,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["inputs"]["claims"]["context_rerank"] = {"enabled": bool(rerank), "lambda": float(lam)}
         _write_json(meta_path, meta)
 
-        # Context review (contract fields + deterministic proxy, or llm-marker)
         proposed, ctx_review_meta = _apply_context_review(
             proposed,
             card,
@@ -2866,18 +2929,39 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             distilled_for_proxy=distilled2,
         )
 
-        # Always ensure u01 proxy columns exist (default-on).
-        # IMPORTANT: use ctx_id_effective so context_swap changes the score deterministically.
         proposed = _ensure_proxy_context_score_columns(
             proposed, card, ctx_id_override=ctx_id_effective
         )
 
-        # Preserve both ids in the table for figures/debugging (variant-proof).
         proposed["context_ctx_id_original"] = ctx_id_original
         proposed["context_ctx_id_effective"] = ctx_id_effective
         proposed["context_swap_from"] = ctx_ids.get("swap_from", "")
         proposed["context_swap_to"] = ctx_ids.get("swap_to", "")
         proposed = _ensure_context_score_columns(proposed)
+
+        src = "unknown"
+        if (
+            "context_confidence" in proposed.columns
+            and pd.to_numeric(proposed["context_confidence"], errors="coerce").notna().any()
+        ):
+            src = "review_confidence"
+        elif (
+            "context_score_proxy_norm" in proposed.columns
+            and pd.to_numeric(proposed["context_score_proxy_norm"], errors="coerce").notna().any()
+        ):
+            src = "module_weight_proxy"
+        elif (
+            "context_score_proxy_u01_norm" in proposed.columns
+            and pd.to_numeric(proposed["context_score_proxy_u01_norm"], errors="coerce")
+            .notna()
+            .any()
+        ):
+            src = "hash_u01_proxy"
+
+        meta.setdefault("inputs", {}).setdefault("claims", {})
+        meta["inputs"]["claims"]["context_score_source"] = src
+        _write_json(meta_path, meta)
+
         proposed = _canonicalize_claim_json_column(proposed)
 
         meta["inputs"]["claims"].update(
@@ -3036,6 +3120,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("audit")
         audited = _call_compat(audit_claims, proposed, distilled2, card, tau=effective_tau)
+        audited = _restore_claim_payload_into_audit_log(audited, proposed)
         audited = _restore_context_scores_into_audit_log(audited, proposed)
         audited = _apply_context_gate_to_audited(audited, proposed, gate_mode=context_gate_mode)
 

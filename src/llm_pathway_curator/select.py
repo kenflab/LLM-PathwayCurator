@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
 import re
 import sys
-from collections.abc import Callable
+import time
 from typing import Any
 
 import numpy as np
@@ -104,9 +105,22 @@ def _validate_k(k: Any) -> int:
     return kk
 
 
-def _norm_gene_id(g: str) -> str:
-    # align with audit.py/pipeline.py to avoid spurious drift
-    return str(g).strip().upper()
+def _clean_gene_token(g: Any) -> str:
+    s = str(g).strip().strip('"').strip("'")
+    s = " ".join(s.split())
+    s = s.strip(",;|")
+    return s
+
+
+def _norm_gene_id(g: Any) -> str:
+    """
+    Canonical gene id normalization.
+
+    CONTRACT (must match audit.py / modules.py):
+      - trim quotes/whitespace/punctuation
+      - UPPERCASE to avoid casing drift across sources
+    """
+    return _clean_gene_token(g).upper()
 
 
 def _norm_direction(x: Any) -> str:
@@ -167,9 +181,9 @@ def _as_gene_list(x: Any) -> list[str]:
 
 def _hash_gene_set_audit(genes: list[str]) -> str:
     """
-    Audit-grade fingerprint should be SET-stable:
+    Audit-grade fingerprint (SET-stable):
       - same gene set -> same hash, regardless of order
-      - normalize IDs to reduce casing drift
+      - uses _norm_gene_id() (trim + UPPERCASE)
     """
     payload = ",".join(sorted({_norm_gene_id(g) for g in genes if str(g).strip()}))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
@@ -225,16 +239,122 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 
 
 # -------------------------
+# Context swap-aware "effective context" (CRITICAL)
+# -------------------------
+def _is_context_swap(card: SampleCard) -> bool:
+    """
+    Detect paper ablation cards (context_swap/shuffled_context).
+    """
+    ex = _get_extra(card)
+    for k in ["context_swap_to", "context_swap_from", "context_swap_to_cancer"]:
+        v = ex.get(k, None)
+        if isinstance(v, str) and v.strip():
+            return True
+        if v not in (None, "", [], {}):
+            return True
+    v2 = ex.get("shuffled_context", None)
+    if isinstance(v2, bool) and v2:
+        return True
+    if isinstance(v2, str) and v2.strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return False
+
+
+def _effective_context_value(card: SampleCard, field: str) -> str:
+    """
+    Single source of truth for selection-time context proxy inputs.
+
+    Key idea:
+      - If context_swap is active, card.extra may carry the swapped condition/cancer.
+      - Many cards may have disease=None; relying on card.condition/disease alone collapses proxy.
+    """
+    ex = _get_extra(card)
+
+    # For "condition", prefer swapped-to condition if present.
+    if field == "condition":
+        # common pattern: swap_to is the *new condition / cancer label*
+        v = ex.get("context_swap_to", None)
+        if isinstance(v, str) and v.strip():
+            return str(v).strip()
+
+        # sometimes only cancer swap is stored
+        v2 = ex.get("context_swap_to_cancer", None)
+        if isinstance(v2, str) and v2.strip():
+            return str(v2).strip()
+
+        # fallback to card.condition then card.disease
+        base = _card_text(card, "condition", "disease")
+        if base.strip():
+            return base.strip()
+
+        # last resort: if a plain "cancer" field exists on card
+        c = getattr(card, "cancer", None)
+        if c is not None and str(c).strip():
+            return str(c).strip()
+
+        return ""
+
+    # For cancer/disease explicit fields, allow swap_to_cancer to influence.
+    if field in {"cancer", "disease"}:
+        v = ex.get("context_swap_to_cancer", None)
+        if isinstance(v, str) and v.strip():
+            return str(v).strip()
+        base = _card_text(card, field, None)
+        if base.strip():
+            return base.strip()
+        return ""
+
+    # passthrough fields (tissue/perturbation/comparison)
+    if field in {"tissue", "perturbation", "comparison"}:
+        base = _card_text(card, field, None)
+        return base.strip()
+
+    return _card_text(card, field, None).strip()
+
+
+def _context_signature(card: SampleCard) -> str:
+    """
+    Compact signature of the context used for deterministic proxy.
+
+    MUST change when swap_to/from changes.
+    """
+    ex = _get_extra(card)
+
+    cond = _effective_context_value(card, "condition").strip().lower()
+    tissue = _effective_context_value(card, "tissue").strip().lower()
+    pert = _effective_context_value(card, "perturbation").strip().lower()
+    comp = _effective_context_value(card, "comparison").strip().lower()
+
+    # Explicitly include swap markers if present (even if cond is empty).
+    sw_from = str(ex.get("context_swap_from", "") or "").strip().lower()
+    sw_to = str(ex.get("context_swap_to", "") or "").strip().lower()
+    sw_to_c = str(ex.get("context_swap_to_cancer", "") or "").strip().lower()
+
+    payload = (
+        f"{cond}|{tissue}|{pert}|{comp}|"
+        f"swap_from={sw_from}|swap_to={sw_to}|swap_to_cancer={sw_to_c}"
+    )
+
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+# -------------------------
 # Context proxy (deterministic) - selection-time only
-# (NOTE: context REVIEW belongs to pipeline.py; this is only for ranking/tiebreak.)
 # -------------------------
 def _context_tokens(card: SampleCard) -> list[str]:
+    """
+    Deterministic tokenization for selection-time proxy.
+
+    CRITICAL:
+      - Must use swap-aware effective context, otherwise swap has no effect.
+    """
     toks: list[str] = []
     for v in [
-        _card_text(card, "condition", "disease"),
-        _card_text(card, "tissue", None),
-        _card_text(card, "perturbation", None),
-        _card_text(card, "comparison", None),
+        _effective_context_value(card, "condition"),
+        _effective_context_value(card, "tissue"),
+        _effective_context_value(card, "perturbation"),
+        _effective_context_value(card, "comparison"),
+        _effective_context_value(card, "cancer"),
     ]:
         s = str(v).strip().lower()
         if not s or s in _NA_TOKENS_L:
@@ -256,14 +376,12 @@ def _context_keys(card: SampleCard) -> list[str]:
     Backward compat: if disease exists but condition missing, still emit "condition".
     """
     keys: list[str] = []
-    cond = _card_text(card, "condition", "disease").strip().lower()
+    cond = _effective_context_value(card, "condition").strip().lower()
     if cond and cond not in _NA_TOKENS_L:
         keys.append("condition")
 
     for k in ["tissue", "perturbation", "comparison"]:
-        v = getattr(card, k, None)
-        if v is None:
-            continue
+        v = _effective_context_value(card, k)
         s = str(v).strip().lower()
         if not s or s in _NA_TOKENS_L:
             continue
@@ -272,29 +390,10 @@ def _context_keys(card: SampleCard) -> list[str]:
     return keys
 
 
-def _is_context_swap(card: SampleCard) -> bool:
-    """
-    Detect paper ablation cards (context_swap/shuffled_context).
-    """
-    ex = _get_extra(card)
-    for k in ["context_swap_to", "context_swap_from", "context_swap_to_cancer"]:
-        v = ex.get(k, None)
-        if isinstance(v, str) and v.strip():
-            return True
-        if v not in (None, "", [], {}):
-            return True
-    v2 = ex.get("shuffled_context", None)
-    if isinstance(v2, bool) and v2:
-        return True
-    if isinstance(v2, str) and v2.strip().lower() in {"1", "true", "yes", "on"}:
-        return True
-    return False
-
-
 # -------------------------
 # Context selection mode (deterministic, explicit)
 # -------------------------
-_SELECT_CONTEXT_ENV = "LLMPATH_SELECT_CONTEXT_MODE"  # off|proxy (default off)
+_SELECT_CONTEXT_ENV = "LLMPATH_SELECT_CONTEXT_MODE"  # off|proxy|review (default off)
 
 # IMPORTANT:
 # Avoid collision with pipeline's LLMPATH_CONTEXT_GATE_MODE semantics.
@@ -305,27 +404,78 @@ _SELECT_CONTEXT_GATE_ENV = "LLMPATH_SELECT_CONTEXT_GATE_MODE"  # off|note|hard (
 _LEGACY_CONTEXT_GATE_ENV = "LLMPATH_CONTEXT_GATE_MODE"
 
 
+def _context_review_mode_card(card: SampleCard) -> str:
+    """
+    Pipeline/sample_card controlled context review mode.
+
+    Values (paper-facing):
+      - off
+      - proxy
+      - llm
+
+    We map these to selection-time context usage:
+      - llm   -> review   (use pipeline-produced context_status/context_evaluated)
+      - proxy -> proxy
+      - off   -> off
+    """
+    ex = _get_extra(card)
+    v = str(ex.get("context_review_mode", "")).strip().lower()
+    if v in {"off", "none", "disable", "disabled"}:
+        return "off"
+    if v in {"proxy"}:
+        return "proxy"
+    if v in {"llm"}:
+        return "llm"
+    return ""
+
+
 def _select_context_mode(card: SampleCard) -> str:
     """
-    Selection-time context usage (deterministic proxy).
-    Priority: env > auto(context_swap) > card.extra > legacy knob.
+    Selection-time context usage.
+
+    Values:
+      - off: do not use context in C1 ranking/gate
+      - proxy: compute deterministic proxy (swap-aware)
+      - review: use pipeline-produced context_status/context_evaluated if present;
+               fallback to proxy if missing
+
+    Priority:
+      1) env (LLMPATH_SELECT_CONTEXT_MODE)
+      2) auto(context_swap)
+      3) card.extra.select_context_mode
+      4) card.extra.context_review_mode  (NEW: llm/proxy/off -> review/proxy/off)
+      5) legacy SampleCard getter
     """
     env = str(os.environ.get(_SELECT_CONTEXT_ENV, "")).strip().lower()
     if env:
+        if env in {"review"}:
+            return "review"
         if env in {"proxy", "on", "true", "yes", "y", "1"}:
             return "proxy"
         return "off"
 
+    # auto-enable proxy for swap ablation (paper-facing)
     if _is_context_swap(card):
         return "proxy"
 
     ex = _get_extra(card)
     v = str(ex.get("select_context_mode", "")).strip().lower()
+    if v in {"review"}:
+        return "review"
     if v in {"proxy", "on", "true", "yes", "y", "1"}:
         return "proxy"
     if v in {"off", "disable", "disabled", "none"}:
         return "off"
 
+    crm = _context_review_mode_card(card)
+    if crm == "llm":
+        return "review"
+    if crm == "proxy":
+        return "proxy"
+    if crm == "off":
+        return "off"
+
+    # legacy getter
     try:
         legacy = bool(card.enable_context_score_proxy(default=False))
         return "proxy" if legacy else "off"
@@ -335,11 +485,15 @@ def _select_context_mode(card: SampleCard) -> str:
 
 def _context_gate_mode(card: SampleCard) -> str:
     """
-    Selection-time gating based on context proxy score.
+    Selection-time gating based on context signal.
+
     Values:
       - off: no gate
       - note: annotate only
-      - hard: treat context_score==0 as ineligible (ONLY when proxy is enabled)
+      - hard:
+          * in proxy mode: treat select_context_score==0 as ineligible
+          * in review mode: treat context_status!=PASS as ineligible
+            (unless missing, then fallback proxy)
     Priority: new env > card.extra > legacy env (limited) > default off
     """
     env = str(os.environ.get(_SELECT_CONTEXT_GATE_ENV, "")).strip().lower()
@@ -347,9 +501,14 @@ def _context_gate_mode(card: SampleCard) -> str:
         return env if env in {"off", "note", "hard"} else "off"
 
     ex = _get_extra(card)
-    v = str(ex.get("context_gate_mode", "")).strip().lower()
+    v = str(ex.get("select_context_gate_mode", "")).strip().lower()
     if v in {"off", "note", "hard"}:
         return v
+
+    # Backward compat: allow context_gate_mode in extra if it matches this vocabulary.
+    v2 = str(ex.get("context_gate_mode", "")).strip().lower()
+    if v2 in {"off", "note", "hard"}:
+        return v2
 
     # Legacy env fallback only if it matches off|note|hard (ignore "soft" etc.)
     env2 = str(os.environ.get(_LEGACY_CONTEXT_GATE_ENV, "")).strip().lower()
@@ -359,27 +518,53 @@ def _context_gate_mode(card: SampleCard) -> str:
     return "off"
 
 
-def _context_tiebreak_int(card: SampleCard, term_uid: str) -> int:
+def _context_tiebreak_int(card: SampleCard, term_uid: str, ctx_sig: str) -> int:
     """
-    Deterministic tie-breaker that MUST change when condition changes.
+    Deterministic tie-breaker that MUST change when context changes (including swap).
+
+    Use ctx_sig explicitly so disease=None doesn't collapse.
     """
-    cond = _card_text(card, "condition", "disease").strip().lower()
     tu = str(term_uid).strip()
-    payload = f"{cond}|{tu}".encode()
+    payload = f"{ctx_sig}|{tu}".encode()
     h = hashlib.sha256(payload).hexdigest()[:8]
     return int(h, 16)
 
 
-def _context_signature(card: SampleCard) -> str:
+def _context_status_score(row: pd.Series) -> int:
     """
-    Compact signature of the context used for deterministic proxy.
+    Convert pipeline context review outputs to an ordering score.
+
+    Expected columns (if present):
+      - context_evaluated: bool
+      - context_status: PASS|WARN|FAIL|...
     """
-    cond = _card_text(card, "condition", "disease").strip().lower()
-    tissue = _card_text(card, "tissue", None).strip().lower()
-    pert = _card_text(card, "perturbation", None).strip().lower()
-    comp = _card_text(card, "comparison", None).strip().lower()
-    payload = f"{cond}|{tissue}|{pert}|{comp}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    ev = False
+    if "context_evaluated" in row.index and (not _is_na_scalar(row.get("context_evaluated"))):
+        try:
+            ev = bool(row.get("context_evaluated"))
+        except Exception:
+            ev = False
+
+    st = ""
+    if "context_status" in row.index:
+        st = (
+            ""
+            if _is_na_scalar(row.get("context_status"))
+            else str(row.get("context_status")).strip().upper()
+        )
+
+    if (not ev) and (not st):
+        return -1
+
+    if st == "PASS":
+        return 2
+    if st == "WARN":
+        return 1
+    if st == "FAIL":
+        return -2
+
+    # Unknown but evaluated: treat as weak negative (do not reward)
+    return 0 if ev else -1
 
 
 # -------------------------
@@ -593,6 +778,336 @@ def _evaluate_stress_for_claim(
 
 
 # ===========================
+# Context review (LLM) - minimal, shortlist-only
+# ===========================
+def _env_wants_llm_context_review() -> bool:
+    s = str(os.environ.get("LLMPATH_CONTEXT_REVIEW_MODE", "")).strip().lower()
+    return s in {"llm", "on", "true", "yes", "y", "1"}
+
+
+def _backend_invoke_text(backend: BaseLLMBackend, prompt: str) -> str:
+    """
+    Best-effort backend invocation without assuming a single interface.
+    Tries common method names used across backends.
+    """
+    # Prefer JSON-capable methods if they exist.
+    for meth in ["chat_json", "complete_json", "generate_json", "json"]:
+        fn = getattr(backend, meth, None)
+        if callable(fn):
+            try:
+                out = _call_compat(
+                    fn, prompt=prompt, text=prompt, messages=[{"role": "user", "content": prompt}]
+                )
+                if isinstance(out, (dict, list)):
+                    return json.dumps(out, ensure_ascii=False)
+                if out is None:
+                    continue
+                return str(out)
+            except Exception:
+                pass
+
+    for meth in ["chat", "complete", "generate", "invoke", "call"]:
+        fn = getattr(backend, meth, None)
+        if callable(fn):
+            out = _call_compat(
+                fn, prompt=prompt, text=prompt, messages=[{"role": "user", "content": prompt}]
+            )
+            if out is None:
+                continue
+            return str(out)
+
+    raise RuntimeError("backend has no callable chat/complete/generate interface")
+
+
+def _parse_first_json_obj(text: str) -> dict[str, Any]:
+    """
+    Robust-ish JSON extraction from LLM output.
+    Accepts either a raw JSON object or a text containing one.
+    """
+    s = str(text).strip()
+    if not s:
+        return {}
+    # Fast path
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            return dict(json.loads(s))
+        except Exception:
+            pass
+
+    # Find first {...} span (greedy but bounded by last brace)
+    i = s.find("{")
+    j = s.rfind("}")
+    if i >= 0 and j > i:
+        cand = s[i : j + 1]
+        try:
+            obj = json.loads(cand)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _llm_context_review_prompt(
+    *,
+    card: SampleCard,
+    term_uid: str,
+    term_name: str,
+    source: str,
+    evidence_genes: list[str],
+) -> str:
+    ctx = {
+        "condition": _effective_context_value(card, "condition"),
+        "tissue": _effective_context_value(card, "tissue"),
+        "perturbation": _effective_context_value(card, "perturbation"),
+        "comparison": _effective_context_value(card, "comparison"),
+        "cancer": _effective_context_value(card, "cancer"),
+        "context_signature": _context_signature(card),
+        "context_swap_active": _is_context_swap(card),
+    }
+
+    genes_snip = ",".join([g for g in evidence_genes[:16] if str(g).strip()])
+    # Keep prompt short for llama3.1:8b
+    return (
+        "You are auditing whether a pathway/gene-set term matches the sample context.\n"
+        "Return ONLY a JSON object with keys: status, confidence, reason.\n"
+        'status must be one of ["PASS","WARN","FAIL"]. confidence must be 0..1.\n'
+        "Be strict: PASS only if clearly context-consistent.\n\n"
+        f"CONTEXT: {json.dumps(ctx, ensure_ascii=False)}\n"
+        "TERM: {"
+        f'"term_uid": "{str(term_uid)}", '
+        f'"term_name": "{str(term_name)}", '
+        f'"source": "{str(source)}"'
+        "}\n"
+        f'EVIDENCE_GENES_SNIPPET: "{genes_snip}"\n'
+    )
+
+
+def _maybe_apply_llm_context_review(
+    distilled: pd.DataFrame,
+    card: SampleCard,
+    *,
+    review_backend: BaseLLMBackend | None,
+    k: int,
+    seed: int | None,
+    outdir: str | None,
+    context_review_mode: str,
+) -> pd.DataFrame:
+    """
+    Fill pipeline-owned context review columns in distilled *only when missing*:
+      - context_evaluated (bool)
+      - context_status (PASS|WARN|FAIL)
+      - context_method (llm)
+      - context_confidence (float)
+      - context_reason (str)
+
+    Strategy:
+      - shortlist-only to avoid O(N_terms) LLM calls
+      - do NOT overwrite rows already evaluated by pipeline
+    """
+    want_llm = (
+        str(context_review_mode or "").strip().lower() == "llm" or _env_wants_llm_context_review()
+    )
+    if not want_llm:
+        return distilled
+    if review_backend is None:
+        return distilled
+
+    if not isinstance(distilled, pd.DataFrame) or distilled.empty:
+        return distilled
+
+    df = distilled.copy()
+
+    # Ensure term_uid exists for stable cache
+    if "term_uid" in df.columns:
+        df["term_uid"] = df["term_uid"].astype(str).str.strip()
+    else:
+        if ("source" in df.columns) and ("term_id" in df.columns):
+            df["term_uid"] = (
+                df["source"].astype(str).str.strip() + ":" + df["term_id"].astype(str).str.strip()
+            )
+        else:
+            df["term_uid"] = df.index.astype(str)
+
+    # Create/normalize columns
+    if "context_evaluated" in df.columns:
+        try:
+            df["context_evaluated"] = df["context_evaluated"].fillna(False).astype(bool)
+        except Exception:
+            df["context_evaluated"] = False
+    else:
+        df["context_evaluated"] = False
+
+    if "context_status" in df.columns:
+        df["context_status"] = df["context_status"].fillna("").astype(str).str.strip()
+    else:
+        df["context_status"] = ""
+
+    if "context_method" in df.columns:
+        df["context_method"] = df["context_method"].fillna("").astype(str).str.strip()
+    else:
+        df["context_method"] = ""
+
+    if "context_confidence" not in df.columns:
+        df["context_confidence"] = pd.NA
+    if "context_reason" not in df.columns:
+        df["context_reason"] = ""
+
+    # Only evaluate rows missing review
+    missing_mask = (~df["context_evaluated"].astype(bool)) & (
+        df["context_status"].astype(str).str.strip() == ""
+    )
+    n_missing = int(missing_mask.sum())
+    if n_missing <= 0:
+        return df
+
+    # Shortlist size: default 10*k (cap 500, min 50)
+    # ex = _get_extra(card)
+    envL = str(os.environ.get("LLMPATH_CONTEXT_REVIEW_SHORTLIST", "")).strip()
+    if envL:
+        try:
+            L = int(envL)
+        except Exception:
+            L = 0
+    else:
+        L = 0
+    if L <= 0:
+        L = max(50, min(500, int(10 * int(k))))
+
+    # Rank for shortlist using existing signals (cheap):
+    # prefer high |stat| (more "important") while keeping stable ordering.
+    if "stat" in df.columns:
+        stat_num = pd.to_numeric(df["stat"], errors="coerce").fillna(0.0)
+        score = stat_num.abs()
+    else:
+        score = pd.Series(np.ones(df.shape[0], dtype=float), index=df.index)
+
+    # Add proxy context as a weak prioritizer (optional, deterministic)
+    toks = _context_tokens(card)
+    if "term_name" in df.columns and toks:
+        try:
+            proxy = df["term_name"].astype(str).map(lambda s: _context_score(str(s), toks))
+            proxy = pd.to_numeric(proxy, errors="coerce").fillna(0.0)
+        except Exception:
+            proxy = pd.Series(np.zeros(df.shape[0], dtype=float), index=df.index)
+    else:
+        proxy = pd.Series(np.zeros(df.shape[0], dtype=float), index=df.index)
+
+    # Shortlist candidates: missing only
+    cand = df.loc[missing_mask].copy()
+    cand["_short_stat"] = score.loc[cand.index]
+    cand["_short_proxy"] = proxy.loc[cand.index]
+    # Higher proxy first, then higher |stat|
+    cand = cand.sort_values(
+        ["_short_proxy", "_short_stat"], ascending=[False, False], kind="mergesort"
+    )
+    cand = cand.head(int(L)).copy()
+
+    # Cache file (optional; very small and safe)
+    cache: dict[str, Any] = {}
+    cache_path = None
+    if outdir:
+        try:
+            os.makedirs(str(outdir), exist_ok=True)
+            cache_path = os.path.join(str(outdir), "context_review_cache.json")
+            if os.path.exists(cache_path):
+                cache = json.load(open(cache_path))
+                if not isinstance(cache, dict):
+                    cache = {}
+        except Exception:
+            cache = {}
+            cache_path = None
+
+    # Deterministic-ish seed: just used to jitter sleep/backoff if you want later
+    _ = seed
+
+    updated = 0
+    for idx, r in cand.iterrows():
+        term_uid = str(r.get("term_uid") or "").strip()
+        if not term_uid:
+            continue
+
+        key = f"{_context_signature(card)}::{term_uid}"
+        if key in cache and isinstance(cache.get(key), dict):
+            obj = cache.get(key) or {}
+        else:
+            term_name = str(r.get("term_name") or r.get("term_id") or "").strip()
+            source = str(r.get("source") or "").strip()
+            genes = _as_gene_list(r.get("evidence_genes"))
+            genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
+            genes = _dedup_preserve_order([g for g in genes if g])
+
+            prompt = _llm_context_review_prompt(
+                card=card,
+                term_uid=term_uid,
+                term_name=term_name,
+                source=source,
+                evidence_genes=genes,
+            )
+
+            t0 = time.time()
+            try:
+                txt = _backend_invoke_text(review_backend, prompt)
+            except Exception as e:
+                _dlog(
+                    f"[context_review][ERR] term_uid={term_uid} {type(e).__name__}: {str(e)[:160]}"
+                )
+                txt = ""
+
+            obj = _parse_first_json_obj(txt)
+            obj["_latency_s"] = float(max(0.0, time.time() - t0))
+            cache[key] = obj
+
+            # be a polite backend citizen
+            sleep_ms = str(os.environ.get("LLMPATH_CONTEXT_REVIEW_SLEEP_MS", "")).strip()
+            if sleep_ms:
+                try:
+                    ms = int(sleep_ms)
+                    if ms > 0:
+                        time.sleep(min(2.0, ms / 1000.0))
+                except Exception:
+                    pass
+
+        status = str(obj.get("status") or "").strip().upper()
+        if status not in {"PASS", "WARN", "FAIL"}:
+            # strict fallback: if model returns garbage, do not hallucinate PASS
+            status = "WARN"
+
+        conf = obj.get("confidence", None)
+        try:
+            conf_f = float(conf) if conf is not None else float("nan")
+        except Exception:
+            conf_f = float("nan")
+        if not (0.0 <= conf_f <= 1.0):
+            conf_f = float("nan")
+
+        reason = str(obj.get("reason") or "").strip()
+
+        # Only fill if still missing (do not overwrite concurrent pipeline fields)
+        if bool(df.at[idx, "context_evaluated"]) is True:
+            continue
+        if str(df.at[idx, "context_status"]).strip():
+            continue
+
+        df.at[idx, "context_evaluated"] = True
+        df.at[idx, "context_status"] = status
+        df.at[idx, "context_method"] = "llm"
+        df.at[idx, "context_reason"] = reason
+        df.at[idx, "context_confidence"] = conf_f if not np.isnan(conf_f) else pd.NA
+        updated += 1
+
+    if cache_path:
+        try:
+            json.dump(cache, open(cache_path, "w"), ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    _dlog(
+        f"[context_review] updated={updated} shortlist={int(min(L, n_missing))} missing={n_missing}"
+    )
+    return df
+
+
+# ===========================
 # Deterministic selection
 # ===========================
 def _select_claims_deterministic(
@@ -624,33 +1139,41 @@ def _select_claims_deterministic(
     else:
         df["term_uid"] = (df["source"] + ":" + df["term_id"]).astype(str).str.strip()
 
-    # ---- context selection: OFF/PROXY (auto-enabled for context_swap) ----
+    # ---- context selection: OFF/PROXY/REVIEW ----
     sel_ctx_mode = _select_context_mode(card)
     ctx_gate_mode = _context_gate_mode(card)
     ctx_swap_active = _is_context_swap(card)
     ctx_sig = _context_signature(card)
 
-    # Preserve pipeline-owned context_score if present; never overwrite provenance.
-    # select.py proxy scores are stored in select_context_* columns.
+    # Preserve pipeline-owned context fields if present; never overwrite provenance.
     if "context_score" in df.columns:
         df["context_score"] = pd.to_numeric(df["context_score"], errors="coerce")
     else:
         df["context_score"] = pd.NA
 
     if "context_evaluated" in df.columns:
-        # keep if already present (pipeline may set it)
         df["context_evaluated"] = df["context_evaluated"].fillna(False).astype(bool)
     else:
         df["context_evaluated"] = False
 
-    if sel_ctx_mode == "proxy":
+    if "context_status" in df.columns:
+        df["context_status"] = df["context_status"].astype(str).str.strip()
+    else:
+        df["context_status"] = ""
+
+    if "context_method" in df.columns:
+        df["context_method"] = df["context_method"].fillna("").astype(str).str.strip()
+    else:
+        df["context_method"] = ""
+
+    # selection-time proxy scores are stored in select_context_* columns
+    if sel_ctx_mode in {"proxy", "review"}:
         toks = _context_tokens(card)
         df["select_context_tokens_n"] = int(len(toks))
         df["select_context_score"] = df["term_name"].map(lambda s: _context_score(str(s), toks))
         df["select_context_evaluated"] = True
-
         df["select_context_tiebreak"] = df["term_uid"].map(
-            lambda tu: _context_tiebreak_int(card, str(tu))
+            lambda tu: _context_tiebreak_int(card, str(tu), ctx_sig=str(ctx_sig))
         )
         df["select_context_tiebreak_sort"] = pd.to_numeric(
             df["select_context_tiebreak"], errors="coerce"
@@ -665,6 +1188,13 @@ def _select_claims_deterministic(
     df["select_context_score_sort"] = pd.to_numeric(
         df["select_context_score"], errors="coerce"
     ).fillna(-1)
+
+    # REVIEW mode: if pipeline produced context_status, use it to rank.
+    # (Fallback: if not present/evaluated, treat as -1 and rely on proxy score/tiebreak.)
+    if sel_ctx_mode == "review":
+        df["select_context_status_score"] = df.apply(_context_status_score, axis=1)
+    else:
+        df["select_context_status_score"] = -1
 
     # ---- Evidence hygiene gates ----
     if "keep_term" in df.columns:
@@ -694,16 +1224,33 @@ def _select_claims_deterministic(
         df["eligible_tau"] = True
         df["eligible"] = df["keep_term"]
 
-    # ---- optional context gate (selection-time; proxy only) ----
+    # ---- optional context gate (selection-time) ----
+    # Semantics (IMPORTANT):
+    #   - eligible_context: passes the context check (True = allowed)
+    #   - context_gate_hit: fails the context check (True = blocked)  [diagnostic]
     df["context_gate_mode"] = str(ctx_gate_mode)
-    df["context_gate_hit"] = False
     df["eligible_context"] = True
+    df["context_gate_hit"] = False
 
-    # Gate must be defined on selection-time proxy score only (never pipeline score).
-    if sel_ctx_mode == "proxy" and ctx_gate_mode in {"note", "hard"}:
-        hit = df["select_context_score_sort"].ge(1)
-        df["context_gate_hit"] = hit
-        df["eligible_context"] = hit if ctx_gate_mode == "hard" else True
+    if sel_ctx_mode != "off" and ctx_gate_mode in {"note", "hard"}:
+        # Compute "pass" first, then derive hit = ~pass.
+        if sel_ctx_mode == "review":
+            # PASS requires evaluated + PASS. If review is missing, fall back to proxy>=1.
+            ev = df["context_evaluated"].astype(bool)
+            st = df["context_status"].astype(str).str.strip().str.upper()
+
+            pass_review = ev & (st == "PASS")
+            missing_review = (~ev) & (st == "")
+            pass_proxy = df["select_context_score_sort"].ge(1)
+
+            pass_ctx = pass_review | (missing_review & pass_proxy)
+        else:
+            pass_ctx = df["select_context_score_sort"].ge(1)
+
+        df["eligible_context"] = pass_ctx.astype(bool)
+        df["context_gate_hit"] = (~pass_ctx).astype(bool)
+
+        # Apply to eligibility only in hard mode; note mode is diagnostic only.
         if ctx_gate_mode == "hard":
             df["eligible"] = df["eligible"] & df["eligible_context"]
 
@@ -716,7 +1263,20 @@ def _select_claims_deterministic(
     max_per_module = max(1, max_per_module)
 
     # ---- Ranking policy ----
-    if sel_ctx_mode == "proxy" and ctx_swap_active:
+    # Primary: eligible -> stability -> (review score if any) -> proxy score -> tiebreak -> stat
+    if sel_ctx_mode == "review":
+        sort_cols = [
+            "eligible",
+            "term_survival_sort",
+            "select_context_status_score",
+            "select_context_score_sort",
+            "select_context_tiebreak_sort",
+            "stat",
+            "term_uid",
+        ]
+        ascending = [False, False, False, False, True, False, True]
+        df["select_context_policy"] = "review_then_proxy"
+    elif sel_ctx_mode == "proxy" and ctx_swap_active:
         sort_cols = [
             "eligible",
             "term_survival_sort",
@@ -824,7 +1384,7 @@ def _select_claims_deterministic(
         f"blocked_by_module_cap={int(blocked_by_module_cap)}; "
         f"relaxed={bool(relaxed)}; relax_passes={int(relax_passes)}; "
         f"ctx_mode={sel_ctx_mode}; ctx_gate={ctx_gate_mode}; ctx_swap={bool(ctx_swap_active)}; "
-        f"ctx_hit_terms={n_ctx_hit}"
+        f"ctx_sig={ctx_sig}; ctx_hit_terms={n_ctx_hit}"
     )
 
     max_gene_ids = _max_gene_ids_in_claim(card)
@@ -901,10 +1461,15 @@ def _select_claims_deterministic(
             # Pipeline-owned (review) context signals (if present in distilled). Never overwritten.
             "context_score": r.get("context_score", pd.NA),
             "context_evaluated": bool(r.get("context_evaluated", False)),
-            # Selection-time proxy context signals (deterministic; used for ranking/tiebreak/gate)
+            "context_status": str(r.get("context_status", "") or ""),
+            "context_method": str(r.get("context_method", "") or ""),
+            "context_confidence": r.get("context_confidence", pd.NA),
+            "context_reason": str(r.get("context_reason", "") or ""),
+            # Selection-time context signals (deterministic; used for ranking/tiebreak/gate)
             "select_context_score": r.get("select_context_score", pd.NA),
             "select_context_evaluated": bool(r.get("select_context_evaluated", False)),
             "select_context_tokens_n": int(r.get("select_context_tokens_n", 0) or 0),
+            "select_context_status_score": int(r.get("select_context_status_score", -1) or -1),
             "select_context_tiebreak": r.get("select_context_tiebreak", pd.NA),
             "context_signature": str(ctx_sig),
             "context_swap_active": bool(ctx_swap_active),
@@ -917,7 +1482,7 @@ def _select_claims_deterministic(
             "keep_reason": str(r.get("keep_reason", "ok")),
             "claim_json": claim.model_dump_json(),
             "preselect_tau_gate": bool(preselect_tau_gate),
-            "context_score_proxy": bool(sel_ctx_mode == "proxy"),
+            "context_score_proxy": bool(sel_ctx_mode in {"proxy", "review"}),
             "select_context_mode": str(sel_ctx_mode),
             "select_context_policy": str(r.get("select_context_policy", "default")),
             "select_notes": notes_common,
@@ -952,9 +1517,10 @@ def _select_claims_deterministic(
 # ===========================
 # LLM mode compatibility wrapper
 # ===========================
-def _call_compat(fn: Callable[..., Any], **kwargs: Any) -> Any:
+def _call_compat(fn: Any, **kwargs: Any) -> Any:
     """
     Call fn(**kwargs) but drop kwargs not accepted by fn signature.
+    Keeps pipeline resilient across incremental refactors.
     """
     try:
         sig = inspect.signature(fn)
@@ -973,11 +1539,16 @@ def select_claims(
     distilled: pd.DataFrame,
     card: SampleCard,
     *,
-    k: int = 3,
+    k: int = 50,
     mode: str | None = None,
     backend: BaseLLMBackend | None = None,
+    claim_backend: BaseLLMBackend | None = None,
+    review_backend: BaseLLMBackend | None = None,
+    context_gate_mode: str = "soft",
+    context_review_mode: str = "off",
     seed: int | None = None,
     outdir: str | None = None,
+    **kwargs: Any,
 ) -> pd.DataFrame:
     """
     C1: Claim proposal (schema-locked). The mechanical decider is audit_claims().
@@ -990,13 +1561,26 @@ def select_claims(
       - claim_json embeds evidence_ref.gene_ids and gene_set_hash; they MUST be consistent.
       - user-facing columns may show a compact gene snippet (gene_ids_suggest) for readability.
 
-    NOTE:
-      - Context REVIEW (proxy/llm/off) is owned by pipeline.py.
-      - select.py only provides selection-time context proxy for ranking/tiebreak.
+    NOTE (C1 contract):
+      - selection-time context usage is controlled by:
+          * LLMPATH_SELECT_CONTEXT_MODE = off|proxy|review
+          * LLMPATH_SELECT_CONTEXT_GATE_MODE = off|note|hard
+      - pipeline-owned review results (context_status/context_evaluated) may be used in
+        review mode for ranking/gating, but are never overwritten here.
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
-    _dlog(f"[select] mode_eff={mode_eff} backend={'yes' if backend else 'no'} k={k_eff}")
+
+    # Pick a single backend for the "review-only" path.
+    # Pipeline may attach backend as role=review via `backend`,
+    # or pass explicitly via `review_backend`.
+    review_be = review_backend if review_backend is not None else backend
+
+    _dlog(
+        f"[select] mode_eff={mode_eff} backend={'yes' if backend else 'no'} "
+        f"review_backend={'yes' if review_be else 'no'} k={k_eff} "
+        f"ctx_review_mode={context_review_mode}"
+    )
 
     # ---- LLM mode ----
     if mode_eff == "llm":
@@ -1062,7 +1646,19 @@ def select_claims(
         return out_det
 
     # ---- Deterministic ----
-    out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
+    # If the run asks for LLM context review, we must populate pipeline-owned context fields
+    # BEFORE deterministic ranking/gating, otherwise review mode never triggers.
+    distilled2 = _maybe_apply_llm_context_review(
+        distilled,
+        card,
+        review_backend=review_be,
+        k=int(k_eff),
+        seed=seed,
+        outdir=outdir,
+        context_review_mode=str(context_review_mode or "off"),
+    )
+
+    out_det = _select_claims_deterministic(distilled2, card, k=int(k_eff), seed=seed)
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
     return out_det
