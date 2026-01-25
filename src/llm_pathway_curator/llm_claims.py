@@ -249,6 +249,129 @@ def _strict_k_enabled() -> bool:
     return _as_bool_env("LLMPATH_LLM_STRICT_K", False)
 
 
+def _scalar_int(x: Any, default: int | None = None) -> int | None:
+    """
+    Convert x to int if possible.
+    Special-case: (v,) -> v (common trailing-comma/packing bug source).
+    """
+    if x is None:
+        return default
+    if isinstance(x, tuple) and len(x) == 1:
+        x = x[0]
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+
+def _clamp_int(x: int, lo: int, hi: int) -> int:
+    return max(int(lo), min(int(hi), int(x)))
+
+
+def _backend_model_hint(backend: BaseLLMBackend) -> str:
+    """
+    Best-effort model name hint for logging / heuristic gating.
+    """
+    for attr in ("model_name", "model", "model_id"):
+        v = getattr(backend, attr, None)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            return s
+    return ""
+
+
+def _is_small_local_model(backend: BaseLLMBackend) -> bool:
+    """
+    Heuristic: treat 7B/8B-ish local models as 'small' for prompt budget.
+
+    Override:
+      - LLMPATH_LLM_ASSUME_SMALL_MODEL=1 forces 'small' regardless of model hint.
+    """
+    if _as_bool_env("LLMPATH_LLM_ASSUME_SMALL_MODEL", False):
+        return True
+
+    hint = _backend_model_hint(backend).lower()
+    if not hint:
+        return False
+    # common patterns: llama3.1:8b, 8b, 7b, q4_0 etc (keep conservative)
+    return ("8b" in hint) or ("7b" in hint)
+
+
+def _auto_topn_for_k(*, k: int, backend: BaseLLMBackend) -> tuple[int, dict[str, Any]]:
+    """
+    Auto-tune top_n from k with a simple, explainable rule.
+
+    Rule:
+      top_n = clamp(alpha*k, min_n, max_n)
+      if small model (7B/8B-ish), lower max_n
+
+    Env overrides:
+      - LLMPATH_LLM_TOPN: if set, we do NOT auto-tune (handled by caller)
+      - LLMPATH_LLM_TOPN_ALPHA (default 12)
+      - LLMPATH_LLM_TOPN_MIN (default 15)
+      - LLMPATH_LLM_TOPN_MAX (default 80)
+      - LLMPATH_LLM_TOPN_MAX_SMALL (default 50)
+    """
+    k0 = max(1, int(k))
+
+    alpha = _as_int_env("LLMPATH_LLM_TOPN_ALPHA", 12)
+    min_n = _as_int_env("LLMPATH_LLM_TOPN_MIN", 15)
+    max_n = _as_int_env("LLMPATH_LLM_TOPN_MAX", 80)
+    max_small = _as_int_env("LLMPATH_LLM_TOPN_MAX_SMALL", 50)
+
+    small = _is_small_local_model(backend)
+    eff_max = min(max_n, max_small) if small else max_n
+
+    n = _clamp_int(alpha * k0, min_n, eff_max)
+    n = max(n, k0)
+
+    meta = {
+        "top_n_mode": "auto",
+        "top_n_alpha": int(alpha),
+        "top_n_min": int(min_n),
+        "top_n_max": int(max_n),
+        "top_n_max_small": int(max_small),
+        "top_n_small_model": bool(small),
+        "top_n_model_hint": _backend_model_hint(backend),
+    }
+    return int(n), meta
+
+
+def _llm_required_by_contract() -> bool:
+    """
+    Treat LLM failures as fatal when the run contract requires LLM.
+
+    Contract rules (minimal, Nat Biotech-friendly):
+      - If LLMPATH_CLAIM_MODE=llm => LLM is REQUIRED for claim proposal.
+      - Optional override: LLMPATH_LLM_FAIL_FAST=1 forces fail-fast even in non-llm modes.
+      - Optional override: LLMPATH_LLM_FAIL_FAST=0 disables fail-fast (not recommended for paper).
+    """
+    v = str(os.environ.get("LLMPATH_LLM_FAIL_FAST", "")).strip().lower()
+    if v in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    if v in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+
+    claim_mode = str(os.environ.get("LLMPATH_CLAIM_MODE", "")).strip().lower()
+    return claim_mode == "llm"
+
+
+def _raise_if_required(notes: str, *, meta: dict[str, Any]) -> None:
+    """
+    If LLM is required, raise with a compact message.
+    Artifacts should be written BEFORE calling this.
+    """
+    if not _llm_required_by_contract():
+        return
+    backend = str(meta.get("backend_class", ""))
+    top_n = meta.get("top_n", "")
+    k = meta.get("k", "")
+    msg = f"LLM required but failed: {notes} (backend={backend} k={k} top_n={top_n})"
+    raise RuntimeError(msg)
+
+
 # -------------------------
 # Backend calling (robust across Ollama/OpenAI/Gemini)
 # -------------------------
@@ -477,7 +600,17 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
     if not lines:
         lines = ["uid=NA | id=NA | name=NA | dir=na | surv= | genes="]
 
-    lines = lines[: min(max(1, int(k)), 100)]
+    # IMPORTANT:
+    # Do NOT truncate candidates to k. The whole point of top_n is to give the model a pool
+    # to choose from. Keep an absolute cap only.
+    try:
+        max_lines = int(str(os.environ.get("LLMPATH_LLM_MAX_CAND_LINES", "100")).strip())
+    except Exception:
+        max_lines = 100
+    max_lines = max(5, min(max_lines, 300))
+    max_lines = min(max_lines, len(lines))
+    lines = lines[:max_lines]
+
     # IMPORTANT: Example must be JSON (not Python dict repr)
     example = {
         "claims": [
@@ -766,6 +899,8 @@ def propose_claims_llm(
         and also the legacy:
           llm_claims.raw.json / llm_claims.meta.json              (backward compatible)
     """
+    k = _scalar_int(k, 1) or 1
+    seed = _scalar_int(seed, None)
     df = distilled_with_modules.copy()
 
     if "term_uid" not in df.columns:
@@ -833,13 +968,38 @@ def propose_claims_llm(
     else:
         df["context_score_sort"] = 0.0
 
-    # ---- LLM mode should be LIGHT by default ----
-    # default 50, clamp 3..100
-    try:
-        top_n = int(str(os.environ.get("LLMPATH_LLM_TOPN", "50")).strip())
-    except Exception:
-        top_n = 50
-    top_n = max(3, min(top_n, 100))
+    # ---- Candidate budget (top_n) ----
+    # Priority:
+    #   1) explicit env LLMPATH_LLM_TOPN
+    #   2) auto rule: top_n = clamp(alpha*k, min, max) with smaller max for small local models
+    topn_meta: dict[str, Any] = {}
+    topn_env = str(os.environ.get("LLMPATH_LLM_TOPN", "")).strip()
+    if topn_env:
+        try:
+            top_n = int(topn_env)
+        except Exception:
+            top_n = 50
+        hard_max = _as_int_env("LLMPATH_LLM_TOPN_HARD_MAX", 200)
+        hard_max_small = _as_int_env("LLMPATH_LLM_TOPN_HARD_MAX_SMALL", 80)
+        eff_hard_max = min(hard_max, hard_max_small) if _is_small_local_model(backend) else hard_max
+        top_n = _clamp_int(top_n, 3, eff_hard_max)
+        topn_meta = {
+            "top_n_mode": "env",
+            "top_n_env": topn_env,
+            "top_n_model_hint": _backend_model_hint(backend),
+            "top_n_small_model": bool(_is_small_local_model(backend)),
+            "top_n_hard_max": int(eff_hard_max),
+            "top_n_soft_max": int(
+                _as_int_env("LLMPATH_LLM_TOPN_MAX_SMALL", 50)
+                if _is_small_local_model(backend)
+                else _as_int_env("LLMPATH_LLM_TOPN_MAX", 80)
+            ),
+        }
+    else:
+        top_n, topn_meta = _auto_topn_for_k(k=int(k), backend=backend)
+
+    # always ensure top_n >= k and bounded by available rows later
+    top_n = max(int(top_n), max(1, int(k)))
 
     df_rank = df.sort_values(
         ["keep_term", "term_survival_sort", "context_score_sort", "stat_sort", "term_uid"],
@@ -864,6 +1024,16 @@ def propose_claims_llm(
         "backend_class": type(backend).__name__,
         "artifact_tag": (artifact_tag or ""),
         "strict_k": bool(_strict_k_enabled()),
+        "top_n_mode": str(topn_meta.get("top_n_mode", "")),
+        "top_n_env": str(topn_meta.get("top_n_env", "")),
+        "top_n_alpha": topn_meta.get("top_n_alpha", None),
+        "top_n_min": topn_meta.get("top_n_min", None),
+        "top_n_max": topn_meta.get("top_n_max", None),
+        "top_n_max_small": topn_meta.get("top_n_max_small", None),
+        "top_n_small_model": bool(topn_meta.get("top_n_small_model", False)),
+        "top_n_model_hint": str(topn_meta.get("top_n_model_hint", "")),
+        "top_n_hard_max": topn_meta.get("top_n_hard_max", None),
+        "top_n_soft_max": topn_meta.get("top_n_soft_max", None),
     }
 
     def _write_artifacts(*, raw_text: str, meta_obj: dict[str, Any]) -> None:
@@ -888,7 +1058,7 @@ def propose_claims_llm(
     raw_text = ""
     obj: dict[str, Any] | None = None
     try:
-        obj = _backend_call_json(backend, prompt=prompt, seed=seed)
+        obj = _backend_call_json(backend, prompt=prompt, seed=_scalar_int(seed, None))
         raw_text = _stable_json_dumps(obj)
     except Exception as e:
         msg = str(e)
@@ -897,6 +1067,7 @@ def propose_claims_llm(
         meta["exception_msg"] = msg[:200]
         raw_text = _soft_error_json(msg, err_type="backend_call_failed", retryable=False)
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        _raise_if_required(meta["notes"], meta=meta)
         return LLMClaimResult(
             claims=[],
             raw_text=raw_text,
@@ -913,6 +1084,7 @@ def propose_claims_llm(
         msg = str((obj.get("error") or {}).get("message", ""))
         meta["notes"] = f"soft_error: {msg[:200]}"
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        _raise_if_required(meta["notes"], meta=meta)
         return LLMClaimResult(
             claims=[],
             raw_text=raw_text,
@@ -927,6 +1099,7 @@ def propose_claims_llm(
         msg = str((soft.get("error") or {}).get("message", ""))
         meta["notes"] = f"soft_error: {msg[:200]}"
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        _raise_if_required(meta["notes"], meta=meta)
         return LLMClaimResult(
             claims=[], raw_text=raw_text, used_fallback=True, notes=meta["notes"], meta=meta
         )
@@ -940,6 +1113,7 @@ def propose_claims_llm(
         meta["exception_type"] = type(e).__name__
         meta["exception_msg"] = str(e)[:200]
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        _raise_if_required(meta["notes"], meta=meta)
         return LLMClaimResult(
             claims=[],
             raw_text=raw_text,
@@ -955,6 +1129,7 @@ def propose_claims_llm(
         if len(claims) != k_eff:
             meta["notes"] = f"strict_k_failed: expected={k_eff} got={len(claims)}"
             _write_artifacts(raw_text=raw_text, meta_obj=meta)
+            _raise_if_required(meta["notes"], meta=meta)
             return LLMClaimResult(
                 claims=[],
                 raw_text=raw_text,
@@ -973,6 +1148,7 @@ def propose_claims_llm(
     if not ok:
         meta["notes"] = f"post_validate_failed: {why}"
         _write_artifacts(raw_text=raw_text, meta_obj=meta)
+        _raise_if_required(meta["notes"], meta=meta)
         return LLMClaimResult(
             claims=[],
             raw_text=raw_text,
@@ -983,7 +1159,6 @@ def propose_claims_llm(
 
     meta["notes"] = "ok"
     _write_artifacts(raw_text=raw_text, meta_obj=meta)
-
     return LLMClaimResult(
         claims=claims_norm,
         raw_text=raw_text,
