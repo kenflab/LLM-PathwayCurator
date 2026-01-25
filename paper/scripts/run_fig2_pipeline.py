@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from llm_pathway_curator.backends import GeminiBackend, OllamaBackend, OpenAIBackend
 from llm_pathway_curator.pipeline import RunConfig, run_pipeline
 from llm_pathway_curator.schema import EvidenceTable
 
@@ -84,24 +83,23 @@ def _maybe_git_rev() -> str:
         return ""
 
 
-def _build_backend_from_env():
+def _require_backend_env_for_context_review() -> None:
     """
-    Fig2 runner: construct LLM backend if requested by context review.
+    Runner does NOT construct backends.
+    It only validates that the minimal env contract is present when context review is enabled.
 
     Minimal env contract:
       LLMPATH_BACKEND=openai|ollama|gemini
-    Backend-specific secrets/config are handled inside each Backend class.
+    Backend-specific secrets/config are handled inside the pipeline/backend classes.
     """
     kind = str(os.environ.get("LLMPATH_BACKEND", "")).strip().lower()
     if not kind:
-        return None
-    if kind == "ollama":
-        return OllamaBackend()
-    if kind == "gemini":
-        return GeminiBackend()
-    if kind == "openai":
-        return OpenAIBackend()
-    raise ValueError(f"Unknown LLMPATH_BACKEND={kind!r} (use openai|ollama|gemini)")
+        _die(
+            "[run_fig2] --context-review-mode llm requires LLMPATH_BACKEND "
+            "to be set (openai|ollama|gemini)."
+        )
+    if kind not in {"openai", "ollama", "gemini"}:
+        _die(f"[run_fig2] Unknown LLMPATH_BACKEND={kind!r} (use openai|ollama|gemini)")
 
 
 def _validate_card_schema(card: dict[str, Any]) -> None:
@@ -274,10 +272,12 @@ def _write_card_with_tau(
     _write_json(dst_card_path, card)
 
 
-def _outdir_for(*, out_root: Path, cancer: str, variant: str, gate_mode: str, tau: float) -> Path:
+def _outdir_for(
+    *, out_root: Path, condition: str, variant: str, gate_mode: str, tau: float
+) -> Path:
     # Paper-friendly layout:
     # out/HNSC/ours/gate_hard/tau_0.20/
-    return out_root / cancer / variant / f"gate_{gate_mode}" / f"tau_{tau:.2f}"
+    return out_root / condition / variant / f"gate_{gate_mode}" / f"tau_{tau:.2f}"
 
 
 def _report_exists_ok(outdir: Path) -> bool:
@@ -289,7 +289,7 @@ def _patch_report_jsonl(
     report_path: Path,
     *,
     benchmark_id: str,
-    cancer: str,
+    condition: str,
     method: str,
     variant: str,
     gate_mode: str,
@@ -311,7 +311,7 @@ def _patch_report_jsonl(
 
             # Stable Fig2 metadata for aggregation (downstream scripts depend on these).
             rec["benchmark_id"] = benchmark_id
-            rec["cancer"] = cancer
+            rec["condition"] = condition
             rec["method"] = method  # e.g. "ours"
             rec["variant"] = variant  # ours / context_swap / stress
             rec["gate_mode"] = gate_mode  # hard / note
@@ -360,7 +360,7 @@ def _write_manifest(
     outdir: Path,
     *,
     benchmark_id: str,
-    cancer: str,
+    condition: str,
     method: str,
     variant: str,
     gate_mode: str,
@@ -386,7 +386,7 @@ def _write_manifest(
         "git_commit": _maybe_git_rev(),
         "run": {
             "benchmark_id": benchmark_id,
-            "cancer": cancer,
+            "condition": condition,
             "method": method,
             "variant": variant,
             "gate_mode": gate_mode,
@@ -438,8 +438,8 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
     """
     Best-effort validation that stress was actually applied.
     - reads run_meta.json written by pipeline (not runner)
-    - warns if pipeline saw zeros despite runner intending non-zeros
-    - warns if claims.proposed.tsv lacks stress_* columns when expected
+    - warns if pipeline recorded stress as off despite runner intending non-zeros
+    - warns if claims.proposed.tsv lacks stress_* columns when runtime says enabled
     """
     rm = outdir / "run_meta.json"
     if not rm.exists():
@@ -452,26 +452,37 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
         _warn(f"cannot parse run_meta.json for stress check: {rm}")
         return
 
-    inputs = meta.get("inputs", {})
-    s = inputs.get("stress_v4", {})  # pipeline currently writes stress_v4 (legacy key)
-    r = inputs.get("stress_v4_runtime", {})
-
     if not expected_enabled:
         return
 
+    inputs = meta.get("inputs", {})
+
+    # ---- accept both new and legacy keys ----
+    s = inputs.get("stress", None)
+    r = inputs.get("stress_runtime", None)
+    if s is None and r is None:
+        s = inputs.get("stress_v4", {})
+        r = inputs.get("stress_v4_runtime", {})
+    else:
+        s = s or {}
+        r = r or {}
+
+    # ---- parse knobs from meta ----
     try:
         p_drop = float(s.get("evidence_dropout_p", 0.0) or 0.0)
         p_contra = float(s.get("contradictory_p", 0.0) or 0.0)
     except Exception:
         p_drop, p_contra = 0.0, 0.0
 
+    # If pipeline truly thinks stress is off, warn *only* when runner expected on.
     if p_drop <= 0.0 and p_contra <= 0.0:
         _warn(
             "stress variant ran but pipeline recorded both evidence_dropout_p=0 and "
-            "contradictory_p=0 "
-            f"(stress may not have been applied). outdir={outdir}"
+            "contradictory_p=0 (stress may not have been applied). "
+            f"outdir={outdir}"
         )
 
+    # ---- schema sanity: if runtime says enabled, TSV should carry stress_* columns ----
     claims = outdir / "claims.proposed.tsv"
     if not claims.exists():
         _warn(f"missing claims.proposed.tsv for stress check: {claims}")
@@ -483,20 +494,22 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
         header = []
 
     has_stress_cols = any(h.startswith("stress_") for h in header)
-    dropout_enabled = bool(r.get("dropout", {}).get("enabled", False))
-    contra_enabled = bool(r.get("contradictory", {}).get("enabled", False))
+
+    dropout_enabled = bool((r.get("dropout", {}) or {}).get("enabled", False))
+    contra_enabled = bool((r.get("contradictory", {}) or {}).get("enabled", False))
+
     if (dropout_enabled or contra_enabled) and (not has_stress_cols):
         _warn(
             "pipeline reports stress enabled at runtime but claims.proposed.tsv has no "
-            "stress_* columns "
-            f"(schema drift?). outdir={outdir}"
+            "stress_* columns (schema drift?). "
+            f"outdir={outdir}"
         )
 
 
 @dataclass(frozen=True)
 class Job:
     benchmark_id: str
-    cancer: str
+    condition: str
     method: str
     variant: str
     gate_mode: str
@@ -515,7 +528,7 @@ class Job:
     stress_contradictory_max_extra: int = 0
 
 
-def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None) -> None:
+def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
     if (not force) and _report_exists_ok(job.outdir):
         print(f"[run_fig2] SKIP (exists): {job.outdir}")
         return
@@ -559,7 +572,7 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None
         # Runner-level run meta (do not collide with pipeline's run_meta.json)
         run_meta_runner = {
             "benchmark_id": job.benchmark_id,
-            "cancer": job.cancer,
+            "condition": job.condition,
             "method": job.method,
             "variant": job.variant,
             "gate_mode": job.gate_mode,
@@ -597,7 +610,7 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None
         _patch_report_jsonl(
             report_path,
             benchmark_id=job.benchmark_id,
-            cancer=job.cancer,
+            condition=job.condition,
             method=job.method,
             variant=job.variant,
             gate_mode=job.gate_mode,
@@ -607,7 +620,7 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None
         _write_manifest(
             job.outdir,
             benchmark_id=job.benchmark_id,
-            cancer=job.cancer,
+            condition=job.condition,
             method=job.method,
             variant=job.variant,
             gate_mode=job.gate_mode,
@@ -630,7 +643,7 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any], backend: Any | None
         _write_manifest(
             job.outdir,
             benchmark_id=job.benchmark_id,
-            cancer=job.cancer,
+            condition=job.condition,
             method=job.method,
             variant=job.variant,
             gate_mode=job.gate_mode,
@@ -692,7 +705,7 @@ def main() -> None:
         "--context-swap-to",
         default="",
         help=(
-            "Optional: force context_swap target cancer (single-cancer runs). "
+            "Optional: force context_swap target condition (single-condition runs). "
             "Example: --cancers HNSC --variants ours,context_swap --context-swap-to LUAD"
         ),
     )
@@ -735,18 +748,10 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # Build backend once per runner invocation (jobs are sequential).
-    backend = None
+    # Validate minimal backend contract (runner does not instantiate backends).
     if str(args.context_review_mode).strip().lower() == "llm":
-        try:
-            backend = _build_backend_from_env()
-        except Exception as e:
-            _die(f"[run_fig2] failed to build backend (LLMPATH_BACKEND): {e}")
-        if backend is None:
-            _die(
-                "[run_fig2] --context-review-mode llm requires LLMPATH_BACKEND "
-                "to be set (openai|ollama|gemini)."
-            )
+        _require_backend_env_for_context_review()
+
     benchmark_id = str(args.benchmark_id).strip()
     if not benchmark_id:
         _die("[run_fig2] --benchmark-id must be non-empty")
@@ -792,14 +797,14 @@ def main() -> None:
             )
 
     # Validate inputs (fail-fast).
-    for cancer in cancers:
-        ev_path = EVID_DIR / f"{cancer}.evidence_table.tsv"
-        _ensure_file(ev_path, f"evidence_table ({cancer})")
+    for condition in cancers:
+        ev_path = EVID_DIR / f"{condition}.evidence_table.tsv"
+        _ensure_file(ev_path, f"evidence_table ({condition})")
         _validate_evidence_table(ev_path)
 
         for gm in gate_modes:
             _ensure_file(
-                CARD_DIR / f"{cancer}.{gm}.sample_card.json", f"sample_card {gm} ({cancer})"
+                CARD_DIR / f"{condition}.{gm}.sample_card.json", f"sample_card {gm} ({condition})"
             )
 
     # Deterministic mapping independent of selected subset for context_swap
@@ -863,8 +868,8 @@ def main() -> None:
 
     jobs: list[Job] = []
 
-    for cancer in cancers:
-        ev = EVID_DIR / f"{cancer}.evidence_table.tsv"
+    for condition in cancers:
+        ev = EVID_DIR / f"{condition}.evidence_table.tsv"
 
         for tau in taus:
             for gate_mode in gate_modes:
@@ -872,29 +877,20 @@ def main() -> None:
                 # Variant: ours
                 # -------------------------
                 if "ours" in variants:
-                    src_sc = CARD_DIR / f"{cancer}.{gate_mode}.sample_card.json"
+                    src_sc = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
                     outdir = _outdir_for(
                         out_root=out_root,
-                        cancer=cancer,
+                        condition=condition,
                         variant="ours",
                         gate_mode=gate_mode,
                         tau=tau,
                     )
                     outdir.mkdir(parents=True, exist_ok=True)
 
-                    tau_card = outdir / "sample_card.tau.json"
-                    _write_card_with_tau(
-                        src_sc,
-                        tau_card,
-                        tau=tau,
-                        k_claims=int(args.k_claims),
-                        context_review_mode=str(args.context_review_mode),
-                    )
-
                     jobs.append(
                         Job(
                             benchmark_id=benchmark_id,
-                            cancer=cancer,
+                            condition=condition,
                             method="ours",
                             variant="ours",
                             gate_mode=gate_mode,
@@ -902,7 +898,7 @@ def main() -> None:
                             k_claims=int(args.k_claims),
                             seed=int(args.seed),
                             evidence_table=ev,
-                            sample_card=tau_card,
+                            sample_card=src_sc,
                             outdir=outdir,
                             # ensure stress off for non-stress variants
                             stress_evidence_dropout_p=0.0,
@@ -918,30 +914,20 @@ def main() -> None:
                 # Variant: stress (robustness demo)
                 # -------------------------
                 if "stress" in variants:
-                    src_sc = CARD_DIR / f"{cancer}.{gate_mode}.sample_card.json"
+                    src_sc = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
                     outdir = _outdir_for(
                         out_root=out_root,
-                        cancer=cancer,
+                        condition=condition,
                         variant="stress",
                         gate_mode=gate_mode,
                         tau=tau,
                     )
                     outdir.mkdir(parents=True, exist_ok=True)
 
-                    tau_card = outdir / "sample_card.tau.json"
-                    _write_card_with_tau(
-                        src_sc,
-                        tau_card,
-                        tau=tau,
-                        k_claims=int(args.k_claims),
-                        stress_gate_mode="hard",
-                        context_review_mode=str(args.context_review_mode),
-                    )
-
                     jobs.append(
                         Job(
                             benchmark_id=benchmark_id,
-                            cancer=cancer,
+                            condition=condition,
                             method="ours",
                             variant="stress",
                             gate_mode=gate_mode,
@@ -949,7 +935,7 @@ def main() -> None:
                             k_claims=int(args.k_claims),
                             seed=int(args.seed),
                             evidence_table=ev,
-                            sample_card=tau_card,
+                            sample_card=src_sc,
                             outdir=outdir,
                             stress_evidence_dropout_p=float(args.stress_evidence_dropout_p),
                             stress_evidence_dropout_min_keep=int(
@@ -964,12 +950,12 @@ def main() -> None:
                 # Variant: context_swap (paper ablation; formerly shuffled_context)
                 # -------------------------
                 if "context_swap" in variants:
-                    dst_cancer = forced_dst or swap_map_all.get(cancer, "")
+                    dst_cancer = forced_dst or swap_map_all.get(condition, "")
                     if not dst_cancer:
-                        _die("[run_fig2] internal error: context swap map missing cancer")
+                        _die("[run_fig2] internal error: context swap map missing condition")
 
-                    # Source card (same cancer as evidence_table)
-                    src_sc_path = CARD_DIR / f"{cancer}.{gate_mode}.sample_card.json"
+                    # Source card (same condition as evidence_table)
+                    src_sc_path = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
                     src = _read_json(src_sc_path)
 
                     # Destination card (swap-in context keys)
@@ -985,7 +971,7 @@ def main() -> None:
                     if not isinstance(extra, dict):
                         extra = {}
 
-                    # Prefer condition (often cancer-specific); fall back to disease.
+                    # Prefer condition (often condition-specific); fall back to disease.
                     extra["context_swap_from"] = str(
                         src.get("condition") or src.get("disease") or ""
                     ).strip()
@@ -997,7 +983,7 @@ def main() -> None:
                     src["extra"] = extra
 
                     # Counterfactual: swap core context keys (template-only; no external knowledge).
-                    # NOTE: include "condition" because many sample cards encode cancer there.
+                    # NOTE: include "condition" because many sample cards encode condition there.
                     for k in ("condition", "disease", "tissue", "perturbation", "comparison"):
                         v = dst.get(k, "")
                         if isinstance(v, str) and v.strip():
@@ -1012,29 +998,32 @@ def main() -> None:
 
                     outdir2 = _outdir_for(
                         out_root=out_root,
-                        cancer=cancer,
+                        condition=condition,
                         variant="context_swap",
                         gate_mode=gate_mode,
                         tau=tau,
                     )
                     outdir2.mkdir(parents=True, exist_ok=True)
 
-                    tmp_card = outdir2 / "sample_card.tau.json"
-                    _validate_card_schema(src)
-                    _write_json(tmp_card, src)
+                    # write swapped card to job-local path (so pipeline actually sees swap fields)
+                    swap_card_path = (
+                        outdir2
+                        / f"sample_card.context_swap.{dst_cancer}.{gate_mode}.tau_{tau:.2f}.json"
+                    )
+                    _write_json(swap_card_path, src)
 
                     jobs.append(
                         Job(
                             benchmark_id=benchmark_id,
-                            cancer=cancer,
-                            method="ours",
+                            condition=condition,
+                            method="context_swap",
                             variant="context_swap",
                             gate_mode=gate_mode,
                             tau=float(tau),
                             k_claims=int(args.k_claims),
                             seed=int(args.seed),
                             evidence_table=ev,
-                            sample_card=tmp_card,
+                            sample_card=swap_card_path,
                             outdir=outdir2,
                             context_swap_from=str(extra.get("context_swap_from", "")),
                             context_swap_to=str(extra.get("context_swap_to", "")),
@@ -1052,10 +1041,10 @@ def main() -> None:
     print(f"[run_fig2] jobs: {n_total}")
     for i, job in enumerate(jobs, start=1):
         print(
-            f"[run_fig2] ({i}/{n_total}) {job.cancer} {job.variant} "
+            f"[run_fig2] ({i}/{n_total}) {job.condition} {job.variant} "
             f"gate={job.gate_mode} tau={job.tau:.2f}"
         )
-        _run_one(job, force=bool(args.force), plan=plan, backend=backend)
+        _run_one(job, force=bool(args.force), plan=plan)
 
     print("[run_fig2] OK")
     print(f"  out_root: {out_root}")

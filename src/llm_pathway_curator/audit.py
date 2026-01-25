@@ -136,6 +136,44 @@ def _hash_term_ids(term_ids: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return float(inter) / float(union) if union else 0.0
+
+
+def _get_stress_jaccard_pass(card: SampleCard, default: float = 0.8) -> float:
+    ex = _get_extra(card)
+    v = ex.get("stress_jaccard_pass", None)
+    if v is None:
+        return float(default)
+    try:
+        x = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, x))
+
+
+def _get_stress_jaccard_soft(card: SampleCard, default: float = 0.5) -> float:
+    """
+    If J < soft => "strong" inconclusive bucket.
+    soft <= J < pass => inconclusive bucket.
+    """
+    ex = _get_extra(card)
+    v = ex.get("stress_jaccard_soft", None)
+    if v is None:
+        return float(default)
+    try:
+        x = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, x))
+
+
 def _looks_like_hex_hash(x: Any) -> bool:
     """12-hex short hash (sha256[:12])."""
     if _is_na_scalar(x):
@@ -1951,12 +1989,14 @@ def audit_claims(
 
         if evidence_dropout_p > 0.0:
             out.at[i, "stress_evaluated"] = True
+
             kept, note = _apply_internal_evidence_dropout(
                 genes=list(ev_union),
                 evidence_key=str(out.at[i, "evidence_key"]),
                 p=float(evidence_dropout_p),
             )
 
+            # If dropout makes the evidence too small, it's inconclusive.
             if len(kept) < int(min_union):
                 out.at[i, "status"] = "ABSTAIN"
                 out.at[i, "stress_ok"] = False
@@ -1964,6 +2004,57 @@ def audit_claims(
                 out.at[i, "audit_notes"] = _append_note(
                     out.at[i, "audit_notes"],
                     f"dropout_inconclusive: {note} < min_union_genes={int(min_union)}",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+            # --- Jaccard-based robustness (Fix 1) ---
+            # NOTE: dropout changes gene set by design, so hash drift is expected.
+            # We judge stability by overlap (Jaccard) against the original union evidence set.
+            ref_set = {_norm_gene_id(g) for g in ev_union if str(g).strip()}
+            kept_set = {_norm_gene_id(g) for g in kept if str(g).strip()}
+
+            # Guard against degenerate tiny unions (already checked min_union, but keep safe)
+            if (len(ref_set) < int(min_union)) or (len(kept_set) < int(min_union)):
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stress_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    f"dropout_inconclusive: tiny_sets ref={len(ref_set)} kept={len(kept_set)}",
+                )
+                _enforce_reason_vocab(out, i)
+                continue
+
+            j_pass = _get_stress_jaccard_pass(card, default=0.8)
+            j_soft = _get_stress_jaccard_soft(card, default=0.5)
+            if j_soft > j_pass:
+                # keep contract sane
+                j_soft = max(0.0, min(j_pass, j_soft))
+
+            j = _jaccard(ref_set, kept_set)
+            inter = len(ref_set & kept_set)
+            uni = len(ref_set | kept_set)
+
+            if j >= float(j_pass):
+                out.at[i, "stress_ok"] = True
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    f"dropout_ok: {note} jaccard={j:.3f} inter={inter} union={uni}",
+                )
+            else:
+                out.at[i, "status"] = "ABSTAIN"
+                out.at[i, "stress_ok"] = False
+                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
+
+                bucket = "JACCARD_MID" if j >= float(j_soft) else "JACCARD_LOW"
+                out.at[i, "audit_notes"] = _append_note(
+                    out.at[i, "audit_notes"],
+                    (
+                        f"dropout_inconclusive({bucket}): {note} "
+                        f"jaccard={j:.3f} inter={inter} union={uni} "
+                        f"(pass>={float(j_pass):.2f}, soft>={float(j_soft):.2f})"
+                    ),
                 )
                 _enforce_reason_vocab(out, i)
                 continue

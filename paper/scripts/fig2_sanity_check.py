@@ -83,7 +83,7 @@ def main() -> None:
         "terms": base / "term_modules.tsv",
         "distilled": base / "distilled.tsv",
         "risk": base / "risk_coverage.tsv",
-        "card": base / "sample_card.resolved.json",
+        "card": base / "sample_card.normalized.json",
         "meta": base / "run_meta.json",  # proof that pipeline ran
     }
 
@@ -137,11 +137,10 @@ def main() -> None:
     print("[report] columns (top 25):", list(rep.columns)[:25])
 
     contract_cols = [
-        "schema_version",
         "benchmark_id",
         "run_id",
         "method",
-        "cancer",
+        "condition",
         "comparison",
         "tau",
         "claim_id",
@@ -150,7 +149,7 @@ def main() -> None:
         "claim.entity_type",
         "claim.entity_id",
         "claim.direction",
-        "claim.context.disease",
+        "claim.context.condition",
         "claim.context.tissue",
         "claim.context.perturbation",
         "evidence_refs.gene_set_hash",
@@ -236,7 +235,7 @@ def main() -> None:
     print("\n[sample_card] keys:", sorted(card.keys()))
     # show a compact excerpt
     excerpt = {
-        "disease": card.get("disease"),
+        "condition": card.get("condition"),
         "tissue": card.get("tissue"),
         "perturbation": card.get("perturbation"),
         "comparison": card.get("comparison"),
