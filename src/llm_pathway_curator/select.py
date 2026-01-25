@@ -1008,7 +1008,8 @@ def _maybe_apply_llm_context_review(
     if outdir:
         try:
             os.makedirs(str(outdir), exist_ok=True)
-            cache_path = os.path.join(str(outdir), "context_review_cache.json")
+            ctx_sig = _context_signature(card)
+            cache_path = os.path.join(str(outdir), f"context_review_cache.{ctx_sig}.json")
             if os.path.exists(cache_path):
                 cache = json.load(open(cache_path))
                 if not isinstance(cache, dict):
@@ -1094,6 +1095,12 @@ def _maybe_apply_llm_context_review(
         df.at[idx, "context_reason"] = reason
         df.at[idx, "context_confidence"] = conf_f if not np.isnan(conf_f) else pd.NA
         updated += 1
+
+        if _debug_enabled():
+            m = str(df.at[idx, "context_method"]).strip().lower()
+            st_now = str(df.at[idx, "context_status"]).strip()
+            if st_now and m and m != "llm":
+                _dlog(f"[context_review][WARN] method!=llm term_uid={term_uid} method={m}")
 
     if cache_path:
         try:
@@ -1657,6 +1664,20 @@ def select_claims(
         outdir=outdir,
         context_review_mode=str(context_review_mode or "off"),
     )
+
+    # Make provenance explicit for downstream merge/debug (do not overwrite meaningful values)
+    try:
+        if isinstance(distilled2, pd.DataFrame) and (not distilled2.empty):
+            if "context_review_mode" not in distilled2.columns:
+                distilled2 = distilled2.copy()
+                distilled2["context_review_mode"] = str(context_review_mode or "off")
+            else:
+                s = distilled2["context_review_mode"].astype(str).fillna("").str.strip()
+                if (s == "").all():
+                    distilled2 = distilled2.copy()
+                    distilled2["context_review_mode"] = str(context_review_mode or "off")
+    except Exception:
+        pass
 
     out_det = _select_claims_deterministic(distilled2, card, k=int(k_eff), seed=seed)
     out_det["claim_mode"] = "deterministic"
