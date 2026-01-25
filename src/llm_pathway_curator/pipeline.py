@@ -284,7 +284,9 @@ def _parse_ids(x: Any) -> list[str]:
     Backward-tolerant ID parser:
       - accepts list-like
       - accepts Excel-safe strings (may begin with a single quote)
-      - accepts comma/semicolon/pipe/whitespace separated strings
+      - accepts comma/semicolon/pipe/tab/newline separated strings
+      - whitespace split is LAST resort and only if all tokens look like IDs
+        (to avoid destructive splitting of free text / term names)
     """
     if _is_na_scalar(x):
         return []
@@ -297,14 +299,23 @@ def _parse_ids(x: Any) -> list[str]:
             s = s[1:].strip()
         if not s or s.lower() in _NA_TOKENS_L:
             return []
-        s = (
-            s.replace("|", ",")
-            .replace(";", ",")
-            .replace("\t", ",")
-            .replace("\n", ",")
-            .replace(" ", ",")
-        )
-        items = [t.strip() for t in s.split(",") if t.strip()]
+
+        # Strong separators first (safe)
+        if any(sep in s for sep in ("|", ";", "\t", "\n", ",")):
+            s = s.replace("|", ",").replace(";", ",").replace("\t", ",").replace("\n", ",")
+            items = [t.strip() for t in s.split(",") if t.strip()]
+        else:
+            # No strong separators.
+            # Only split on whitespace if every token looks identifier-like.
+            if any(ch.isspace() for ch in s):
+                parts0 = [p for p in s.split() if p.strip()]  # split() handles repeated spaces/tabs
+                _ID_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
+                if parts0 and all(bool(_ID_TOKEN.match(tok)) for tok in parts0):
+                    items = [p.strip() for p in parts0 if p.strip()]
+                else:
+                    items = [s]
+            else:
+                items = [s]
 
     seen: set[str] = set()
     uniq: list[str] = []
@@ -454,12 +465,10 @@ def _card_condition(card: SampleCard) -> str:
     """
     Tool-facing neutral label used as the first field of context identity.
 
-    Priority:
-      1) card.condition (explicit)
-      2) card.extra.condition / card.extra.cancer (if present)
-      3) context-swap targets in card.extra
-         (context_swap_to_cancer -> context_swap_to -> context_swap_from)
-      4) card.disease (fallback)
+    IMPORTANT:
+      - This function must return the *intrinsic/original* condition.
+      - Do NOT read context-swap keys here; swap is handled separately
+        by _context_swap_info() / _ctx_ids_from_card().
     """
 
     def _s(x: Any) -> str:
@@ -477,20 +486,14 @@ def _card_condition(card: SampleCard) -> str:
     except Exception:
         pass
 
-    # 2) extra hints
+    # 2) extra hints (non-swap)
     ex = _get_card_extra(card)
     for k in ("condition", "cancer"):
         c = _s(ex.get(k, ""))
         if c:
             return c
 
-    # 3) context swap
-    for k in ("context_swap_to_cancer", "context_swap_to", "context_swap_from"):
-        c = _s(ex.get(k, ""))
-        if c:
-            return c
-
-    # 4) fallback to disease
+    # 3) fallback to disease
     try:
         c = _s(getattr(card, "disease", ""))
         if c:
@@ -1588,6 +1591,50 @@ def _maybe_rerank_with_context_proxy(
     return out
 
 
+def _maybe_rerank_with_context_score(
+    proposed: pd.DataFrame,
+    *,
+    lam: float,
+) -> pd.DataFrame:
+    """
+    Conservative deterministic re-rank using FINAL context_score.
+
+    Contract:
+      - Use context_score (0..1) which already reflects:
+          review confidence > module-weight proxy > hash-u01 proxy
+      - Must be executed AFTER context_score is materialized.
+
+    Ranking key:
+      survival_score * (1 + lam * context_score)
+    """
+    if proposed is None or proposed.empty:
+        return proposed
+    if "context_score" not in proposed.columns:
+        return proposed
+    if "survival_score" not in proposed.columns:
+        return proposed
+
+    out = proposed.copy()
+    lam = float(lam)
+
+    s = pd.to_numeric(out["survival_score"], errors="coerce").fillna(0.0).astype(float)
+    c = (
+        pd.to_numeric(out["context_score"], errors="coerce")
+        .fillna(0.0)
+        .astype(float)
+        .clip(0.0, 1.0)
+    )
+
+    out["_rank_key_context"] = s * (1.0 + lam * c)
+    out["_orig_i"] = range(len(out))
+
+    out = out.sort_values(
+        ["_rank_key_context", "_orig_i"], ascending=[False, True], kind="mergesort"
+    )
+    out = out.drop(columns=["_rank_key_context", "_orig_i"]).reset_index(drop=True)
+    return out
+
+
 # -------------------------
 # Context review (pipeline-owned)
 # -------------------------
@@ -2019,7 +2066,7 @@ def _build_anchor_modules_from_distilled(
 
     ctx_fields = [
         _card_condition(card),
-        str(getattr(card, "disease", "") or ""),
+        str(getattr(card, "condition", "") or ""),
         str(getattr(card, "tissue", "") or ""),
         str(getattr(card, "perturbation", "") or ""),
         str(getattr(card, "comparison", "") or ""),
@@ -2086,10 +2133,15 @@ def _build_anchor_modules_from_distilled(
             "n_anchor_terms": 0,
         }
 
-    anchor_modules = set(
-        anchor_rows[mod_col].map(lambda x: "" if _is_na_scalar(x) else str(x).strip()).tolist()
+    anchor_modules = (
+        anchor_rows[mod_col]
+        .map(lambda x: "" if _is_na_scalar(x) else str(x).strip())
+        .replace("", pd.NA)
+        .dropna()
+        .unique()
+        .tolist()
     )
-    anchor_modules = {m for m in anchor_modules if m}
+    anchor_modules = [m for m in anchor_modules if str(m).strip()]
 
     preview_terms: list[str] = []
     if "term_uid" in anchor_rows.columns:
@@ -2154,21 +2206,20 @@ def _proxy_context_review(
     out["context_review_mode"] = rm or "proxy"
     out["context_method"] = "proxy_context_v2"
 
-    req_keys = ["condition", "tissue", "perturbation", "comparison"]
-    missing = [k for k in req_keys if (k in card_ctx and not str(card_ctx.get(k, "")).strip())]
-    if missing:
+    # Minimal required key for proxy review: condition only.
+    # Other fields can be empty; they will be treated as "NA" in ctx_id/signature.
+    if not str(card_ctx.get("condition", "")).strip():
         out["context_evaluated"] = True
         out["context_status"] = "FAIL"
-        out["context_reason"] = "MISSING_CONTEXT_KEYS"
-        out["context_notes"] = f"missing={missing}"
+        out["context_reason"] = "MISSING_CONDITION"
+        out["context_notes"] = "condition is required for context review"
         out["context_confidence"] = 1.0
         out = _write_context_review_into_claim_json(out)
         meta = {
             "evaluated": True,
             "mode": "proxy_context_v2",
             "gate_mode": gm,
-            "reason": "MISSING_CONTEXT_KEYS",
-            "missing_keys": missing,
+            "reason": "MISSING_CONDITION",
             "n_eval": int(len(out)),
             "n_pass": 0,
             "n_fail": int(len(out)),
@@ -2195,9 +2246,11 @@ def _proxy_context_review(
         if distilled_for_proxy is not None
         else {"ok": False, "reason": "NO_DISTILLED_FOR_PROXY", "tokens": [], "n_anchor_terms": 0}
     )
-    anchor_modules = (
+    anchor_modules_raw = (
         set(anchor_info.get("anchor_modules", []) or []) if anchor_info.get("ok", False) else set()
     )
+    # IMPORTANT: anchor-based downgrade is HARD-gate only (soft must remain advisory).
+    anchor_modules = anchor_modules_raw if gm == "hard" else set()
 
     claim_mod_col = None
     for c in ["module_id_effective", "module_id"]:
@@ -2320,19 +2373,24 @@ def _apply_context_review(
     """
     Apply context review based on selected mode.
 
-    IMPORTANT:
-      - pipeline does not implement LLM context review prompt here.
-      - LLM mode is expected to be executed inside select.py (if supported).
-      - Here we only ensure contract fields exist and record metadata.
-      - If review_mode=llm but backend is missing, we safely fall back to proxy
-        (and record this in meta) to avoid "declared llm but not evaluated".
+    CONTRACT:
+      - If review_mode != off, we must NOT leave context evaluation "empty".
+      - If review_mode=llm is requested but no evaluated results are present
+        (or backend missing), we MUST fall back to proxy and record it.
+
+    Notes:
+      - Pipeline itself does not run LLM prompts here.
+      - If select.py already wrote evaluated context into claim_json/columns, we keep it.
+      - Otherwise: proxy fallback (never leave unevaluated).
     """
     rm = _norm_review_mode(review_mode, default="proxy")
     gm = _norm_gate_mode(gate_mode, default="soft")
 
+    # --- OFF: explicit no review ---
     if rm == "off":
         out = _ensure_context_review_fields(proposed, gate_mode=gm)
         out["context_review_mode"] = "off"
+        out["context_method"] = "off"
         out = _write_context_review_into_claim_json(out)
         return out, {
             "evaluated": False,
@@ -2341,7 +2399,73 @@ def _apply_context_review(
             "note": "context review disabled",
         }
 
-    if rm == "llm" and backend is None:
+    # Helper: detect whether any evaluated result exists already.
+    def _has_any_evaluated(df: pd.DataFrame) -> bool:
+        if df is None or df.empty:
+            return False
+        if "context_evaluated" in df.columns:
+            try:
+                s = df["context_evaluated"].map(
+                    lambda x: bool(x) if not _is_na_scalar(x) else False
+                )
+                return bool(s.any())
+            except Exception:
+                pass
+        if "claim_json" in df.columns:
+            try:
+                ex = df["claim_json"].apply(_extract_context_fields_from_claim_json)
+                ex_df = pd.DataFrame(list(ex))
+                if "context_evaluated" in ex_df.columns:
+                    v = (
+                        ex_df["context_evaluated"]
+                        .map(lambda x: bool(x) if isinstance(x, bool) else False)
+                        .fillna(False)
+                    )
+                    return bool(v.any())
+            except Exception:
+                return False
+        return False
+
+    already = _has_any_evaluated(proposed)
+
+    # --- LLM requested ---
+    if rm == "llm":
+        # If backend missing => proxy fallback (and record honestly).
+        if backend is None:
+            out, meta = _proxy_context_review(
+                proposed,
+                card,
+                gate_mode=gm,
+                review_mode="proxy",
+                distilled_for_proxy=distilled_for_proxy,
+            )
+            meta.update(
+                {
+                    "requested_mode": "llm",
+                    "fallback": "proxy",
+                    "warning": "context_review_mode=llm but backend is None; fell back to proxy",
+                    "seed": int(seed),
+                }
+            )
+            return out, meta
+
+        # Backend exists, but pipeline does not run prompts.
+        # If select.py already produced evaluated results, keep them.
+        if already:
+            out = _ensure_context_review_fields(proposed, gate_mode=gm)
+            out["context_review_mode"] = "llm"
+            out["context_method"] = "llm"
+            out = _write_context_review_into_claim_json(out)
+            return out, {
+                "evaluated": True,
+                "mode": "llm",
+                "gate_mode": gm,
+                "note": "LLM results were already present (likely from select.py).",
+                "backend_enabled": True,
+                "seed": int(seed),
+            }
+
+        # Otherwise: MUST NOT leave it empty => proxy fallback, but record requested llm.
         out, meta = _proxy_context_review(
             proposed,
             card,
@@ -2353,45 +2477,15 @@ def _apply_context_review(
             {
                 "requested_mode": "llm",
                 "fallback": "proxy",
-                "warning": "context_review_mode=llm but backend is None; fell back to proxy",
+                "warning": "context_review_mode=llm but no evaluated results were present; "
+                "fell back to proxy to satisfy contract (no-empty).",
+                "backend_enabled": True,
                 "seed": int(seed),
             }
         )
         return out, meta
 
-    if rm == "llm":
-        already = False
-        if proposed is not None and (not proposed.empty) and ("claim_json" in proposed.columns):
-            try:
-                ex = proposed["claim_json"].apply(_extract_context_fields_from_claim_json)
-                ex_df = pd.DataFrame(list(ex))
-                if "context_evaluated" in ex_df.columns:
-                    already = bool(
-                        pd.to_numeric(ex_df["context_evaluated"], errors="coerce")
-                        .fillna(0)
-                        .astype(int)
-                        .sum()
-                        > 0
-                    )
-            except Exception:
-                already = False
-
-        out = _ensure_context_review_fields(proposed, gate_mode=gm)
-        out["context_review_mode"] = "llm"
-        out["context_method"] = "llm"
-        out = _write_context_review_into_claim_json(out)
-
-        return out, {
-            "evaluated": bool(already),
-            "mode": "llm",
-            "gate_mode": gm,
-            "note": "LLM context review is expected "
-            "to be executed in select.py (if supported); "
-            "pipeline only enforces contract fields",
-            "backend_enabled": True,
-            "seed": int(seed),
-        }
-
+    # --- Proxy (default) ---
     return _proxy_context_review(
         proposed,
         card,
@@ -2454,6 +2548,98 @@ def _restore_context_scores_into_audit_log(
         out2["context_confidence"] = pd.to_numeric(out2["context_confidence"], errors="coerce")
 
     return out2
+
+
+def _apply_context_gate_to_proposed(
+    proposed: pd.DataFrame,
+    *,
+    gate_mode: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Pre-audit context gate.
+
+    Goal (paper-facing):
+      - hard gate must affect the *input* to audit_claims, not only post-hoc logs.
+      - single source of truth is context_status + context_evaluated.
+
+    Policy:
+      - if gate_mode != hard: no change
+      - if hard:
+          * if context_status != PASS -> mark as ineligible (when eligible column exists)
+          * also set preselect_tau_gate to 0 if such column exists (defensive)
+          * never delete rows (keep for transparency); audit can still log them
+
+    Returns:
+      (updated_df, meta)
+    """
+    gm = _norm_gate_mode(gate_mode, default="soft")
+    meta: dict[str, Any] = {
+        "evaluated": True,
+        "gate_mode": gm,
+        "reason": "NOOP",
+        "n_rows": int(getattr(proposed, "shape", [0, 0])[0]),
+        "n_blocked": 0,
+    }
+
+    if proposed is None or proposed.empty:
+        meta["reason"] = "EMPTY_PROPOSED"
+        return proposed, meta
+
+    if gm != "hard":
+        return proposed, meta
+
+    out = proposed.copy()
+
+    if "context_status" not in out.columns:
+        meta["reason"] = "MISSING_CONTEXT_STATUS"
+        return out, meta
+
+    ctx = out["context_status"].astype(str).str.strip().str.upper()
+    blocked = ~ctx.eq("PASS")
+    n_blocked = int(blocked.sum())
+    meta["n_blocked"] = n_blocked
+    meta["reason"] = "OK"
+
+    # Mark eligibility if the column exists; do not invent semantics otherwise.
+    if "eligible" in out.columns:
+        try:
+            out["eligible"] = out["eligible"].map(
+                lambda x: bool(x) if not _is_na_scalar(x) else True
+            )
+            out.loc[blocked, "eligible"] = False
+            meta["eligible_written"] = True
+        except Exception:
+            meta["eligible_written"] = False
+
+    # Defensive: if a preselect gate scalar exists, force it to "off" for blocked rows.
+    if "preselect_tau_gate" in out.columns:
+        try:
+            col = out["preselect_tau_gate"]
+
+            # If it's boolean-like, write False (NOT 0.0).
+            if (
+                (str(col.dtype).lower() == "bool")
+                or isinstance(getattr(col.dtype, "type", None), type)
+                and getattr(col.dtype, "type", None) is bool
+            ):
+                out.loc[blocked, "preselect_tau_gate"] = False
+                meta["preselect_tau_gate_written"] = True
+            else:
+                # Otherwise treat as numeric gate.
+                out["preselect_tau_gate"] = pd.to_numeric(
+                    out["preselect_tau_gate"], errors="coerce"
+                )
+                out.loc[blocked, "preselect_tau_gate"] = 0.0
+                meta["preselect_tau_gate_written"] = True
+        except Exception:
+            meta["preselect_tau_gate_written"] = False
+
+    # Paper-friendly traceability
+    if "context_gate_applied_pre_audit" not in out.columns:
+        out["context_gate_applied_pre_audit"] = False
+    out.loc[blocked, "context_gate_applied_pre_audit"] = True
+
+    return out, meta
 
 
 def _apply_context_gate_to_audited(
@@ -2672,15 +2858,16 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         effective_tau = _resolve_tau(cfg.tau, card)
 
-        sc_original_path = outdir / "sample_card.original.json"
-        _write_json(sc_original_path, _dump_model(card_original))
-        meta["artifacts"]["sample_card_original_json"] = str(sc_original_path)
-        meta["inputs"]["sample_card_original_sha256"] = _sha256_file(sc_original_path)
+        # --- sample_card outputs (2 files, clear naming) ---
+        sc_raw_path = outdir / "sample_card.raw.json"
+        _write_json(sc_raw_path, _dump_model(card_original))
+        meta["artifacts"]["sample_card_raw_json"] = str(sc_raw_path)
+        meta["inputs"]["sample_card_raw_sha256"] = _sha256_file(sc_raw_path)
 
-        sc_path = outdir / "sample_card.resolved.json"
-        _write_json(sc_path, _dump_model(card))
-        meta["artifacts"]["sample_card_resolved_json"] = str(sc_path)
-        meta["inputs"]["sample_card_resolved_sha256"] = _sha256_file(sc_path)
+        sc_norm_path = outdir / "sample_card.normalized.json"
+        _write_json(sc_norm_path, _dump_model(card))
+        meta["artifacts"]["sample_card_normalized_json"] = str(sc_norm_path)
+        meta["inputs"]["sample_card_normalized_sha256"] = _sha256_file(sc_norm_path)
 
         try:
             tau_card = float(card.audit_tau())
@@ -2911,12 +3098,18 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "on",
         }
         lam = float(_env_float("LLMPATH_CONTEXT_RERANK_LAMBDA", 0.25))
-        if rerank:
-            proposed = _maybe_rerank_with_context_proxy(proposed, lam=lam)
+
+        # Rerank must use FINAL context_score, so we execute it AFTER review/score materialization.
+        rerank_pending = bool(rerank)
 
         meta["inputs"]["claims"]["context_weight_learning"] = w_meta
         meta["inputs"]["claims"]["context_score_proxy"] = ctx_score_meta
-        meta["inputs"]["claims"]["context_rerank"] = {"enabled": bool(rerank), "lambda": float(lam)}
+        meta["inputs"]["claims"]["context_rerank"] = {
+            "enabled": bool(rerank_pending),
+            "lambda": float(lam),
+            "timing": "post_review_context_score",
+            "rank_key": "survival_score*(1+lambda*context_score)",
+        }
         _write_json(meta_path, meta)
 
         proposed, ctx_review_meta = _apply_context_review(
@@ -2937,26 +3130,42 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed["context_ctx_id_effective"] = ctx_id_effective
         proposed["context_swap_from"] = ctx_ids.get("swap_from", "")
         proposed["context_swap_to"] = ctx_ids.get("swap_to", "")
-        proposed = _ensure_context_score_columns(proposed)
+        # --- Post-review rerank (final context_score) ---
+        if "rerank_pending" in locals() and bool(rerank_pending):
+            proposed = _maybe_rerank_with_context_score(proposed, lam=float(lam))
 
         src = "unknown"
-        if (
-            "context_confidence" in proposed.columns
-            and pd.to_numeric(proposed["context_confidence"], errors="coerce").notna().any()
-        ):
+
+        # Prefer "did we actually evaluate context?" over mere non-NA numerics.
+        evaluated_any = False
+        try:
+            if "context_evaluated" in proposed.columns:
+                evaluated_any = bool(
+                    proposed["context_evaluated"]
+                    .map(lambda x: bool(x) if not _is_na_scalar(x) else False)
+                    .any()
+                )
+        except Exception:
+            evaluated_any = False
+
+        if evaluated_any:
             src = "review_confidence"
-        elif (
-            "context_score_proxy_norm" in proposed.columns
-            and pd.to_numeric(proposed["context_score_proxy_norm"], errors="coerce").notna().any()
-        ):
-            src = "module_weight_proxy"
-        elif (
-            "context_score_proxy_u01_norm" in proposed.columns
-            and pd.to_numeric(proposed["context_score_proxy_u01_norm"], errors="coerce")
-            .notna()
-            .any()
-        ):
-            src = "hash_u01_proxy"
+        else:
+            # module-weight proxy should be recognized only when it actually contributed
+            used_module_weight = False
+            try:
+                if "context_proxy_method" in proposed.columns:
+                    m = proposed["context_proxy_method"].astype(str).str.strip()
+                    used_module_weight = bool((m == "module_weight").any())
+                if used_module_weight and "module_context_weight" in proposed.columns:
+                    w = pd.to_numeric(proposed["module_context_weight"], errors="coerce").fillna(
+                        0.0
+                    )
+                    used_module_weight = bool((w != 0.0).any())
+            except Exception:
+                used_module_weight = False
+
+            src = "module_weight_proxy" if used_module_weight else "hash_u01_proxy"
 
         meta.setdefault("inputs", {}).setdefault("claims", {})
         meta["inputs"]["claims"]["context_score_source"] = src
@@ -3114,12 +3323,22 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed = _sync_context_columns_from_claim_json(proposed)
         proposed = _normalize_context_confidence_for_gating(proposed)
 
+        # --- Pre-audit hard gating (single source of truth: audit sees final-gated input) ---
+        proposed, pre_audit_gate_meta = _apply_context_gate_to_proposed(
+            proposed,
+            gate_mode=context_gate_mode,
+        )
+        meta.setdefault("inputs", {}).setdefault("claims", {})
+        meta["inputs"]["claims"]["context_gate_pre_audit"] = pre_audit_gate_meta
+        _write_json(meta_path, meta)
+
         proposed_path = outdir / "claims.proposed.tsv"
         _write_tsv(proposed, proposed_path)
         meta["artifacts"]["claims_proposed_tsv"] = str(proposed_path)
 
         _mark_step("audit")
         audited = _call_compat(audit_claims, proposed, distilled2, card, tau=effective_tau)
+
         audited = _restore_claim_payload_into_audit_log(audited, proposed)
         audited = _restore_context_scores_into_audit_log(audited, proposed)
         audited = _apply_context_gate_to_audited(audited, proposed, gate_mode=context_gate_mode)
