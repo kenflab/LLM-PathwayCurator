@@ -237,7 +237,23 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
     return _as_bool(v, default=bool(default))
 
 
-def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.2) -> float:
+def _get_context_proxy_swap_penalty(card: SampleCard, default: float = 0.6) -> float:
+    """
+    Swap penalty added to p_warn under context_swap_active.
+    Increasing this makes swap strictly harder without changing u.
+    """
+    ex = _get_extra(card)
+    v = ex.get("context_proxy_swap_penalty", None)
+    if v is None:
+        return float(default)
+    try:
+        p = float(v)
+    except Exception:
+        return float(default)
+    return min(1.0, max(0.0, p))
+
+
+def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.05) -> float:
     ex = _get_extra(card)
     v = ex.get("context_proxy_warn_p", None)
     if v is None:
@@ -250,27 +266,43 @@ def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.2) -> float:
 
 
 def _get_context_proxy_key_fields(
-    card: SampleCard, default: str = "context_keys,term_uid"
+    card: SampleCard, default: str = "context_keys,term_uid,cancer,context_swap_to"
 ) -> list[str]:
     """
     Comma-separated list of fields to build deterministic proxy key.
+
+    Rationale:
+      - Must depend on *swap target* to make context_swap ablation actually change gating.
+      - Must not rely on card.disease (often null); prefer row-level cancer/disease/etc.
+
     Allowed:
-    context_keys,
-    term_uid,
-    module_id,
-    gene_set_hash,
-    comparison,
-    cancer,
-    disease,
-    tissue,
-    perturbation,
-    condition
+      context_keys,
+      term_uid,
+      module_id,
+      gene_set_hash,
+      comparison,
+      cancer,
+      disease,
+      tissue,
+      perturbation,
+      condition,
+      context_swap_from,
+      context_swap_to,
+      context_swap_active
     """
     ex = _get_extra(card)
     s = ex.get("context_proxy_key_fields", default)
     if _is_na_scalar(s):
         s = default
     items = [t.strip().lower() for t in str(s).split(",") if t.strip()]
+
+    # Ensure swap dependence by default even if user provided a too-minimal list.
+    # (If swap columns don't exist, they just contribute nothing.)
+    if "context_swap_to" not in items:
+        items.append("context_swap_to")
+    if "cancer" not in items:
+        items.append("cancer")
+
     return items or [t.strip().lower() for t in str(default).split(",") if t.strip()]
 
 
@@ -370,23 +402,80 @@ def _get_context_swap_strict_mode(card: SampleCard, default: str = "warn_to_abst
 
 def _row_context_swap_active(row: pd.Series) -> bool:
     """
-    Robust detection of swap activation from row-level fields.
-    We prefer explicit boolean flag if present.
+    Detect swap activation robustly.
+
+    Contract:
+      - Prefer explicit boolean flag if present.
+      - Otherwise, require variant marker (context_swap) to avoid false positives
+        when from/to columns are present for bookkeeping in non-swap runs.
     """
+    # 1) Explicit flag wins
     v = row.get("context_swap_active", None)
     if not _is_na_scalar(v):
         try:
             return bool(v)
         except Exception:
-            pass
+            return True
 
-    # fallback: if swap_from/to exist and look non-empty
+    # 2) Variant marker (recommended)
+    variant = row.get("variant", None)
+    if not _is_na_scalar(variant):
+        s = str(variant).strip().lower()
+        if s in {"context_swap", "swap", "contextswap"}:
+            return True
+        # if variant exists and is not swap, do NOT infer swap from from/to
+        return False
+
+    # 3) Fallback (only if we have no variant info at all)
     frm = row.get("context_swap_from", None)
     to = row.get("context_swap_to", None)
     if (not _is_na_scalar(frm)) and (not _is_na_scalar(to)):
-        if str(frm).strip() and str(to).strip() and (str(frm).strip() != str(to).strip()):
+        a = str(frm).strip()
+        b = str(to).strip()
+        if a and b and (a != b):
             return True
     return False
+
+
+def _row_original_context_id(row: pd.Series) -> str:
+    """
+    Return a stable "original context id" used to seed proxy u.
+    Goal: u must NOT change under context_swap.
+
+    Preferred columns (if present):
+      - context_ctx_id_original
+      - ctx_id_original
+      - context_id_original
+      - context_original_id
+    Fallback:
+      - context_swap_from  (original context label)
+      - context_keys       (less ideal but better than empty)
+    """
+    for k in [
+        "context_ctx_id_original",
+        "ctx_id_original",
+        "context_id_original",
+        "context_original_id",
+    ]:
+        v = row.get(k, None)
+        if not _is_na_scalar(v):
+            s = str(v).strip()
+            if s:
+                return s
+
+    v = row.get("context_swap_from", None)
+    if not _is_na_scalar(v):
+        s = str(v).strip()
+        if s:
+            return s
+
+    v = row.get("context_keys", None)
+    if not _is_na_scalar(v):
+        s = str(v).strip()
+        if s:
+            return s
+
+    return ""
 
 
 def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
@@ -990,41 +1079,145 @@ def _proxy_context_status(
     term_ids: list[str],
     module_id: str,
     gene_set_hash: str,
-) -> tuple[bool, str, str]:
+) -> tuple[bool, str, str, float, float, str]:
     """
-    Deterministic proxy context review:
-      - returns evaluated=True
-      - status is PASS for most, WARN for a small fraction (p_warn)
-    This avoids 'all WARN' collapse when context_score is uninformative.
-    """
-    p_warn = _get_context_proxy_warn_p(card, default=0.2)
-    key_fields = _get_context_proxy_key_fields(card, default="context_keys,term_uid")
+    Deterministic proxy context review (Proposal B):
+      - u is seeded from ORIGINAL context only (must not change under swap)
+      - swap makes gating strictly harder by increasing p_warn_eff, without changing u
+      - Therefore swap can never improve PASS rate (no WARN->PASS flips)
 
+    Returns:
+      (evaluated, status, note, u01, p_warn_eff, key_base)
+    """
+    p_warn = _get_context_proxy_warn_p(card)
+    swap_penalty = _get_context_proxy_swap_penalty(card)
+
+    # Helper: safe get + stringify
+    def _get_row_str(k: str) -> str:
+        v = row.get(k, "")
+        if _is_na_scalar(v):
+            return ""
+        return str(v).strip()
+
+    # --------
+    # Build a BASE KEY that is invariant under swap.
+    # --------
     parts: list[str] = []
-    for f in key_fields:
-        if f == "context_keys":
-            v = row.get("context_keys", "")
-            if not _is_na_scalar(v):
-                parts.append(str(v).strip())
-        elif f == "term_uid":
-            parts.append(",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()})))
-        elif f == "module_id":
-            parts.append(str(module_id or "").strip())
-        elif f == "gene_set_hash":
-            parts.append(str(gene_set_hash or "").strip())
-        elif f in {"comparison", "cancer", "disease", "tissue", "perturbation", "condition"}:
-            parts.append(str(row.get(f, "")).strip())
-        else:
-            continue
+
+    # 1) original context id (most important)
+    ctx0 = _row_original_context_id(row)
+    if ctx0:
+        parts.append(f"ctx0={ctx0}")
+
+    # 2) cancer/comparison (often stable across swap; keep for separation)
+    cancer = _get_row_str("cancer")
+    if cancer:
+        parts.append(f"cancer={cancer}")
+
+    comp = _get_row_str("comparison")
+    if comp:
+        parts.append(f"comparison={comp}")
+
+    # 3) evidence identity (term/module/hash)
+    # term_ids here are already resolved uids (audit_claims resolves them before calling proxy)
+    tu = ",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()}))
+    if tu:
+        parts.append(f"term_uid={tu}")
+
+    mid = str(module_id or "").strip()
+    if mid:
+        parts.append(f"module_id={mid}")
+
+    gsh = str(gene_set_hash or "").strip()
+    if gsh:
+        parts.append(f"gene_set_hash={gsh}")
+
+    key_base = "|".join([p for p in parts if p]).strip()
+    if not key_base:
+        # absolute fallback: must remain stable across swap as much as possible
+        key_base = gsh or tu or "proxy_context"
+
+    # u is ONLY from base key (swap invariant)
+    u = _deterministic_uniform_0_1(key_base, salt="proxy_context_v3_base")
+
+    swap_active = False
+    try:
+        swap_active = bool(_row_context_swap_active(row))
+    except Exception:
+        swap_active = False
+
+    # Effective WARN probability (swap harder, same u)
+    p_warn_eff = float(p_warn)
+    if swap_active:
+        p_warn_eff = min(1.0, float(p_warn) + float(swap_penalty))
+
+    status = "WARN" if (u < float(p_warn_eff)) else "PASS"
+    note = (
+        f"proxy_context_v3: swap_active={int(swap_active)} "
+        f"u={u:.3f} p_warn={float(p_warn):.3f} p_warn_eff={float(p_warn_eff):.3f} "
+        f"key_base_fields=ctx0,cancer,comparison,term_uid,module_id,gene_set_hash"
+    )
+    return True, status, note, float(u), float(p_warn_eff), key_base
+
+    # HARD GUARANTEE:
+    # If swap is present/active, force it into the key even if user misconfigured fields.
+    frm2 = _get_row_str("context_swap_from")
+    to2 = _get_row_str("context_swap_to")
+
+    # Track which fields contributed to the key (for logging/debug only).
+    key_fields_eff: list[str] = []
+
+    if frm2 and to2 and frm2 != to2:
+        parts.append(f"swap:{frm2}->{to2}")
+        key_fields_eff.extend(["context_swap_from", "context_swap_to"])
+
+    # HARD GUARANTEE:
+    # If cancer exists, include it (card.disease can be null).
+    cancer2 = _get_row_str("cancer")
+    if cancer2:
+        parts.append(f"cancer={cancer2}")
+        key_fields_eff.append("cancer")
 
     key = "|".join([p for p in parts if p])
     if not key:
-        key = str(gene_set_hash or "") or ",".join(term_ids)
+        key = str(gene_set_hash or "").strip() or ",".join([t for t in term_ids if str(t).strip()])
 
+    # --- Paper contract: under context_swap, proxy must not improve PASS rate ---
+    # Instead of forcing WARN (which makes everything ABSTAIN under swap_strict),
+    # we increase WARN probability deterministically.
     u = _deterministic_uniform_0_1(key, salt="proxy_context_v2")
+
+    try:
+        if _row_context_swap_active(row):
+            # Make swap strictly harder than original:
+            # increase WARN probability but keep some PASS.
+            p_warn_swap = min(1.0, float(p_warn) + 0.6)  # e.g., 0.2 -> 0.8
+            if u < float(p_warn_swap):
+                return (
+                    True,
+                    "WARN",
+                    f"proxy_context_v2: swap_active u={u:.3f} < p_warn_swap={p_warn_swap:.3f}",
+                )
+            return (
+                True,
+                "PASS",
+                f"proxy_context_v2: swap_active u={u:.3f} >= p_warn_swap={p_warn_swap:.3f}",
+            )
+    except Exception:
+        pass
+
+    fields_note = key_fields_eff if key_fields_eff else ["(implicit)"]
     if u < float(p_warn):
-        return True, "WARN", f"proxy_context_v2: u={u:.3f} < p_warn={p_warn:.3f} key={key_fields}"
-    return True, "PASS", f"proxy_context_v2: u={u:.3f} >= p_warn={p_warn:.3f} key={key_fields}"
+        return (
+            True,
+            "WARN",
+            f"proxy_context_v2: u={u:.3f} < p_warn={p_warn:.3f} fields={fields_note}",
+        )
+    return (
+        True,
+        "PASS",
+        f"proxy_context_v2: u={u:.3f} >= p_warn={p_warn:.3f} fields={fields_note}",
+    )
 
 
 def _apply_internal_evidence_dropout(
@@ -1164,6 +1357,15 @@ def audit_claims(
         out["context_reason"] = ""
     if "context_notes" not in out.columns:
         out["context_notes"] = ""
+
+    if "context_score_proxy_u01" not in out.columns:
+        out["context_score_proxy_u01"] = pd.NA
+    if "context_score_proxy_p_warn" not in out.columns:
+        out["context_score_proxy_p_warn"] = pd.NA
+    if "context_score_proxy_p_warn_eff" not in out.columns:
+        out["context_score_proxy_p_warn_eff"] = pd.NA
+    if "context_score_proxy_key_base" not in out.columns:
+        out["context_score_proxy_key_base"] = ""
 
     if "module_reason" not in out.columns:
         out["module_reason"] = ""
@@ -1594,13 +1796,20 @@ def audit_claims(
 
         if (not c_eval) and (not str(c_status or "").strip()):
             if (context_review_mode == "proxy") or (cs_val is not None):
-                c_eval, c_status, c_note = _proxy_context_status(
+                c_eval, c_status, c_note, u01, p_warn_eff, key_base = _proxy_context_status(
                     card=card,
                     row=row,
                     term_ids=term_ids,
                     module_id=str(module_id or ""),
                     gene_set_hash=str(gsh_norm or ""),
                 )
+                # expose proxy diagnostics (helps Fig2 + reviewer-proofing)
+                out.at[i, "context_score_proxy_u01"] = float(u01)
+                out.at[i, "context_score_proxy_p_warn"] = float(
+                    _get_context_proxy_warn_p(card, default=0.2)
+                )
+                out.at[i, "context_score_proxy_p_warn_eff"] = float(p_warn_eff)
+                out.at[i, "context_score_proxy_key_base"] = str(key_base)
 
         if (not c_eval) and (not str(c_status or "").strip()):
             ev2, st2, note2 = _context_eval_from_row(row)
@@ -1811,6 +2020,52 @@ def audit_claims(
             out.at[i, "audit_notes"] = "ok"
 
         _enforce_reason_vocab(out, i)
+
+    # -------------------------
+    # Diagnostic / derived context gate columns (run-wide, always computed)
+    # -------------------------
+    if "select_context_status_score" not in out.columns:
+        out["select_context_status_score"] = -1
+    if "context_gate_blocked" not in out.columns:
+        out["context_gate_blocked"] = False
+    if "eligible_context" not in out.columns:
+        out["eligible_context"] = False
+
+    st_all = out["context_status"].astype(str).str.strip().str.upper()
+    ev_all = out["context_evaluated"].astype(bool)
+
+    score = pd.Series([-1] * len(out), index=out.index)
+    score[st_all == "PASS"] = 1
+    score[st_all == "WARN"] = 0
+    score[st_all == "FAIL"] = -1
+    out["select_context_status_score"] = score.astype(int)
+
+    gate_mode_eff = str(context_gate_mode or "").strip().lower()
+    if gate_mode_eff == "hard":
+        blocked = (~ev_all) | (st_all.isin(["WARN", "FAIL"])) | (st_all == "")
+    else:
+        blocked = pd.Series([False] * len(out), index=out.index)
+
+    out["context_gate_blocked"] = blocked.astype(bool)
+    out["eligible_context"] = (~blocked).astype(bool)
+
+    # legacy: in this file "hit" == "blocked"
+    if "context_gate_hit" in out.columns:
+        out["context_gate_hit"] = blocked.astype(bool)
+
+    # After audit_log.tsv is assembled (or right before writing it)
+    ex = _get_extra(card)
+    if str(ex.get("context_review_mode", "")).strip().lower() == "llm":
+        cm = out["context_method"].fillna("").astype(str).str.lower()
+        n_llm = int((cm == "llm").sum())
+        n_proxy = int((cm == "proxy").sum())
+        n_none = int((cm == "none").sum())
+        if n_llm == 0 and (n_proxy + n_none) > 0:
+            print(
+                f"[SANITY][WARN] context_review_mode=llm but context_method has 0 llm "
+                f"(proxy={n_proxy}, none={n_none}). Review likely never called; "
+                f"falling back or skipping everywhere."
+            )
 
     _apply_intra_run_contradiction(out)
     return out
