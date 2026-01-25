@@ -1782,6 +1782,7 @@ def audit_claims(
                 _enforce_reason_vocab(out, i)
                 continue
 
+        # --- Context integration priority (LLM-first, but keep swap-sensitive proxy) ---
         c_eval, c_status, c_note = _extract_context_review_from_claim_json(cj_str)
 
         context_review_mode = str(row.get("context_review_mode", "")).strip().lower()
@@ -1794,22 +1795,45 @@ def audit_claims(
             except Exception:
                 cs_val = None
 
+        swap_active = False
+        try:
+            swap_active = bool(_row_context_swap_active(row))
+        except Exception:
+            swap_active = False
+
+        # (A) If claim_json has no context, and proxy is allowed, run proxy BEFORE row_fallback
+        #     ONLY when the only available signal is row-level proxy-ish stuff
+        #     (context_score / proxy mode).
+        #     This restores swap effect (swap_penalty) and avoids row_fallback masking it.
         if (not c_eval) and (not str(c_status or "").strip()):
             if (context_review_mode == "proxy") or (cs_val is not None):
-                c_eval, c_status, c_note, u01, p_warn_eff, key_base = _proxy_context_status(
-                    card=card,
-                    row=row,
-                    term_ids=term_ids,
-                    module_id=str(module_id or ""),
-                    gene_set_hash=str(gsh_norm or ""),
+                # If row has true LLM outputs (context_review_*), we must NOT override them.
+                has_llm_cols = (
+                    ("context_review_evaluated" in row.index)
+                    or ("context_review_status" in row.index)
+                    or ("context_review_reason" in row.index)
                 )
-                # expose proxy diagnostics (helps Fig2 + reviewer-proofing)
-                out.at[i, "context_score_proxy_u01"] = float(u01)
-                out.at[i, "context_score_proxy_p_warn"] = float(
-                    _get_context_proxy_warn_p(card, default=0.2)
-                )
-                out.at[i, "context_score_proxy_p_warn_eff"] = float(p_warn_eff)
-                out.at[i, "context_score_proxy_key_base"] = str(key_base)
+                if not has_llm_cols:
+                    c_eval, c_status, c_note, u01, p_warn_eff, key_base = _proxy_context_status(
+                        card=card,
+                        row=row,
+                        term_ids=term_ids,
+                        module_id=str(module_id or ""),
+                        gene_set_hash=str(gsh_norm or ""),
+                    )
+                    out.at[i, "context_score_proxy_u01"] = float(u01)
+                    out.at[i, "context_score_proxy_p_warn"] = float(
+                        _get_context_proxy_warn_p(card, default=0.2)
+                    )
+                    out.at[i, "context_score_proxy_p_warn_eff"] = float(p_warn_eff)
+                    out.at[i, "context_score_proxy_key_base"] = str(key_base)
+
+        # (B) If still missing, use row fallback
+        #     (LLM outputs > legacy context_* > presence of context_score)
+        if (not c_eval) and (not str(c_status or "").strip()):
+            ev2, st2, note2 = _context_eval_from_row(row)
+            if ev2 or st2:
+                c_eval, c_status, c_note = ev2, st2, f"row_fallback: {note2}"
 
         if (not c_eval) and (not str(c_status or "").strip()):
             ev2, st2, note2 = _context_eval_from_row(row)
