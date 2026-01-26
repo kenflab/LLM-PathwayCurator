@@ -249,7 +249,7 @@ def _loo_survival_from_replicates(
             raise ValueError(
                 "replicates_proxy baseline has duplicate term_uid rows. "
                 f"term_uid={tu!r} baseline_id={baseline_id!r}. "
-                "Fix: upstream EvidenceTable should have unique (replicate_id, source, term_id)."
+                "Upstream EvidenceTable should have unique (replicate_id, source, term_id)."
             )
 
         genes = r["evidence_genes"]
@@ -270,7 +270,9 @@ def _loo_survival_from_replicates(
             }
         )
 
-    # For each non-baseline replicate, build tu -> (dir, geneset) with union semantics.
+    # For each non-baseline replicate, build tu -> (dir, geneset).
+    # Decision-grade policy: require unique term_uid per replicate.
+    # (Union would bias survival upward and hide upstream duplication bugs.)
     rep_lookup: dict[str, dict[str, tuple[str, set[str]]]] = {}
     for rid in reps_nb:
         sub = df[df["replicate_id"].astype(str) == rid]
@@ -279,17 +281,21 @@ def _loo_survival_from_replicates(
             tu = str(r["term_uid"]).strip()
             if not tu:
                 continue
+
+            if tu in m:
+                raise ValueError(
+                    "replicates_proxy replicate has duplicate term_uid rows. "
+                    f"term_uid={tu!r} replicate_id={rid!r}. "
+                    "Upstream EvidenceTable should have unique (replicate_id, source, term_id)."
+                )
+
             d = _normalize_direction(r.get("direction"))
             genes = r["evidence_genes"]
             gset = set(genes) if isinstance(genes, list) else set(_split_genes_loose(genes))
             g_clean = set([_clean_gene_token(g) for g in gset if str(g).strip()])
 
-            if tu in m:
-                d0, g0 = m[tu]
-                d_eff = d0 if d0 in {"up", "down"} else d
-                m[tu] = (d_eff, set(g0) | set(g_clean))
-            else:
-                m[tu] = (d, set(g_clean))
+            m[tu] = (d, set(g_clean))
+
         rep_lookup[rid] = m
 
     rows = []
@@ -352,6 +358,8 @@ def distill_evidence(
         raise ValueError(f"distill_evidence: missing columns: {missing}")
 
     out = evidence.copy()
+    # Provenance (minimal, decision-grade reproducibility)
+    out["distill_seed"] = pd.NA if seed is None else int(seed)
 
     # Preserve raw index for error messages / provenance
     if "raw_index" not in out.columns:
@@ -408,9 +416,9 @@ def distill_evidence(
         axis=1,
     )
 
-    # TSV-friendly genes
+    # TSV-friendly genes (spec-level contract lives in _shared)
     out["evidence_genes_str"] = out["evidence_genes"].map(
-        lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
+        lambda xs: _shared.join_genes_tsv(xs) if isinstance(xs, list) else ""
     )
 
     # ===========================
@@ -518,7 +526,7 @@ def distill_evidence(
         all_genes: list[str] = []
         for xs in out["evidence_genes"].tolist():
             all_genes.extend(xs)
-        gene_pool = np.array(sorted(set(all_genes)), dtype=object)
+        gene_pool = np.array(sorted({g for g in all_genes if str(g).strip()}), dtype=object)
 
         user_min_genes: int | None = None
         if user_min_genes_raw is not None:
@@ -673,5 +681,9 @@ def distill_evidence(
                 out.loc[unstable, "keep_reason"] = "low_term_survival_agg(note)"
         except Exception:
             pass
+
+    # Export pre-gate provenance (distill convenience; audit decides)
+    out["distill_pre_gate_mode"] = str(pre_gate_mode)
+    out["distill_pre_gate_tau"] = pd.NA if pre_gate_tau is None else float(pre_gate_tau)
 
     return out

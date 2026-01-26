@@ -65,17 +65,27 @@ def _norm_gene_id_upper(g: Any) -> str:
 
 
 def _hash_gene_set_trim12(genes: list[str]) -> str:
-    """Set-stable hash over trim-only canonicalization."""
-    uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    """
+    Set-stable hash over trim-only canonicalization.
+
+    NOTE:
+      - Delegate to _shared for single-source hashing semantics.
+      - We pass already-normalized (trim-only) tokens to avoid double-normalization.
+    """
+    toks = [_norm_gene_id(g) for g in (genes or []) if str(g).strip()]
+    return _shared.hash_set_12hex([t for t in toks if t])
 
 
 def _hash_gene_set_upper12(genes: list[str]) -> str:
-    """Set-stable hash over legacy uppercasing canonicalization."""
-    uniq = sorted({_norm_gene_id_upper(g) for g in genes if str(g).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    """
+    Set-stable hash over legacy uppercasing canonicalization (compat).
+
+    NOTE:
+      - This is intentionally not the default path.
+      - Used only for backward-compat matching of historical outputs.
+    """
+    toks = [_norm_gene_id_upper(g) for g in (genes or []) if str(g).strip()]
+    return _shared.hash_set_12hex([t for t in toks if t])
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -1064,36 +1074,61 @@ def _proxy_context_status(
 
     # --------
     # Build a BASE KEY that is invariant under swap.
+    # User-controlled fields via SampleCard extra: context_proxy_key_fields
+    # (but we still ensure swap dependence via context_swap_to + cancer by default).
     # --------
-    parts: list[str] = []
+    fields = _get_context_proxy_key_fields(card)
 
-    ctx0 = _row_original_context_id(row)
-    if ctx0:
-        parts.append(f"ctx0={ctx0}")
+    def _emit_field(name: str) -> str:
+        n = (name or "").strip().lower()
+        if not n:
+            return ""
 
-    cancer = _get_row_str("cancer")
-    if cancer:
-        parts.append(f"cancer={cancer}")
+        if n in {"ctx0", "context_id_original", "context_original_id", "original_context_id"}:
+            v = _row_original_context_id(row)
+            return f"ctx0={v}" if v else ""
 
-    comp = _get_row_str("comparison")
-    if comp:
-        parts.append(f"comparison={comp}")
+        if n == "term_uid":
+            tu = ",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()}))
+            return f"term_uid={tu}" if tu else ""
 
-    tu = ",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()}))
-    if tu:
-        parts.append(f"term_uid={tu}")
+        if n == "module_id":
+            mid = str(module_id or "").strip()
+            return f"module_id={mid}" if mid else ""
 
-    mid = str(module_id or "").strip()
-    if mid:
-        parts.append(f"module_id={mid}")
+        if n == "gene_set_hash":
+            gsh = str(gene_set_hash or "").strip()
+            return f"gene_set_hash={gsh}" if gsh else ""
 
-    gsh = str(gene_set_hash or "").strip()
-    if gsh:
-        parts.append(f"gene_set_hash={gsh}")
+        if n == "context_keys":
+            v = _get_row_str("context_keys")
+            return f"context_keys={v}" if v else ""
 
-    key_base = "|".join([p for p in parts if p]).strip()
+        if n in {
+            "comparison",
+            "cancer",
+            "disease",
+            "tissue",
+            "perturbation",
+            "condition",
+            "context_swap_from",
+            "context_swap_to",
+            "context_swap_active",
+        }:
+            v = _get_row_str(n)
+            return f"{n}={v}" if v else ""
+
+        # Unknown field name: ignore (contract-safe)
+        return ""
+
+    parts = [_emit_field(f) for f in fields]
+    parts = [p for p in parts if p]
+
+    key_base = "|".join(parts).strip()
     if not key_base:
-        key_base = gsh or tu or "proxy_context"
+        tu_fallback = ",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()}))
+        gsh_fallback = str(gene_set_hash or "").strip()
+        key_base = gsh_fallback or tu_fallback or "proxy_context"
 
     u = _deterministic_uniform_0_1(key_base, salt="proxy_context_v3_base")
 
@@ -1758,11 +1793,20 @@ def audit_claims(
         if str(out.at[i, "context_status"]).strip() == "":
             if c_eval or st_norm:
                 out.at[i, "context_evaluated"] = bool(c_eval)
-                out.at[i, "context_method"] = (
-                    "proxy"
-                    if "proxy_context" in str(c_note)
-                    else ("llm" if "context_review_" in str(c_note) else "row")
-                )
+                # Robust method labeling (do not depend on free-text notes).
+                if "proxy_context_v" in str(c_note):
+                    out.at[i, "context_method"] = "proxy"
+                elif "row_fallback:" in str(c_note):
+                    out.at[i, "context_method"] = "row"
+                else:
+                    # If the row-level LLM probe columns exist, treat as llm-originated.
+                    has_llm_cols = (
+                        ("context_review_evaluated" in row.index)
+                        or ("context_review_status" in row.index)
+                        or ("context_review_reason" in row.index)
+                    )
+                    out.at[i, "context_method"] = "llm" if has_llm_cols else "row"
+
                 out.at[i, "context_status"] = st_norm
                 out.at[i, "context_reason"] = (
                     "proxy_context_score" if "proxy_context" in str(c_note) else ""

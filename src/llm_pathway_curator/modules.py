@@ -17,10 +17,6 @@ class ModuleOutputs:
     edges_df: pd.DataFrame
 
 
-# Keep stress_tag delimiter consistent across layers (spec-owned by _shared).
-STRESS_TAG_DELIM = _shared.STRESS_TAG_DELIM
-
-
 # -------------------------
 # Normalization (align with schema/distill: trim-only; NO forced uppercasing)
 # -------------------------
@@ -728,7 +724,8 @@ def attach_module_drift_stress_tag(
       - distilled_df must have term_uid
       - drift_df must have term_uid and module_drift (bool)
       - does NOT overwrite existing non-empty stress_tag (append with delimiter)
-      - delimiter is normalized to STRESS_TAG_DELIM (comma), but we tolerate legacy '+' in input
+      - delimiter is normalized to _shared.STRESS_TAG_DELIM (comma),
+        but we tolerate legacy '+' in input
     """
     if term_id_col not in distilled_df.columns:
         raise ValueError(f"distilled_df missing column: {term_id_col}")
@@ -745,18 +742,11 @@ def attach_module_drift_stress_tag(
     if stress_col not in out.columns:
         out[stress_col] = ""
 
-    def _split_tags(s: object) -> list[str]:
-        # spec-owned by _shared (canonical delimiter is comma; tolerate legacy '+')
-        return _shared.split_tags(s, delim=STRESS_TAG_DELIM)
-
-    def _join_tags(tags: list[object]) -> str:
-        return _shared.join_tags(tags, delim=STRESS_TAG_DELIM)
-
     def _append(old: object, add: str) -> str:
-        tags0 = _split_tags("" if old is None else str(old))
+        tags0 = _shared.split_tags("" if old is None else str(old))
         if add not in tags0:
             tags0.append(add)
-        return _join_tags(tags0)
+        return _shared.join_tags(tags0)
 
     mask = out["module_drift"].astype(bool)
     out.loc[mask, stress_col] = out.loc[mask, stress_col].map(lambda x: _append(x, tag))

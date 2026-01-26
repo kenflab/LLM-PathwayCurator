@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -107,39 +106,6 @@ def _json_sanitize(x: Any) -> Any:
     return str(x)
 
 
-def _strip_excel_text_prefix(s: str) -> str:
-    """
-    Excel-safe text fields sometimes start with a single quote.
-    For JSON payload columns, strip it to allow json.loads.
-    """
-    ss = str(s or "").strip()
-    if ss.startswith("'"):
-        return ss[1:].strip()
-    return ss
-
-
-def _split_ids_to_list(x: Any) -> list[str]:
-    """
-    Parse ID fields that may be:
-      - list-like
-      - Excel-safe scalar string (may start with a single quote)
-      - separator-delimited strings (',', ';', '|', whitespace)
-    """
-    if _is_na_scalar(x):
-        return []
-    if isinstance(x, (list, tuple, set)):
-        return [str(t).strip() for t in x if str(t).strip()]
-
-    s = str(x).strip()
-    if not s:
-        return []
-    if s.startswith("'"):
-        s = s[1:].strip()
-
-    s = re.sub(r"[,\|\t\n ]+", ";", s)
-    return [p.strip() for p in s.split(";") if p.strip()]
-
-
 def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
     head = df.head(n).copy()
     try:
@@ -214,7 +180,7 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
             if any(isinstance(x, (list, tuple, set)) for x in sample):
                 # Create a stable companion string column; keep original list-like column intact.
                 out[c_str] = s.map(
-                    lambda x: LIST_SEP.join(map(str, x))
+                    lambda x: _shared.join_id_list_tsv(list(x), delim=LIST_SEP)
                     if isinstance(x, (list, tuple, set))
                     else ("" if _is_na_scalar(x) else str(x))
                 )
@@ -241,43 +207,6 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
                 out.iloc[:, j] = s
 
     return out
-
-
-def _excel_safe_ids(x: Any, *, list_sep: str = _shared.GENE_JOIN_DELIM) -> str:
-    """
-    Make an ID field safe for Excel:
-      - Accept list-like or scalar.
-      - Treat ',', ';', '|', whitespace as separators.
-      - Normalize to list_sep.
-      - Prefix with a single quote to force Text in Excel.
-    """
-    if _is_na_scalar(x):
-        return ""
-
-    if isinstance(x, (list, tuple, set)):
-        parts = [str(t).strip() for t in x if str(t).strip()]
-        s = list_sep.join(parts)
-        if not s:
-            return ""
-        return s if s.startswith("'") else ("'" + s)
-
-    s0 = str(x).strip()
-    if not s0 or s0.lower() in _NA_TOKENS_L:
-        return ""
-
-    s = (
-        s0.replace("|", ";")
-        .replace(",", ";")
-        .replace("\t", ";")
-        .replace("\n", ";")
-        .replace(" ", ";")
-    )
-    parts = [p.strip() for p in s.split(";") if p.strip()]
-    s_norm = list_sep.join(parts)
-
-    if not s_norm:
-        return ""
-    return s_norm if s_norm.startswith("'") else ("'" + s_norm)
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
@@ -580,8 +509,8 @@ def _synthesize_claim_json_from_audit_log(
     for _, row in df.iterrows():
         ev = {
             "module_id": str(row.get(module_col, "") or "").strip() if module_col else "",
-            "gene_ids": _split_ids_to_list(row.get(gene_ids_col)) if gene_ids_col else [],
-            "term_ids": _split_ids_to_list(row.get(term_ids_col)) if term_ids_col else [],
+            "gene_ids": _shared.parse_id_list(row.get(gene_ids_col)) if gene_ids_col else [],
+            "term_ids": _shared.parse_id_list(row.get(term_ids_col)) if term_ids_col else [],
             "gene_set_hash": str(row.get(ghash_col, "") or "").strip().lower() if ghash_col else "",
         }
 
@@ -767,7 +696,7 @@ def write_report_jsonl(
             decision_obj = _decision_from_audit_row(row_raw)
 
             cj0 = str(row.get(claim_json_col, "") or "").strip()
-            cj = _strip_excel_text_prefix(cj0)
+            cj = _shared.strip_excel_text_prefix(cj0)
             if not cj:
                 raise ValueError(f"audit_log has empty {claim_json_col} for a row (required)")
 
@@ -965,14 +894,22 @@ def write_report(
 
     # Excel-safe ID columns
     if "gene_ids" in audit_out.columns:
-        audit_out["gene_ids_str"] = audit_out["gene_ids"].map(_excel_safe_ids)
+        audit_out["gene_ids_str"] = audit_out["gene_ids"].map(
+            lambda x: _shared.excel_safe_ids(x, list_sep=_shared.GENE_JOIN_DELIM)
+        )
     elif "gene_ids_str" in audit_out.columns:
-        audit_out["gene_ids_str"] = audit_out["gene_ids_str"].map(_excel_safe_ids)
+        audit_out["gene_ids_str"] = audit_out["gene_ids_str"].map(
+            lambda x: _shared.excel_safe_ids(x, list_sep=_shared.GENE_JOIN_DELIM)
+        )
 
     if "term_ids" in audit_out.columns:
-        audit_out["term_ids_str"] = audit_out["term_ids"].map(_excel_safe_ids)
+        audit_out["term_ids_str"] = audit_out["term_ids"].map(
+            lambda x: _shared.excel_safe_ids(x, list_sep=_shared.GENE_JOIN_DELIM)
+        )
     elif "term_ids_str" in audit_out.columns:
-        audit_out["term_ids_str"] = audit_out["term_ids_str"].map(_excel_safe_ids)
+        audit_out["term_ids_str"] = audit_out["term_ids_str"].map(
+            lambda x: _shared.excel_safe_ids(x, list_sep=_shared.GENE_JOIN_DELIM)
+        )
 
     if "gene_ids" in audit_out.columns and "gene_ids_str" in audit_out.columns:
         audit_out["gene_ids"] = audit_out["gene_ids_str"]

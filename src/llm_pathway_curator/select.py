@@ -1,7 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/select.py
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 import os
@@ -270,7 +269,8 @@ def _context_signature(card: SampleCard) -> str:
         f"swap_from={sw_from}|swap_to={sw_to}|swap_to_cancer={sw_to_c}"
     )
 
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    # Spec-level 12-hex helper lives in _shared
+    return _shared.sha256_12hex(payload)
 
 
 # -------------------------
@@ -418,7 +418,7 @@ def _select_context_mode(card: SampleCard) -> str:
         return "off"
 
 
-def _context_gate_mode(card: SampleCard) -> str:
+def _context_gate_mode(card: SampleCard, override: str | None = None) -> str:
     """
     Selection-time gating based on context signal.
 
@@ -429,8 +429,19 @@ def _context_gate_mode(card: SampleCard) -> str:
           * in proxy mode: treat select_context_score==0 as ineligible
           * in review mode: treat context_status!=PASS as ineligible
             (unless missing, then fallback proxy)
-    Priority: new env > card.extra > legacy env (limited) > default off
+
+    Priority:
+      0) explicit override (this call only; strict vocab off|note|hard)
+      1) new env
+      2) card.extra
+      3) legacy env (limited)
+      4) default off
     """
+    if override is not None:
+        s0 = str(override).strip().lower()
+        if s0 in {"off", "note", "hard"}:
+            return s0
+
     env = str(os.environ.get(_SELECT_CONTEXT_GATE_ENV, "")).strip().lower()
     if env:
         return env if env in {"off", "note", "hard"} else "off"
@@ -460,9 +471,10 @@ def _context_tiebreak_int(card: SampleCard, term_uid: str, ctx_sig: str) -> int:
     Use ctx_sig explicitly so disease=None doesn't collapse.
     """
     tu = str(term_uid).strip()
-    payload = f"{ctx_sig}|{tu}".encode()
-    h = hashlib.sha256(payload).hexdigest()[:8]
-    return int(h, 16)
+    payload = {"ctx_sig": str(ctx_sig), "term_uid": tu}
+
+    # Stable integer in [0, 2**31-2] (matches sort usage downstream)
+    return _shared.seed_int_from_payload(payload, mod=2**31 - 1)
 
 
 def _context_status_score(row: pd.Series) -> int:
@@ -537,11 +549,9 @@ def _stress_enabled(card: SampleCard) -> bool:
 
 def _seed_for_claim(seed: int | None, claim_id: str) -> int:
     base = 0 if seed is None else int(seed)
-    h = hashlib.blake2b(digest_size=8)
-    h.update(str(base).encode("utf-8"))
-    h.update(b"|")
-    h.update(str(claim_id).encode("utf-8"))
-    return int.from_bytes(h.digest(), byteorder="little", signed=False)
+    payload = {"seed": base, "claim_id": str(claim_id)}
+    # Keep wide range; numpy RNG accepts large ints
+    return _shared.seed_int_from_payload(payload, mod=2**63 - 1)
 
 
 def _similarity(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
@@ -1058,6 +1068,7 @@ def _select_claims_deterministic(
     *,
     k: int = 3,
     seed: int | None = None,
+    context_gate_mode_override: str | None = None,
 ) -> pd.DataFrame:
     required = {"term_id", "term_name", "source", "stat", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
@@ -1090,7 +1101,7 @@ def _select_claims_deterministic(
 
     # ---- context selection: OFF/PROXY/REVIEW ----
     sel_ctx_mode = _select_context_mode(card)
-    ctx_gate_mode = _context_gate_mode(card)
+    ctx_gate_mode = _context_gate_mode(card, override=context_gate_mode_override)
     ctx_swap_active = _is_context_swap(card)
     ctx_sig = _context_signature(card)
 
@@ -1620,7 +1631,25 @@ def select_claims(
     except Exception:
         pass
 
-    out_det = _select_claims_deterministic(distilled2, card, k=int(k_eff), seed=seed)
+    gate_override = None
+    try:
+        s = str(context_gate_mode or "").strip().lower()
+        # Only accept this file's vocab; ignore "soft" to avoid semantic collision.
+        if s in {"off", "note", "hard"}:
+            gate_override = s
+        elif s and s != "soft":
+            _dlog(f"[select][WARN] context_gate_mode arg ignored: {s!r} (allowed: off|note|hard)")
+    except Exception:
+        gate_override = None
+
+    out_det = _select_claims_deterministic(
+        distilled2,
+        card,
+        k=int(k_eff),
+        seed=seed,
+        context_gate_mode_override=gate_override,
+    )
+
     out_det["claim_mode"] = "deterministic"
     out_det["llm_notes"] = ""
     return out_det
