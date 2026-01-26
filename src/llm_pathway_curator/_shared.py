@@ -69,6 +69,48 @@ def join_id_list_tsv(ids: list[object], *, delim: str = ID_JOIN_DELIM) -> str:
     return delim.join(xs)
 
 
+def strip_excel_text_prefix(s: object) -> str:
+    """
+    Excel-safe text fields sometimes start with a single quote.
+    Strip it for downstream parsing (e.g., json.loads).
+    """
+    ss = str(s or "").strip()
+    if ss.startswith("'") and len(ss) > 1:
+        return ss[1:].strip()
+    return ss
+
+
+def excel_force_text(s: object) -> str:
+    """
+    Force Excel to treat a field as Text by prefixing a single quote.
+    """
+    txt = str(s or "")
+    if not txt:
+        return ""
+    return txt if txt.startswith("'") else ("'" + txt)
+
+
+def excel_safe_ids(x: object, *, list_sep: str = ID_JOIN_DELIM) -> str:
+    """
+    Make an ID field safe for Excel:
+      - Accept list-like or scalar.
+      - Parse with parse_id_list (spec-level).
+      - Join with list_sep.
+      - Prefix with a single quote to force Text in Excel.
+    """
+    if is_na_scalar(x):
+        return ""
+
+    ids = parse_id_list(x)
+    if not ids:
+        return ""
+
+    joined = join_id_list_tsv(ids, delim=list_sep)
+    if not joined:
+        return ""
+    return excel_force_text(joined)
+
+
 # -----------------------------------------------------------------------------
 # Decision status (spec-level)
 # -----------------------------------------------------------------------------
@@ -647,4 +689,7 @@ __all__ = [
     # TSV joins (spec)
     "ID_JOIN_DELIM",
     "join_id_list_tsv",
+    "strip_excel_text_prefix",
+    "excel_force_text",
+    "excel_safe_ids",
 ]
