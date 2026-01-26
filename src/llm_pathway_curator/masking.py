@@ -1,7 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/masking.py
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from typing import Any
@@ -12,10 +11,6 @@ from . import _shared
 from .noise_lists import NOISE_LISTS, NOISE_PATTERNS
 
 RESCUE_MODULES_DEFAULT = ("LINC_Noise", "Hemo_Contam")
-
-# Single source of truth for TSV-friendly join delimiter across layers.
-# Use ';' (rare in gene symbols; safer than ',' which is often CSV delimiter).
-GENE_JOIN_DELIM = ";"
 
 
 # -------------------------
@@ -44,18 +39,6 @@ def _as_gene_list(x: Any) -> list[str]:
     # parse_genes already strips/cleans tokens; keep minimal normalization here.
     genes = [str(g).strip() for g in genes if str(g).strip()]
     return _shared.dedup_preserve_order(genes)
-
-
-def _sha256_short(payload: object, n: int = 12) -> str:
-    """
-    Deterministic short hash for event payloads.
-
-    Uses the same sha256[:12] primitive as other layers via _shared.sha256_12hex,
-    but keeps JSON canonicalization (sort_keys=True) to stabilize dict payloads.
-    """
-    s = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    h12 = _shared.sha256_12hex(s)
-    return h12 if int(n) == 12 else h12[: int(n)]
 
 
 def _validate_frac(name: str, x: float) -> float:
@@ -131,12 +114,6 @@ def _row_id_for_events(row: pd.Series, idx: Any) -> int:
         return int(idx)
     except Exception:
         return 0
-
-
-def _join_genes(xs: list[str]) -> str:
-    return GENE_JOIN_DELIM.join(
-        [str(_shared.clean_gene_token(g)).strip() for g in xs if str(g).strip()]
-    )
 
 
 # -------------------------
@@ -260,7 +237,7 @@ def apply_gene_masking(
                 "before_n": int(len(before)),
                 "after_n": int(len(after)),
                 "dropped_n": int(len(dropped)),
-                "dropped_hash": _sha256_short(dropped) if dropped else "",
+                "dropped_hash": _shared.sha256_short(dropped) if dropped else "",
                 "injected_n": 0,
                 "injected_hash": "",
                 "notes": "",
@@ -269,7 +246,7 @@ def apply_gene_masking(
 
     out[genes_col] = masked_lists
     # IMPORTANT: keep delimiter consistent across layers for reproducibility.
-    out["evidence_genes_str"] = out[genes_col].map(_join_genes)
+    out["evidence_genes_str"] = out[genes_col].map(_shared.join_genes_tsv)
     out["masked_genes_count"] = masked_counts
 
     term_events = pd.DataFrame(events)
@@ -280,7 +257,7 @@ def apply_gene_masking(
         "rescue_modules": list(rescue_modules),
         "whitelist_n": int(len(whitelist)),
         "pattern_mode": pattern_mode,
-        "gene_join_delim": GENE_JOIN_DELIM,
+        "gene_join_delim": _shared.GENE_JOIN_DELIM,
         "notes": "deterministic masking by NOISE_LISTS/NOISE_PATTERNS",
     }
 
@@ -346,7 +323,12 @@ def apply_evidence_stress(
     if term_uid_col not in out.columns:
         if {"source", "term_id"}.issubset(set(out.columns)):
             out[term_uid_col] = (
-                out["source"].astype(str).str.strip() + ":" + out["term_id"].astype(str).str.strip()
+                out.apply(
+                    lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+                    axis=1,
+                )
+                .astype(str)
+                .str.strip()
             )
         elif "term_id" in out.columns:
             out[term_uid_col] = out["term_id"].astype(str).str.strip()
@@ -386,8 +368,13 @@ def apply_evidence_stress(
             "term_uid": term_uid,
             "row_index": int(row_id) if not term_uid else None,
         }
-        term_seed = int(_sha256_short(seed_payload, n=12), 16) % (2**31 - 1)
-        trng = random.Random(term_seed)
+        term_seed = _shared.seed_for_term(
+            seed=int(seed),
+            term_uid=term_uid,
+            term_row_id=(int(row_id) if not term_uid else None),
+        )
+        term_seed = _shared.seed_int_from_payload(seed_payload)
+        trng = random.Random(int(term_seed))
 
         # 1) dropout (floor-based + optional min k)
         genes = before[:]
@@ -458,9 +445,9 @@ def apply_evidence_stress(
                 "before_n": int(len(before)),
                 "after_n": int(len(after)),
                 "dropped_n": int(len(dropped)),
-                "dropped_hash": _sha256_short(dropped) if dropped else "",
+                "dropped_hash": _shared.sha256_short(dropped) if dropped else "",
                 "injected_n": int(len(injected)),
-                "injected_hash": _sha256_short(injected) if injected else "",
+                "injected_hash": _shared.sha256_short(injected) if injected else "",
                 "contradiction_flip": bool(flip),
                 "stress_tag": tag,
             }
@@ -468,7 +455,7 @@ def apply_evidence_stress(
 
     out[genes_col] = stressed_lists
     # IMPORTANT: keep delimiter consistent across layers for reproducibility.
-    out["evidence_genes_str"] = out[genes_col].map(_join_genes)
+    out["evidence_genes_str"] = out[genes_col].map(_shared.join_genes_tsv)
     out["stress_tag"] = stress_tags
     out["contradiction_flip"] = contradiction_tags
 
@@ -486,7 +473,7 @@ def apply_evidence_stress(
         "max_inject_k": (None if max_inject_k is None else int(max_inject_k)),
         "whitelist_n": int(len(wl)),
         "noise_pool_n": int(len(noise_pool)),
-        "gene_join_delim": GENE_JOIN_DELIM,
+        "gene_join_delim": _shared.GENE_JOIN_DELIM,
         "notes": "evidence identity stress for Fig2 v4",
     }
 

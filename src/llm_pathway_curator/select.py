@@ -20,7 +20,7 @@ from .llm_claims import claims_to_proposed_tsv, propose_claims_llm
 from .sample_card import SampleCard
 
 _ALLOWED_DIRECTIONS = {"up", "down", "na"}
-_NA_TOKENS_L = _shared.NA_TOKENS
+_NA_TOKENS_L = _shared.NA_TOKENS_L
 
 _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
 
@@ -34,16 +34,8 @@ _DEFAULT_MAX_GENE_IDS_IN_CLAIM = 512
 # Small utilities
 # -------------------------
 def _is_na_scalar(x: Any) -> bool:
-    """pd.isna is unsafe for list-like; only treat scalars here."""
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    """Single source of truth: _shared.is_na_scalar."""
+    return _shared.is_na_scalar(x)
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
@@ -112,18 +104,8 @@ def _norm_gene_id(g: Any) -> str:
 
 
 def _norm_direction(x: Any) -> str:
-    if _is_na_scalar(x):
-        return "na"
-    s = str(x).strip().lower()
-    if s in _ALLOWED_DIRECTIONS:
-        return s
-    if s in {"upregulated", "increase", "increased", "activated", "pos", "positive", "+", "1"}:
-        return "up"
-    if s in {"downregulated", "decrease", "decreased", "suppressed", "neg", "negative", "-", "-1"}:
-        return "down"
-    if s in _NA_TOKENS_L:
-        return "na"
-    return "na"
+    """Single source of truth: _shared.normalize_direction()."""
+    return _shared.normalize_direction(x)
 
 
 def _as_gene_list(x: Any) -> list[str]:
@@ -135,39 +117,13 @@ def _as_gene_list(x: Any) -> list[str]:
     """
     return _shared.parse_genes(x)
 
-    s = str(x).strip()
-    if not s or s.lower() in _NA_TOKENS_L:
-        return []
 
-    # Strip wrapper if it looks like a bracketed list; do NOT eval.
-    if _BRACKETED_LIST_RE.match(s):
-        s = s.strip().lstrip("[({").rstrip("])}").strip()
-
-    # normalize separators
-    s = s.replace(";", ",").replace("|", ",").replace("/", ",")
-    s = s.replace("\n", " ").replace("\t", " ")
-    s = " ".join(s.split()).strip()
-    if not s or s.lower() in _NA_TOKENS_L:
-        return []
-
-    if "," in s:
-        parts = [p.strip().strip('"').strip("'") for p in s.split(",") if p.strip()]
-    else:
-        parts = [p.strip().strip('"').strip("'") for p in s.split(" ") if p.strip()]
-
-    parts = [p.strip("[](){}").strip() for p in parts]
-    parts = [p for p in parts if p and p.lower() not in _NA_TOKENS_L]
-    return _dedup_preserve_order(parts)
-
-
-def _hash_gene_set_audit(genes: list[str]) -> str:
+def _hash_gene_set_claim(genes: list[str]) -> str:
     """
-    Set-stable hash of evidence genes.
-    IMPORTANT: must use the SAME gene list embedded into claim_json.
+    Spec-level: must match Claim/EvidenceRef semantics.
+    IMPORTANT: genes must be the SAME list embedded into claim_json.
     """
-    canon = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
-    payload = ",".join(canon)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _hash_term_set_fallback(term_uids: list[str]) -> str:
@@ -175,9 +131,7 @@ def _hash_term_set_fallback(term_uids: list[str]) -> str:
     Fallback when evidence genes are missing/empty.
     Deterministic and set-stable.
     """
-    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
-    payload = ",".join(canon)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_set_12hex(list(term_uids or []))
 
 
 def _debug_enabled() -> bool:
@@ -701,7 +655,7 @@ def _evaluate_stress_for_claim(
         }
 
     # IMPORTANT: baseline hash must match the embedded claim hash
-    base_hash_calc = _hash_gene_set_audit(sorted(list(base_genes)))
+    base_hash_calc = _hash_gene_set_claim(sorted(list(base_genes)))
     if base_hash_calc != base_hash_claim:
         return {
             "stress_status": "WARN",
@@ -1125,7 +1079,14 @@ def _select_claims_deterministic(
     if "term_uid" in df.columns:
         df["term_uid"] = df["term_uid"].astype(str).str.strip()
     else:
-        df["term_uid"] = (df["source"] + ":" + df["term_id"]).astype(str).str.strip()
+        df["term_uid"] = (
+            df.apply(
+                lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+                axis=1,
+            )
+            .astype(str)
+            .str.strip()
+        )
 
     # ---- context selection: OFF/PROXY/REVIEW ----
     sel_ctx_mode = _select_context_mode(card)
@@ -1383,7 +1344,7 @@ def _select_claims_deterministic(
         direction = _norm_direction(r.get("direction", "na"))
         source = str(r["source"]).strip()
 
-        term_uid = str(r.get("term_uid") or f"{source}:{term_id}").strip()
+        term_uid = str(r.get("term_uid") or _shared.make_term_uid(source, term_id)).strip()
 
         genes_full_raw = _as_gene_list(r.get("evidence_genes"))
         genes_full_norm = [_norm_gene_id(g) for g in genes_full_raw]
@@ -1402,14 +1363,13 @@ def _select_claims_deterministic(
 
         if (not module_id) or (module_id.lower() in _NA_TOKENS_L):
             # Stable fallback module id (content-derived)
-            payload = "T:" + term_uid + "\n" + "G:" + "|".join(sorted(genes_claim))
-            content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+            content_hash = _shared.module_hash_content12(terms=[term_uid], genes=genes_claim)
             module_id = f"M{content_hash}"
             module_reason = "missing_module_id"
             module_missing = True
 
         if genes_claim:
-            gene_set_hash = _hash_gene_set_audit(genes_claim)
+            gene_set_hash = _hash_gene_set_claim(genes_claim)
         else:
             gene_set_hash = _hash_term_set_fallback([term_uid])
 

@@ -22,6 +22,55 @@ import pandas as pd
 
 # NA tokens used across layers for gene-list parsing (string forms).
 NA_TOKENS: set[str] = {"", "na", "nan", "none", "NA"}
+NA_TOKENS_L: set[str] = {t.lower() for t in NA_TOKENS}
+
+# Single source of truth for TSV-friendly gene join delimiter across layers.
+# Use ';' (rare in gene symbols; safer than ',' which is often CSV delimiter).
+GENE_JOIN_DELIM = ";"
+
+
+def is_na_token(s: object) -> bool:
+    """
+    Spec-level NA token check (case-insensitive).
+    Keep this centralized to avoid contract drift.
+    """
+    if s is None:
+        return True
+    return str(s).strip().lower() in NA_TOKENS_L
+
+
+# -----------------------------------------------------------------------------
+# Decision status (spec-level)
+# -----------------------------------------------------------------------------
+# Single source of truth for decision vocabulary across audit/report/calibrate.
+ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
+
+
+def normalize_status_str(x: object) -> str:
+    """
+    Normalize a status scalar to canonical uppercase string.
+    This is spec-level: changing this changes denominators/metrics downstream.
+    """
+    s = str(x or "").strip().upper()
+    return s
+
+
+def normalize_status_series(s: pd.Series) -> pd.Series:
+    """
+    Normalize a status column to uppercase strings (vectorized).
+    NOTE: pd.NA/NaN become strings after astype(str); validation must catch them.
+    """
+    return s.astype(str).str.strip().str.upper()
+
+
+def validate_status_values(s_norm: pd.Series) -> None:
+    """
+    Strict validation: refuse unknown status values (auditable denominators).
+    """
+    bad = sorted(set(s_norm.unique().tolist()) - ALLOWED_STATUSES)
+    if bad:
+        raise ValueError(f"invalid status values: {bad} (allowed={sorted(ALLOWED_STATUSES)})")
+
 
 # Conservative gene-like token heuristic (used for whitespace-separated fallback).
 GENE_TOKEN_RE_STR = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -55,6 +104,57 @@ def dedup_preserve_order(items: list[str]) -> list[str]:
         if x and x not in seen:
             seen.add(x)
             out.append(x)
+    return out
+
+
+def parse_id_list(x: object) -> list[str]:
+    """
+    Parse generic ID fields (term_ids, gene_ids, etc.) into list[str].
+
+    Policy:
+      - NA scalars -> []
+      - list/tuple/set -> preserve order (dedup)
+      - string -> split on ',', ';', '|' (fallback: whitespace if no commas)
+      - normalize whitespace/newlines/tabs
+      - drop NA tokens and empties
+      - deterministic de-duplication (preserve first-seen order)
+
+    NOTE:
+      This is intentionally separate from parse_genes():
+        - parse_genes() is conservative and gene-token-aware
+        - parse_id_list() is generic/tolerant for ID-like fields
+    """
+    if is_na_scalar(x):
+        return []
+
+    if isinstance(x, (list, tuple, set)):
+        items = [str(t).strip() for t in x if str(t).strip()]
+    else:
+        s = str(x).strip()
+        if not s or is_na_token(s):
+            return []
+
+        s = s.replace(";", ",").replace("|", ",")
+        s = s.replace("\n", " ").replace("\t", " ")
+        s = " ".join(s.split()).strip()
+        if not s or is_na_token(s):
+            return []
+
+        if "," in s:
+            items = [t.strip() for t in s.split(",") if t.strip()]
+        else:
+            items = [t.strip() for t in s.split(" ") if t.strip()]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in items:
+        tt = str(t).strip()
+        if not tt or is_na_token(tt):
+            continue
+        if tt not in seen:
+            seen.add(tt)
+            out.append(tt)
+
     return out
 
 
@@ -153,13 +253,123 @@ def parse_genes(x: object) -> list[str]:
         return dedup_preserve_order([str(g) for g in genes if str(g).strip()])
 
     s = str(x).strip()
-    if not s or s.lower() in NA_TOKENS:
+    if not s or is_na_token(s):
         return []
 
     parts = split_gene_string(s)
     genes = [clean_gene_token(g) for g in parts]
-    genes = [g for g in genes if g and str(g).strip()]
+    genes = [g for g in genes if g and str(g).strip() and (not is_na_token(g))]
     return dedup_preserve_order([str(g) for g in genes if str(g).strip()])
+
+
+def normalize_direction(x: object) -> str:
+    """
+    Normalize direction vocabulary across schema/distill/audit/select.
+
+    Output:
+      - "up" / "down" / "na"
+    """
+    if is_na_scalar(x):
+        return "na"
+    s = str(x).strip().lower()
+    if s in {
+        "up",
+        "upregulated",
+        "increase",
+        "increased",
+        "activated",
+        "+",
+        "pos",
+        "positive",
+        "1",
+    }:
+        return "up"
+    if s in {
+        "down",
+        "downregulated",
+        "decrease",
+        "decreased",
+        "suppressed",
+        "-",
+        "neg",
+        "negative",
+        "-1",
+    }:
+        return "down"
+    return "na"
+
+
+def seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = None) -> int:
+    """
+    Order-invariant deterministic seed derived from (seed, term_uid, term_row_id).
+
+    NOTE:
+      - Using blake2b for stable cross-platform hashing.
+      - term_row_id avoids collisions when term_uid duplicates exist.
+    """
+    base = 0 if seed is None else int(seed)
+    h = hashlib.blake2b(digest_size=8)
+    h.update(str(base).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(term_uid).encode("utf-8"))
+    if term_row_id is not None:
+        h.update(b"|")
+        h.update(str(int(term_row_id)).encode("utf-8"))
+    return int.from_bytes(h.digest(), byteorder="little", signed=False)
+
+
+# -----------------------------------------------------------------------------
+# Stress tags (spec-level)
+# -----------------------------------------------------------------------------
+# Canonical delimiter is comma. We also tolerate legacy '+' in inputs.
+STRESS_TAG_DELIM = ","
+
+
+def split_tags(s: object, *, delim: str = STRESS_TAG_DELIM) -> list[str]:
+    """
+    Split a stress_tag string into normalized tags.
+
+    Spec:
+      - canonical delimiter is comma
+      - tolerate legacy '+' as an additional delimiter
+      - trim whitespace
+      - drop empty tokens
+      - de-duplicate while preserving order
+    """
+    if s is None:
+        return []
+    txt = str(s).strip()
+    if not txt:
+        return []
+
+    # tolerate legacy '+'
+    txt = txt.replace("+", delim)
+
+    parts = [p.strip() for p in txt.split(delim)]
+    parts = [p for p in parts if p]
+    return dedup_preserve_order(parts)
+
+
+def join_tags(tags: list[object], *, delim: str = STRESS_TAG_DELIM) -> str:
+    """
+    Join tags into canonical stress_tag string.
+
+    Spec:
+      - trim
+      - drop empties
+      - preserve first-seen order
+      - join with canonical delimiter
+    """
+    cleaned: list[str] = []
+    for t in tags or []:
+        if t is None:
+            continue
+        s = str(t).strip()
+        if not s:
+            continue
+        cleaned.append(s)
+    cleaned = dedup_preserve_order(cleaned)
+    return delim.join(cleaned)
 
 
 # -----------------------------------------------------------------------------
@@ -219,7 +429,7 @@ def canonical_sorted_unique(xs: list[object]) -> list[str]:
         if x is None:
             continue
         s = str(x).strip()
-        if not s or s.lower() in NA_TOKENS:
+        if not s or is_na_token(s):
             continue
         out.append(s)
     return sorted(set(out))
@@ -235,7 +445,7 @@ def make_term_uid(source: object, term_id: object) -> str:
       - term_id is required (caller should ensure non-empty)
     """
     s = "" if source is None else str(source).strip()
-    if not s or s.lower() in NA_TOKENS:
+    if not s or is_na_token(s):
         s = "unknown"
     t = "" if term_id is None else str(term_id).strip()
     return f"{s}:{t}" if t else f"{s}:"
@@ -262,12 +472,69 @@ def module_hash_content12(terms: list[object], genes: list[object]) -> str:
 
     Spec:
       - terms: canonical_sorted_unique (no uppercasing)
-      - genes: hash_gene_set_12hex's canonicalization (clean_gene_token + sort/dedup)
+      - genes: same canonicalization policy as hash_gene_set_12hex
+              (clean_gene_token + drop empties/NA + sort/dedup; NO uppercasing)
       - payload format is stable and explicit
     """
     t = canonical_sorted_unique(terms)
-    g = canonical_sorted_unique(
-        [clean_gene_token(x) for x in genes if x is not None and str(x).strip()]
-    )
+
+    # Align gene canonicalization with hash_gene_set_12hex (single policy).
+    g_clean = []
+    for x in genes or []:
+        if x is None:
+            continue
+        s = clean_gene_token(x)
+        if not s or is_na_token(s):
+            continue
+        g_clean.append(s)
+    g = sorted(set(g_clean))
+
     payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
     return sha256_12hex(payload)
+
+
+# -------------------------
+# TSV / hashing shared contracts (spec-level)
+# -------------------------
+
+
+def stable_json_dumps(obj: object) -> str:
+    """
+    Deterministic JSON serialization for hashing/provenance.
+    - sort_keys=True for stable dict ordering
+    - separators to avoid whitespace instability
+    """
+    import json
+
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def sha256_short(obj: object, n: int = 12) -> str:
+    """
+    Deterministic short hash for arbitrary payloads (dict/list/str).
+    Uses stable_json_dumps + sha256_12hex.
+    """
+    s = stable_json_dumps(obj)
+    h12 = sha256_12hex(s)
+    nn = 12 if n is None else int(n)
+    return h12 if nn == 12 else h12[:nn]
+
+
+def seed_int_from_payload(payload: object, *, mod: int = 2**31 - 1) -> int:
+    """
+    Deterministic integer seed from an arbitrary payload.
+    Useful for per-term RNG streams that must be stable across runs.
+    """
+    h = sha256_short(payload, n=12)
+    return int(h, 16) % int(mod)
+
+
+def join_genes_tsv(genes: list[object]) -> str:
+    """
+    Join genes into a TSV-friendly string using GENE_JOIN_DELIM.
+    Applies clean_gene_token() per token and drops empties.
+    """
+    xs = [
+        str(clean_gene_token(g)).strip() for g in (genes or []) if g is not None and str(g).strip()
+    ]
+    return GENE_JOIN_DELIM.join([x for x in xs if x])

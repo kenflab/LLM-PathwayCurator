@@ -18,7 +18,7 @@ from .claim_schema import Claim
 from .sample_card import SampleCard
 
 _NA_TOKENS = set(_shared.NA_TOKENS)
-_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
+_NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -106,7 +106,11 @@ def _context_keys(card: SampleCard) -> list[str]:
 
 
 def _norm_gene_id(g: Any) -> str:
-    return str(g).strip().upper()
+    """
+    Canonical gene token normalization.
+    IMPORTANT: must match _shared.clean_gene_token() policy (no forced uppercase).
+    """
+    return _shared.clean_gene_token(g)
 
 
 _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
@@ -114,69 +118,27 @@ _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
 
 def _parse_gene_list(x: Any) -> list[str]:
     """
-    Parse genes into canonical list[str] (upper, de-dup, preserve order).
-
-    Accept:
-      - list-like
-      - csv-ish strings with separators: , ; | /
-      - bracket-ish strings: "['A','B']" / '["A","B"]' / "{A,B}" (NO eval)
-      - whitespace split as fallback
+    Single source of truth: _shared.parse_genes().
+    - conservative split
+    - no forced uppercase
+    - dedup preserve order
     """
-    if _is_na_scalar(x):
-        return []
-
-    if isinstance(x, (list, tuple, set)):
-        items = [str(t).strip() for t in x if str(t).strip()]
-    else:
-        s = str(x).strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-
-        # strip bracket wrappers if it looks like a list literal; do NOT eval
-        s0 = s.strip()
-        if _BRACKETED_LIST_RE.match(s0):
-            s0 = s0.strip().lstrip("[({").rstrip("])}").strip()
-
-        # normalize separators
-        s0 = s0.replace(";", ",").replace("|", ",").replace("/", ",")
-        s0 = s0.replace("\n", " ").replace("\t", " ")
-        s0 = " ".join(s0.split()).strip()
-        if not s0 or s0.lower() in _NA_TOKENS_L:
-            return []
-
-        if "," in s0:
-            items = [t.strip().strip('"').strip("'") for t in s0.split(",") if t.strip()]
-        else:
-            items = [t.strip().strip('"').strip("'") for t in s0.split(" ") if t.strip()]
-
-        items = [t.strip("[](){}").strip() for t in items]
-        items = [t for t in items if t and t.lower() not in _NA_TOKENS_L]
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for t in items:
-        u = _norm_gene_id(t)
-        if u and (u not in seen):
-            seen.add(u)
-            out.append(u)
-    return out
+    return _shared.parse_genes(x)
 
 
 def _hash_gene_set_12hex(genes: list[str]) -> str:
-    """Audit-grade: set-stable, normalized (align with audit.py), 12-hex."""
-    uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    """
+    Single source of truth: _shared.hash_gene_set_12hex().
+    IMPORTANT: genes must be the SAME list used as evidence payload identity.
+    """
+    return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _hash_term_set_fallback_12hex(term_uids: list[str]) -> str:
     """
-    Fallback when genes are missing/empty.
-    Deterministic 12-hex from term_uid set (order-invariant).
+    Single source of truth fallback: _shared.hash_set_12hex().
     """
-    canon = sorted({str(t).strip() for t in term_uids if str(t).strip()})
-    payload = ",".join(canon)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_set_12hex(list(term_uids or []))
 
 
 def _soft_error_json(message: str, *, err_type: str = "llm_error", retryable: bool = False) -> str:
@@ -225,10 +187,11 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 
 
 def _module_hash_like_modules_py_12hex(term_uids: list[str], genes: list[str]) -> str:
-    t = sorted([str(x).strip() for x in term_uids if str(x).strip()])
-    g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
-    payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    """
+    Single source of truth: _shared.module_hash_content12().
+    Matches modules.py / select.py fallback semantics.
+    """
+    return _shared.module_hash_content12(terms=list(term_uids or []), genes=list(genes or []))
 
 
 def _strict_k_enabled() -> bool:
@@ -763,6 +726,12 @@ def _post_validate_against_candidates(
     """
     cand2 = cand.copy()
 
+    if "evidence_genes" in cand2.columns and "gene_ids_suggest" in cand2.columns:
+        # Prefer evidence_genes as "full truth" when present; keep gene_ids_suggest as fallback.
+        cand2["gene_ids_truth"] = cand2["evidence_genes"].map(_parse_gene_list)
+    else:
+        cand2["gene_ids_truth"] = cand2.get("gene_ids_suggest", [[] for _ in range(len(cand2))])
+
     cand2["term_uid"] = cand2.get("term_uid", pd.Series([""] * len(cand2))).astype(str).str.strip()
     cand2["term_id"] = cand2.get("term_id", pd.Series([""] * len(cand2))).astype(str).str.strip()
     cand2 = cand2.drop_duplicates(subset=["term_uid"], keep="first")
@@ -786,7 +755,7 @@ def _post_validate_against_candidates(
         if _looks_like_12hex(gsh0):
             return gsh0
 
-        genes_full = _parse_gene_list(row.get("gene_ids_suggest", []))
+        genes_full = _parse_gene_list(row.get("gene_ids_truth", []))
         if genes_full:
             return _hash_gene_set_12hex(genes_full)
 
@@ -827,7 +796,7 @@ def _post_validate_against_candidates(
             return (False, f"candidate gene_set_hash missing/invalid for term_uid={term_uid}", [])
 
         # genes payload (tool-owned; may be capped)
-        genes_full = _parse_gene_list(row.get("gene_ids_suggest", []))
+        genes_full = _parse_gene_list(row.get("gene_ids_truth", []))
         genes_full = [_norm_gene_id(g) for g in genes_full if str(g).strip()]
         seen_g: set[str] = set()
         genes_full2: list[str] = []
@@ -902,7 +871,12 @@ def propose_claims_llm(
         if not {"source", "term_id"}.issubset(set(df.columns)):
             raise ValueError("propose_claims_llm: requires term_uid OR (source, term_id)")
         df["term_uid"] = (
-            df["source"].astype(str).str.strip() + ":" + df["term_id"].astype(str).str.strip()
+            df.apply(
+                lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+                axis=1,
+            )
+            .astype(str)
+            .str.strip()
         )
 
     required = {"term_uid", "term_id", "term_name", "source"}

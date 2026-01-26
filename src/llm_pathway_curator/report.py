@@ -35,12 +35,7 @@ from .utils import build_id_to_symbol_from_distilled, load_id_map_tsv, map_ids_t
 _NA_TOKENS = set(_shared.NA_TOKENS)
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
-_ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
-
-# Keep stress_tag delimiter consistent across layers.
-# masking.apply_evidence_stress uses comma-joined tags;
-# modules.attach_module_drift_stress_tag tolerates '+' but canonicalizes to comma.
-STRESS_TAG_DELIM = ","
+_ALLOWED_STATUSES = set(_shared.ALLOWED_STATUSES)
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -185,7 +180,7 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
-    LIST_SEP = ";"
+    LIST_SEP = _shared.GENE_JOIN_DELIM
     out = df.copy()
 
     # IMPORTANT:
@@ -248,7 +243,7 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
+def _excel_safe_ids(x: Any, *, list_sep: str = _shared.GENE_JOIN_DELIM) -> str:
     """
     Make an ID field safe for Excel:
       - Accept list-like or scalar.
@@ -302,7 +297,7 @@ def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
 
 
 def _normalize_status(raw: Any) -> str:
-    s = str(raw or "").upper().strip()
+    s = _shared.normalize_status_str(raw)
     if s not in _ALLOWED_STATUSES:
         raise ValueError(f"invalid status='{s}' (allowed: {sorted(_ALLOWED_STATUSES)})")
     return s
@@ -312,25 +307,16 @@ def _normalize_stress_tag(raw: Any) -> str:
     """
     Canonicalize stress_tag across historical artifacts.
 
-    Policy:
-      - Accept comma-delimited (current) or '+'-delimited (legacy).
-      - Normalize to comma-delimited unique tags preserving order.
+    Single source of truth:
+      - _shared.split_tags(): tolerates legacy '+', trims, dedups (order-preserving)
+      - _shared.join_tags(): canonical comma delimiter
     """
     if _is_na_scalar(raw):
         return ""
     s = str(raw or "").strip()
     if not s or s.lower() in _NA_TOKENS_L:
         return ""
-    s = s.replace("+", STRESS_TAG_DELIM)
-    parts = [p.strip() for p in s.split(STRESS_TAG_DELIM) if p.strip()]
-    # de-dup preserving order
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in parts:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
-    return STRESS_TAG_DELIM.join(out)
+    return _shared.join_tags(_shared.split_tags(s))
 
 
 def _decision_from_audit_row(row: pd.Series) -> Decision:
@@ -1024,7 +1010,7 @@ def write_report(
         syms = s.map(lambda x: map_ids_to_symbols(x, id2sym) if id2sym else [])
         audit_out["gene_symbols"] = syms
         audit_out["gene_symbols_str"] = syms.map(
-            lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
+            lambda xs: _shared.GENE_JOIN_DELIM.join(map(str, xs)) if isinstance(xs, list) else ""
         )
 
     audit_out = _stringify_list_columns(audit_out)
