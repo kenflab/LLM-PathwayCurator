@@ -897,10 +897,29 @@ def _maybe_apply_llm_context_review(
     if "context_reason" not in df.columns:
         df["context_reason"] = ""
 
-    # Only evaluate rows missing review
-    missing_mask = (~df["context_evaluated"].astype(bool)) & (
-        df["context_status"].astype(str).str.strip() == ""
-    )
+    # --- Only evaluate rows that are not already LLM-reviewed ---
+    # Problem: upstream proxy may set context_evaluated=True / context_status=PASS,
+    # which blocks LLM review under the old "missing only" mask.
+    # Policy:
+    #   - If context_review_mode=llm: (re)review rows unless they are already method=llm.
+    #   - Never overwrite existing LLM results.
+    m_method = df["context_method"].astype(str).str.strip().str.lower()
+    m_status = df["context_status"].astype(str).str.strip()
+
+    already_llm = m_method.eq("llm")
+
+    # Treat proxy-derived evaluations as "needs LLM"
+    # (including method empty/none/proxy). We prefer to overwrite these.
+    proxy_like = m_method.isin({"", "none", "proxy"})
+
+    # If status is empty, it's definitely missing.
+    status_missing = m_status.eq("")
+
+    # Rows we will LLM-review:
+    #  - not already LLM, AND
+    #  - either status missing OR proxy-like method
+    missing_mask = (~already_llm) & (status_missing | proxy_like)
+
     n_missing = int(missing_mask.sum())
     if n_missing <= 0:
         return df
@@ -1028,10 +1047,9 @@ def _maybe_apply_llm_context_review(
 
         reason = str(obj.get("reason") or "").strip()
 
-        # Only fill if still missing (do not overwrite concurrent pipeline fields)
-        if bool(df.at[idx, "context_evaluated"]) is True:
-            continue
-        if str(df.at[idx, "context_status"]).strip():
+        # Do NOT overwrite existing LLM results, but DO overwrite proxy/none.
+        cur_method = str(df.at[idx, "context_method"] or "").strip().lower()
+        if cur_method == "llm":
             continue
 
         df.at[idx, "context_evaluated"] = True

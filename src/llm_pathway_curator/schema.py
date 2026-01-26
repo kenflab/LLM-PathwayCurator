@@ -422,7 +422,7 @@ class EvidenceTable:
         # ---- qval fallback policy ----
         # Provenance:
         #   - "qval": provided in input
-        #   - "bh(pval)": computed from p-values (BH)
+        #   - "bh(pval)": computed from p-values (BH) within deterministic groups
         #   - "missing": neither qval nor pval available
         df["qval_source"] = "missing"
         if qval_in_input:
@@ -448,19 +448,34 @@ class EvidenceTable:
             q.loc[q_non.index] = q_non
             return q
 
-        needs_q = df["qval"].isna() & (~df["pval"].isna())
-        needs_q = needs_q & df["is_valid"]
+        # Fill qval only when missing, using BH computed over ALL valid p-values in the group.
+        needs_q = df["qval"].isna() & (~df["pval"].isna()) & df["is_valid"]
 
         # Conservative grouping (documented, deterministic)
         bh_group_cols = ["source", "direction"]
 
         if needs_q.any():
-            grouped = df.loc[needs_q].groupby(bh_group_cols, dropna=False).groups
-            for _, idx in grouped.items():
-                idx_list = list(idx)
-                q_calc = _bh_qvalues(df.loc[idx_list, "pval"])
-                df.loc[idx_list, "qval"] = q_calc
-                df.loc[idx_list, "qval_source"] = "bh(pval)"
+            # Iterate groups based on rows that need filling,
+            # but compute BH using all valid pvals in group.
+            groups = df.loc[needs_q, bh_group_cols].drop_duplicates()
+
+            for _, row in groups.iterrows():
+                key_source = row["source"]
+                key_dir = row["direction"]
+
+                in_group = (df["source"] == key_source) & (df["direction"] == key_dir)
+                idx_all = df.index[in_group & df["is_valid"] & (~df["pval"].isna())]
+                if len(idx_all) == 0:
+                    continue
+
+                q_all = _bh_qvalues(df.loc[idx_all, "pval"])
+
+                idx_need = df.index[in_group & needs_q]
+                if len(idx_need) == 0:
+                    continue
+
+                df.loc[idx_need, "qval"] = q_all.loc[idx_need]
+                df.loc[idx_need, "qval_source"] = "bh(pval)"
 
         df["qval_provided"] = df["qval_source"].eq("qval")
 

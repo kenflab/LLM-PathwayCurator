@@ -30,6 +30,13 @@ def _getenv(*names: str, default: str | None = None) -> str | None:
     return default
 
 
+def _try_parse_float(s: str) -> tuple[bool, float]:
+    try:
+        return True, float(s)
+    except Exception:
+        return False, 0.0
+
+
 def _getfloat(*names: str, default: float) -> float:
     v = _getenv(*names, default=None)
     if v is None:
@@ -65,22 +72,40 @@ def _gettimeout_pair(
       1) explicit connect/read envs
       2) legacy single timeout envs (applies to both)
       3) defaults
-    """
-    c = _getfloat(*connect_names, default=float(default_connect))
-    r = _getfloat(*read_names, default=float(default_read))
 
-    # Legacy single timeout applies only if connect/read are not explicitly set.
+    Robustness:
+      - If an explicit connect/read env is present but NOT parseable as float,
+        we treat it as "not explicitly set" for the purpose of legacy override.
+    """
+    # Read raw env strings first (so we can tell "present but invalid").
+    c_raw = _getenv(*connect_names, default=None)
+    r_raw = _getenv(*read_names, default=None)
+
+    c_ok = False
+    r_ok = False
+    c = float(default_connect)
+    r = float(default_read)
+
+    if c_raw is not None:
+        c_ok, c_val = _try_parse_float(c_raw)
+        if c_ok:
+            c = float(c_val)
+
+    if r_raw is not None:
+        r_ok, r_val = _try_parse_float(r_raw)
+        if r_ok:
+            r = float(r_val)
+
     legacy = _getenv(*legacy_names, default=None)
     if legacy is not None:
-        try:
-            v = float(legacy)
-            # only override if explicit env not present
-            if _getenv(*connect_names, default=None) is None:
+        l_ok, l_val = _try_parse_float(legacy)
+        if l_ok:
+            v = float(l_val)
+            # only override if connect/read are not explicitly set (or explicitly invalid)
+            if not c_ok:
                 c = v
-            if _getenv(*read_names, default=None) is None:
+            if not r_ok:
                 r = v
-        except Exception:
-            pass
 
     # sanity
     c = max(0.5, float(c))
@@ -192,6 +217,44 @@ class BaseLLMBackend(ABC):
     def generate(self, prompt: str, json_mode: bool = False) -> str:
         raise NotImplementedError
 
+    def invoke(self, prompt: str, **kwargs: Any) -> str:
+        json_mode = bool(kwargs.get("json_mode", False))
+        return self.generate(str(prompt), json_mode=json_mode)
+
+    def call(self, prompt: str, **kwargs: Any) -> str:
+        return self.invoke(prompt, **kwargs)
+
+    def complete(self, prompt: str, **kwargs: Any) -> str:
+        return self.invoke(prompt, **kwargs)
+
+    def chat(self, messages: Any, **kwargs: Any) -> str:
+        prompt = ""
+        try:
+            if isinstance(messages, list) and messages:
+                last = messages[-1]
+                if isinstance(last, dict):
+                    prompt = str(last.get("content", "") or "")
+                else:
+                    prompt = str(last)
+            else:
+                prompt = str(messages or "")
+        except Exception:
+            prompt = ""
+        return self.invoke(prompt, **kwargs)
+
+    # JSON helper names (optional)
+    def chat_json(self, prompt: str, **kwargs: Any) -> str:
+        return self.generate(str(prompt), json_mode=True)
+
+    def complete_json(self, prompt: str, **kwargs: Any) -> str:
+        return self.generate(str(prompt), json_mode=True)
+
+    def generate_json(self, prompt: str, **kwargs: Any) -> str:
+        return self.generate(str(prompt), json_mode=True)
+
+    def json(self, prompt: str, **kwargs: Any) -> str:
+        return self.generate(str(prompt), json_mode=True)
+
 
 def _is_soft_error_json(s: str) -> bool:
     """
@@ -256,12 +319,12 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
       - json_mode parse failures (at most one retry)
 
     Notes:
-      - json_mode is taken ONLY from kwargs to avoid signature/args ambiguity.
+      - json_mode is inferred from kwargs OR (self, prompt, json_mode) positional ABI.
       - In json_mode, we prefer standardized soft error JSON; non-JSON outputs are treated
         as parse failures and may be retried once.
+      - If a backend returns None (contract violation), we normalize to a standardized soft error.
     """
 
-    # Keep conservative: only clearly non-retryable auth/config errors.
     NON_RETRYABLE_PATTERNS = [
         "401",
         "403",
@@ -272,9 +335,10 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
         "model not found",
         "insufficient_quota",
         "billing",
+        "response_format",
+        "unsupported",
     ]
 
-    # Things that usually benefit from retry/backoff.
     RETRYABLE_HINTS = [
         "429",
         "rate limit",
@@ -302,11 +366,20 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
             return True
         return False
 
+    def _infer_json_mode(args, kwargs) -> bool:
+        if "json_mode" in kwargs:
+            return bool(kwargs.get("json_mode", False))
+        # Positional ABI: (self, prompt, json_mode=False)
+        # args[0]=self, args[1]=prompt, args[2]=json_mode (optional)
+        if len(args) >= 3 and isinstance(args[2], bool):
+            return bool(args[2])
+        return False
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             attempt = 0
-            json_mode = bool(kwargs.get("json_mode", False))
+            json_mode = _infer_json_mode(args, kwargs)
 
             parsefail_used = False  # allow at most one retry for JSON parse failures in json_mode
 
@@ -314,12 +387,17 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
                 try:
                     result = func(*args, **kwargs)
 
+                    # Normalize contract violation (None) into a standardized soft error JSON.
+                    if result is None:
+                        result = _soft_error_json(
+                            "Backend returned None (contract violation).",
+                            err_type="backend_contract_violation",
+                            retryable=True,
+                        )
+
                     retryable = False
 
-                    if result is None:
-                        retryable = True
-
-                    elif isinstance(result, str):
+                    if isinstance(result, str):
                         s = result.strip()
 
                         # standardized soft error JSON
@@ -542,87 +620,103 @@ class OllamaBackend(BaseLLMBackend):
 
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
-        # --- json_mode: use /api/generate (known to work reliably) ---
+        """
+        Ollama backend call.
+
+        Contract:
+          - Always returns a string.
+          - If json_mode=True: returns a valid JSON string OR standardized soft error JSON.
+          - If json_mode=False: returns free-form text (best-effort), OR legacy "Ollama Error: ...".
+
+        Notes:
+          - urllib timeout is a SINGLE float seconds (cannot separate connect/read).
+          - We keep connect_timeout for documentation/metadata only.
+        """
+        url = f"{self.host}/api/generate"
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "prompt": str(prompt),
+            "stream": False,
+            "options": {"temperature": float(self.temperature)},
+        }
         if json_mode:
-            url = f"{self.host}/api/generate"
-            payload = {
-                "model": self.model_name,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": self.temperature},
-            }
-            data = json.dumps(payload).encode("utf-8")
+            # In Ollama, "format": "json" nudges the model to emit JSON in `response`.
+            payload["format"] = "json"
 
-            # Adaptive read-timeout escalation (deterministic ladder).
-            # NOTE: urllib urlopen() timeout is a SINGLE float seconds (no (connect,read) tuple).
-            max_escalations = _getint(
-                "LPC_OLLAMA_TIMEOUT_ESCALATIONS",
-                "LLMPATH_OLLAMA_TIMEOUT_ESCALATIONS",
-                default=2,
-            )
-            factor = _getfloat(
-                "LPC_OLLAMA_TIMEOUT_FACTOR",
-                "LLMPATH_OLLAMA_TIMEOUT_FACTOR",
-                default=2.0,
-            )
-            max_read = _getfloat(
-                "LPC_OLLAMA_READ_TIMEOUT_MAX",
-                "LLMPATH_OLLAMA_READ_TIMEOUT_MAX",
-                default=1800.0,
-            )
+        data = json.dumps(payload).encode("utf-8")
 
-            read_timeout = float(self.read_timeout)
-            escalations_used = 0
+        # Adaptive read-timeout escalation (deterministic ladder).
+        max_escalations = _getint(
+            "LPC_OLLAMA_TIMEOUT_ESCALATIONS",
+            "LLMPATH_OLLAMA_TIMEOUT_ESCALATIONS",
+            default=2,
+        )
+        factor = _getfloat(
+            "LPC_OLLAMA_TIMEOUT_FACTOR",
+            "LLMPATH_OLLAMA_TIMEOUT_FACTOR",
+            default=2.0,
+        )
+        max_read = _getfloat(
+            "LPC_OLLAMA_READ_TIMEOUT_MAX",
+            "LLMPATH_OLLAMA_READ_TIMEOUT_MAX",
+            default=1800.0,
+        )
 
-            while True:
-                req = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
+        read_timeout = float(self.read_timeout)
+        escalations_used = 0
+
+        while True:
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=float(read_timeout)) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+
+                obj = json.loads(raw) if raw.strip() else {}
+                if not isinstance(obj, dict):
+                    obj = {}
+
+                content = (obj.get("response") or "").strip()
+
+                if not json_mode:
+                    # free-form mode: return as-is
+                    return content
+
+                # json_mode: enforce strict contract
                 try:
-                    # urllib accepts only float timeout (seconds)
-                    with urllib.request.urlopen(req, timeout=float(read_timeout)) as resp:
-                        raw = resp.read().decode("utf-8", errors="replace")
-
-                    obj = json.loads(raw)
-                    content = (obj.get("response") or "").strip()
-
-                    # Enforce json_mode contract: return valid JSON or soft error JSON
-                    try:
-                        json.loads(content)
-                        return content
-                    except Exception:
-                        return _soft_error_json(
-                            (
-                                "Ollama(/api/generate) returned non-JSON in json_mode: "
-                                f"{content[:200]}"
-                            ),
-                            err_type="ollama_non_json",
-                            retryable=True,
-                            extra={
-                                "connect_timeout_ignored_by_urllib": float(self.connect_timeout),
-                                "read_timeout": float(read_timeout),
-                                "escalations_used": int(escalations_used),
-                            },
-                        )
-
-                except Exception as e:
-                    msg = str(e)
-                    is_timeout = ("timed out" in msg.lower()) or ("timeout" in msg.lower())
-
-                    # escalate only for timeout-ish errors
-                    if is_timeout and escalations_used < int(max_escalations):
-                        escalations_used += 1
-                        read_timeout = min(float(max_read), float(read_timeout) * float(factor))
-                        continue
-
-                    retryable = any(
-                        h in msg.lower()
-                        for h in ["429", "timeout", "503", "unavailable", "rate limit"]
+                    json.loads(content)
+                    return content
+                except Exception:
+                    return _soft_error_json(
+                        (f"Ollama(/api/generate) returned non-JSON in json_mode: {content[:200]}"),
+                        err_type="ollama_non_json",
+                        retryable=True,
+                        extra={
+                            "connect_timeout_ignored_by_urllib": float(self.connect_timeout),
+                            "read_timeout": float(read_timeout),
+                            "escalations_used": int(escalations_used),
+                        },
                     )
+
+            except Exception as e:
+                msg = str(e)
+                is_timeout = ("timed out" in msg.lower()) or ("timeout" in msg.lower())
+
+                if is_timeout and escalations_used < int(max_escalations):
+                    escalations_used += 1
+                    read_timeout = min(float(max_read), float(read_timeout) * float(factor))
+                    continue
+
+                retryable = any(
+                    h in msg.lower()
+                    for h in ["429", "timeout", "503", "unavailable", "rate limit", "overloaded"]
+                )
+
+                if json_mode:
                     return _soft_error_json(
                         msg,
                         err_type="ollama_error",
@@ -633,6 +727,9 @@ class OllamaBackend(BaseLLMBackend):
                             "escalations_used": int(escalations_used),
                         },
                     )
+
+                # legacy text error (keeps retry_with_backoff compatibility)
+                return f"Ollama Error: {msg}"
 
 
 class LocalLLMBackend(BaseLLMBackend):

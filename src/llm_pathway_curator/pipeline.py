@@ -456,36 +456,51 @@ def _resolve_context_review_mode(card: SampleCard, *, default: str = "proxy") ->
     return _norm_review_mode(v, default=default)
 
 
-def _enforce_gate_review_compat_effective(
-    card: SampleCard, *, gate_mode: str, review_mode: str
-) -> dict[str, Any]:
+def _enforce_gate_review_compat_effective(card, gate_mode: str, review_mode: str) -> dict:
     """
-    Guardrail:
-      hard gate + review off => guaranteed all-ABSTAIN (or all non-PASS)
+    Enforce safe compatibility between gate/review modes.
 
-    Policy:
-      - If gate=hard and review is off, auto-set review to 'proxy'
-    IMPORTANT:
-      - Apply AFTER env>card resolution so incompatibility cannot reappear.
-      - Persist into card.extra for auditability.
+    Contract (paper + tool):
+      - If gate_mode is "hard", we MUST have a deterministic review signal
+        unless the user explicitly accepts that everything becomes UNEVALUATED.
+      - Therefore, (gate=hard, review=off) is disallowed and we force review=proxy.
+      - We NEVER silently relax hard->soft, because that breaks user intent and Fig2 comparability.
     """
-    gm = _norm_gate_mode(gate_mode, default="soft")
-    rm = _norm_review_mode(review_mode, default="proxy")
+    gate_mode_in = gate_mode
+    review_mode_in = review_mode
 
-    if gm != "hard":
-        return {"compat_action": "none", "gate_mode": gm, "review_mode": rm}
+    extra = getattr(card, "extra", {}) or {}
+    swap_active = bool(extra.get("context_swap_from")) or bool(extra.get("context_swap_to"))
 
-    if rm == "off":
-        _set_card_extra(card, "context_gate_mode", "hard")
-        _set_card_extra(card, "context_review_mode", "proxy")
-        return {
-            "compat_action": "auto_enable_context_review_proxy",
-            "gate_mode": "hard",
-            "review_mode_before": "off",
-            "review_mode_after": "proxy",
-        }
+    updates: dict[str, str] = {}
+    reasons: list[str] = []
 
-    return {"compat_action": "none", "gate_mode": "hard", "review_mode": rm}
+    if gate_mode == "hard" and review_mode == "off":
+        review_mode = "proxy"
+        updates["review_mode"] = "proxy"
+        reasons.append(
+            "disallow (gate=hard, review=off); force review=proxy to keep hard-gate meaningful"
+        )
+        if swap_active:
+            reasons.append(
+                "swap_active: forced proxy prevents silent all-ABSTAIN/UNEVALUATED collapse"
+            )
+
+    if review_mode == "llm":
+        reasons.append("review=llm: compatible with gate soft/hard")
+
+    return {
+        "gate_mode": gate_mode,
+        "review_mode": review_mode,
+        "changed": (gate_mode != gate_mode_in) or (review_mode != review_mode_in),
+        "updates": updates,
+        "reasons": reasons,
+        "inputs": {
+            "gate_mode": gate_mode_in,
+            "review_mode": review_mode_in,
+            "swap_active": swap_active,
+        },
+    }
 
 
 # -------------------------
@@ -626,6 +641,11 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
       - proposed MUST have a string payload column among claim_json/claim_json_str/claim_json_raw
       - proposed MUST have claim_id
       - normalize to canonical claim_json (string) for downstream stress/audit/report
+
+    CRITICAL:
+      - If a payload column exists but claim_json is empty for some rows,
+        synthesize minimal claim_json for those rows.
+        (Otherwise context review cannot write back into claim_json.)
     """
     out = proposed.copy()
 
@@ -633,6 +653,10 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
         out["claim_id"] = ""
 
     payload_col = _pick_claim_payload_col(out)
+
+    # -------------------------
+    # Case A: payload column exists (but may be empty/NA)
+    # -------------------------
     if payload_col is not None:
         if payload_col != "claim_json":
             out["claim_json"] = out[payload_col]
@@ -648,12 +672,14 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
                 return ""
             return ""
 
+        # Fill claim_id from JSON if possible
         missing_id = out["claim_id"].map(lambda x: _is_na_scalar(x) or (not str(x).strip()))
         if missing_id.any():
             out.loc[missing_id, "claim_id"] = out.loc[missing_id, "claim_json"].map(
                 lambda s: _maybe_claim_id_from_json(str(s))
             )
 
+        # If still missing, synthesize a stable claim_id
         missing_id2 = out["claim_id"].map(lambda x: _is_na_scalar(x) or (not str(x).strip()))
         if missing_id2.any():
 
@@ -679,9 +705,20 @@ def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd
 
             out.loc[missing_id2, "claim_id"] = out.loc[missing_id2].apply(_mk, axis=1)
 
+        # >>> CRITICAL: if claim_json is empty, synthesize minimal payload
+        empty_payload = out["claim_json"].map(lambda x: _is_na_scalar(x) or (not str(x).strip()))
+        if empty_payload.any():
+            out.loc[empty_payload, "claim_json"] = out.loc[empty_payload].apply(
+                lambda r: _synthesize_claim_json_row(r, card),
+                axis=1,
+            )
+
         out = _canonicalize_claim_json_column(out)
         return out
 
+    # -------------------------
+    # Case B: no payload column -> always synthesize
+    # -------------------------
     out["claim_json_raw"] = out.apply(lambda r: _synthesize_claim_json_row(r, card), axis=1)
     out["claim_json"] = out["claim_json_raw"]
 
@@ -1186,8 +1223,19 @@ def _infer_ctx_id_from_run_meta(meta: dict[str, Any]) -> str:
 
 def _load_context_corpus_index() -> pd.DataFrame:
     """
-    Load corpus index either from explicit TSV or from meta_glob + distilled_glob.
+    Load corpus index either from explicit TSV or from meta_glob/dist_glob.
+
     Returns df with columns: path, ctx_id
+
+    Priority:
+      1) LLMPATH_CONTEXT_CORPUS_INDEX_TSV (explicit)
+      2) LLMPATH_CONTEXT_CORPUS_META_GLOB (run_meta.json files; preferred)
+      3) LLMPATH_CONTEXT_CORPUS_GLOB (distilled.with_modules.tsv files)
+         + sibling run_meta.json inference
+
+    Notes:
+      - We do NOT invent ctx_id if it cannot be inferred.
+      - For dist_glob-only mode, we infer ctx_id from a sibling run_meta.json when available.
     """
     idx_path = _env_str("LLMPATH_CONTEXT_CORPUS_INDEX_TSV", "")
     if idx_path:
@@ -1216,7 +1264,8 @@ def _load_context_corpus_index() -> pd.DataFrame:
 
     rows: list[dict[str, str]] = []
 
-    # Prefer meta_glob: run_meta.json → infer ctx_id + locate distilled.with_modules.tsv
+    # --- Preferred: meta_glob ---
+    # run_meta.json → infer ctx_id + locate distilled.with_modules.tsv
     if meta_paths:
         for mp in meta_paths:
             meta = _read_json_quiet(mp)
@@ -1231,7 +1280,29 @@ def _load_context_corpus_index() -> pd.DataFrame:
         if rows:
             return pd.DataFrame(rows)
 
-    _ = dist_paths
+    # --- Fallback: dist_glob only ---
+    # Try to infer ctx_id from sibling run_meta.json near each distilled file.
+    if dist_paths:
+        for dp in dist_paths:
+            # common layouts:
+            #   <outdir>/distilled.with_modules.tsv
+            #   <outdir>/run_meta.json
+            mp = dp.parent / "run_meta.json"
+            if not mp.exists() or not mp.is_file():
+                # allow custom meta name in corpus; best-effort search
+                # (keep it tight: only immediate parent)
+                alt = list(dp.parent.glob("*meta*.json"))
+                mp = alt[0] if alt else mp
+
+            if mp.exists() and mp.is_file():
+                meta = _read_json_quiet(mp)
+                ctx_id = _infer_ctx_id_from_run_meta(meta)
+                if str(ctx_id).strip():
+                    rows.append({"path": str(dp), "ctx_id": str(ctx_id)})
+
+        if rows:
+            return pd.DataFrame(rows)
+
     return pd.DataFrame(columns=["path", "ctx_id"])
 
 
@@ -2320,6 +2391,15 @@ def _apply_context_review(
     # --- OFF: explicit no review ---
     if rm == "off":
         out = _ensure_context_review_fields(proposed, gate_mode=gm)
+
+        # Make "off" explicit and stable for downstream gating/logging
+        if "context_status" in out.columns:
+            empty = out["context_status"].astype(str).str.strip().eq("")
+            out.loc[empty, "context_status"] = "UNEVALUATED"
+        if "context_reason" in out.columns:
+            empty = out["context_reason"].astype(str).str.strip().eq("")
+            out.loc[empty, "context_reason"] = "REVIEW_OFF"
+
         out["context_review_mode"] = "off"
         out["context_method"] = "off"
         out = _write_context_review_into_claim_json(out)
@@ -2383,15 +2463,21 @@ def _apply_context_review(
         # Backend exists, but pipeline does not run prompts.
         # If select.py already produced evaluated results, keep them.
         if already:
+            # IMPORTANT: pipeline.py does not execute prompts here.
+            # If LLM-evaluated fields already exist (likely from select.py),
+            # we must not mislabel this step as having run the LLM itself.
             out = _ensure_context_review_fields(proposed, gate_mode=gm)
             out["context_review_mode"] = "llm"
-            out["context_method"] = "llm"
+            out["context_method"] = "llm_from_select"
             out = _write_context_review_into_claim_json(out)
             return out, {
                 "evaluated": True,
                 "mode": "llm",
                 "gate_mode": gm,
-                "note": "LLM results were already present (likely from select.py).",
+                "note": (
+                    "LLM-evaluated fields were already present "
+                    "(likely produced upstream in select.py)."
+                ),
                 "backend_enabled": True,
                 "seed": int(seed),
             }
@@ -2783,6 +2869,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 "species": species,
             }
         )
+        seed0 = int(cfg.seed or 42)
 
         effective_tau = _resolve_tau(cfg.tau, card)
 
@@ -2810,7 +2897,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _write_json(meta_path, meta)
 
         _mark_step("distill")
-        distilled = distill_evidence(ev, card, seed=cfg.seed)
+        distilled = distill_evidence(ev, card, seed=int(seed0))
 
         dist_path = outdir / "distilled.tsv"
         _write_tsv(distilled, dist_path)
@@ -2854,6 +2941,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("select_claims")
 
+        # Resolve gate/review modes (env > card.extra), then enforce compatibility centrally.
         context_gate_mode = _norm_gate_mode(
             _resolve_context_gate_mode(card, default="soft"), default="soft"
         )
@@ -2861,23 +2949,21 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             _resolve_context_review_mode(card, default="proxy"), default="proxy"
         )
 
-        compat_final: dict[str, Any] = {"compat_action": "none"}
-        if context_gate_mode == "hard" and context_review_mode == "off":
-            context_review_mode = "proxy"
-            _set_card_extra(card, "context_review_mode", "proxy")
-            compat_final = {
-                "compat_action": "auto_enable_context_review_proxy",
-                "gate_mode": "hard",
-                "review_mode_before": "off",
-                "review_mode_after": "proxy",
-                "source": "final_modes(env>card.extra)",
-            }
+        compat_final = _enforce_gate_review_compat_effective(
+            card, gate_mode=context_gate_mode, review_mode=context_review_mode
+        )
+
+        # Apply possibly-updated modes returned by the compat guard.
+        context_gate_mode = _norm_gate_mode(
+            compat_final.get("gate_mode", context_gate_mode), default="soft"
+        )
+        context_review_mode = _norm_review_mode(
+            compat_final.get("review_mode", context_review_mode), default="proxy"
+        )
 
         meta.setdefault("inputs", {}).setdefault("claims", {})
         meta["inputs"]["claims"]["context_gate_review_compat_final"] = compat_final
         _write_json(meta_path, meta)
-
-        seed0 = int(cfg.seed or 42)
 
         claim_mode_env = _env_str("LLMPATH_CLAIM_MODE", "").strip().lower()
         mode_arg = "llm" if claim_mode_env == "llm" else "deterministic"
@@ -2886,7 +2972,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         shared_notes = ""
         if _need_llm_backend(claim_mode=claim_mode_env, context_review_mode=context_review_mode):
             try:
-                shared_backend = get_backend_from_env(seed=seed0)
+                shared_backend = get_backend_from_env(seed=int(seed0))
             except Exception as e:
                 shared_backend = None
                 shared_notes = f"backend_init_error:{type(e).__name__}"
@@ -2935,8 +3021,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         proposed = _call_compat(
             select_claims,
-            distilled2,
-            card,
+            distilled=distilled2,
+            card=card,
             k=int(k_eff),
             mode=mode_arg,
             backend=backend_for_select,
@@ -2951,8 +3037,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         if proposed is None or proposed.empty:
             proposed = _call_compat(
                 select_claims,
-                distilled2,
-                card,
+                distilled=distilled2,
+                card=card,
                 k=int(k_eff),
                 mode="deterministic",
                 backend=review_backend if context_review_mode == "llm" else None,
