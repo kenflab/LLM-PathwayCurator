@@ -7,7 +7,10 @@ from typing import Any
 
 import pandas as pd
 
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
+from . import _shared
+
+_NA_TOKENS = set(_shared.NA_TOKENS)
+_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 _ENSG_RE = re.compile(r"^(ENSG\d+)(\.\d+)?$", re.IGNORECASE)
 
 
@@ -22,15 +25,7 @@ def norm_ensembl_id(x: str) -> str:
 
 
 def _is_na_scalar(x: Any) -> bool:
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    return _shared.is_na_scalar(x)
 
 
 def parse_id_list(x: Any) -> list[str]:
@@ -50,7 +45,7 @@ def parse_id_list(x: Any) -> list[str]:
         return out
 
     s = str(x).strip()
-    if not s or s.lower() in {t.lower() for t in _NA_TOKENS}:
+    if not s or s.lower() in _NA_TOKENS_L:
         return []
 
     s = s.replace(";", ",").replace("|", ",")
@@ -90,9 +85,9 @@ def build_id_to_symbol_from_distilled(distilled: pd.DataFrame) -> dict[str, str]
             df[symc].astype(str).str.strip().tolist(),
             strict=False,
         ):
-            if not gid or gid.lower() in _NA_TOKENS:
+            if not gid or gid.lower() in _NA_TOKENS_L:
                 continue
-            if not sym or sym.lower() in _NA_TOKENS:
+            if not sym or sym.lower() in _NA_TOKENS_L:
                 continue
             out.setdefault(gid, sym)
 
@@ -158,7 +153,7 @@ def map_ids_to_symbols(ids: Any, id2sym: dict[str, str]) -> list[str]:
 
     out: list[str] = []
     for g in gids:
-        g0 = g[1:].strip() if (g.startswith("'") and len(g) > 1) else g
+        g0 = g[1:].strip() if (str(g).startswith("'") and len(str(g)) > 1) else str(g).strip()
 
         # 1) raw
         if g0 in id2sym:

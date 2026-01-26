@@ -2,33 +2,21 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from . import _shared
 from .masking import apply_gene_masking
 from .sample_card import SampleCard
 
-_NA_TOKENS_L = {"", "na", "nan", "none"}
-
-# Keep conservative to avoid destructive whitespace splitting.
-_GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-_GENE_TOKEN = re.compile(_GENE_TOKEN_RE)
+_NA_TOKENS_L = {t.lower() for t in _shared.NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
-    """pd.isna is unsafe for list-like; only treat scalars here."""
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    """Single source of truth: _shared.is_na_scalar."""
+    return _shared.is_na_scalar(x)
 
 
 def _get_distill_knob(card: SampleCard, key: str, default: Any) -> Any:
@@ -87,56 +75,21 @@ def _normalize_direction(x: Any) -> str:
 
 def _clean_gene_token(g: str) -> str:
     """
-    Conservative token cleanup (NO forced uppercasing).
-    Canonicalization beyond trimming should be done explicitly via ID maps.
+    Single source of truth: _shared.clean_gene_token (NO forced uppercasing).
     """
-    s = str(g).strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
+    return _shared.clean_gene_token(g)
 
 
 def _split_genes_loose(x: Any) -> list[str]:
     """
-    Tolerant parsing for evidence_genes:
-      - list/tuple/set -> unique, preserve order
-      - string -> split on , ; | (fallback: whitespace ONLY if all tokens are gene-like)
-      - NA/empty -> []
+    Single source of truth: _shared.parse_genes().
+
+    Rationale:
+      - Align tokenization across distill/audit/modules/select.
+      - Conservative split (avoid destructive whitespace splitting).
+      - NO forced uppercasing.
     """
-    if _is_na_scalar(x):
-        return []
-
-    if isinstance(x, (list, tuple, set)):
-        parts = [str(g) for g in x]
-    else:
-        s = str(x).strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-        s = s.replace(";", ",").replace("|", ",").replace("\n", " ").replace("\t", " ")
-        s = " ".join(s.split()).strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-
-        if "," in s:
-            parts = s.split(",")
-        else:
-            # whitespace fallback only if tokens look gene-like (avoid destructive split)
-            toks = s.split()
-            if toks and all(bool(_GENE_TOKEN.match(tok)) for tok in toks):
-                parts = toks
-            else:
-                parts = [s]
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for p in parts:
-        g = _clean_gene_token(p)
-        if not g:
-            continue
-        if g not in seen:
-            seen.add(g)
-            out.append(g)
-    return out
+    return _shared.parse_genes(x)
 
 
 def _ensure_float64_na_series(n: int) -> pd.Series:
@@ -167,13 +120,10 @@ def _seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = No
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Audit-grade gene_set_hash (12 hex), set-stable:
-      - order invariant
-      - token-trimmed (NO forced uppercasing)
+    Single source of truth: _shared.hash_gene_set_12hex (NO forced uppercasing).
+    Kept as a thin wrapper for backward readability inside distill.py.
     """
-    uniq = sorted({_clean_gene_token(g) for g in genes if str(g).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _get_distill_mode(card: SampleCard) -> str:

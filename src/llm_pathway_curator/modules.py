@@ -1,13 +1,13 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/modules.py
 from __future__ import annotations
 
-import hashlib
-import re
 from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
 import pandas as pd
+
+from . import _shared
 
 
 @dataclass(frozen=True)
@@ -16,10 +16,6 @@ class ModuleOutputs:
     term_modules_df: pd.DataFrame
     edges_df: pd.DataFrame
 
-
-_NA_TOKENS = {"", "na", "nan", "none"}
-# Conservative gene-like token heuristic (align with schema.py spirit)
-_GENE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Keep stress_tag delimiter consistent across layers.
 # masking.apply_evidence_stress uses comma-joined tags.
@@ -30,10 +26,7 @@ STRESS_TAG_DELIM = ","
 # Normalization (align with schema/distill: trim-only; NO forced uppercasing)
 # -------------------------
 def _clean_gene_id(g: object) -> str:
-    s = str(g).strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
+    return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: object) -> str:
@@ -48,86 +41,38 @@ def _norm_gene_id(g: object) -> str:
     return _clean_gene_id(g)
 
 
-def _dedup_preserve_order(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in items:
-        if x and x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _hash_set_short12(items: list[str]) -> str:
     """
-    Set-stable short hash (sha256[:12]).
-    Order invariant, strips whitespace, drops empties.
+    Set-stable short hash (12 hex), spec-owned by _shared.
     """
-    uniq = sorted({str(x).strip() for x in items if str(x).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_set_12hex(items)
 
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Gene-set stable short hash (sha256[:12]), normalized (trim-only).
-    Order invariant; avoids casing assumptions.
+    Gene-set stable short hash (12 hex), normalized (trim-only), spec-owned by _shared.
     """
-    uniq = sorted({_norm_gene_id(x) for x in genes if str(x).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_gene_set_12hex([_norm_gene_id(x) for x in (genes or [])])
 
 
 def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
     """
-    Content hash binds module identity to BOTH term set and gene set.
-    Uses the same canonicalization as edges (trim-only).
+    Module content hash (terms+genes) (12 hex), spec-owned by _shared.
     """
-    t = sorted([str(x).strip() for x in terms if str(x).strip()])
-    g = sorted([_norm_gene_id(x) for x in genes if str(x).strip()])
-    payload = "T:" + "|".join(t) + "\n" + "G:" + "|".join(g)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.module_hash_content12(
+        [str(x).strip() for x in (terms or [])],
+        [_norm_gene_id(x) for x in (genes or [])],
+    )
 
 
 # -------------------------
 # Edges: term x gene (bipartite)
 # -------------------------
 def _parse_genes_fallback(x: object) -> list[str]:
-    """
-    Last-resort parser for legacy string inputs.
-    Matches schema/distill tolerant behavior:
-
-      - delimiters: , ; |
-      - whitespace fallback ONLY if all tokens look gene-like
-        (avoid destructive split for free text)
-    """
-    if x is None:
-        return []
-    s = str(x).strip()
-    if not s or s.lower() in _NA_TOKENS:
-        return []
-
-    s = s.replace(";", ",").replace("|", ",")
-    s = s.replace("\n", " ").replace("\t", " ")
-    s = " ".join(s.split()).strip()
-    if not s or s.lower() in _NA_TOKENS:
-        return []
-
-    if "," in s:
-        parts = [p.strip() for p in s.split(",") if p.strip()]
-    else:
-        parts0 = [p.strip() for p in s.split(" ") if p.strip()]
-        if parts0 and all(bool(_GENE_TOKEN_RE.match(tok)) for tok in parts0):
-            parts = parts0
-        else:
-            # Avoid destructive split: treat as single field (likely not a gene list)
-            parts = [s]
-
-    genes = [_norm_gene_id(p) for p in parts]
+    genes = _shared.parse_genes(x)
+    genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
     genes = [g for g in genes if g]
-
-    # de-duplicate while preserving order
-    return _dedup_preserve_order(genes)
+    return _shared.dedup_preserve_order(genes)
 
 
 def build_term_gene_edges(
@@ -160,11 +105,10 @@ def build_term_gene_edges(
         return out
 
     def _to_list(x: object) -> list[str]:
-        if isinstance(x, (list, tuple, set)):
-            genes = [_norm_gene_id(str(g)) for g in list(x)]
-            genes = [g for g in genes if g]
-            return _dedup_preserve_order(genes)
-        return _parse_genes_fallback(x)
+        genes = _shared.parse_genes(x)  # list/str/NA 全部ここで処理
+        genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
+        genes = [g for g in genes if g]
+        return _shared.dedup_preserve_order(genes)
 
     df["_genes_list"] = df[genes_col].map(_to_list)
     df = df[df["_genes_list"].map(len).gt(0)].copy()
@@ -810,16 +754,11 @@ def attach_module_drift_stress_tag(
         out[stress_col] = ""
 
     def _split_tags(s: str) -> list[str]:
-        # tolerate legacy '+', but canonicalize to comma
-        s = (s or "").strip()
-        if not s:
-            return []
-        s = s.replace("+", STRESS_TAG_DELIM)
-        parts = [p.strip() for p in s.split(STRESS_TAG_DELIM) if p.strip()]
-        return _dedup_preserve_order(parts)
+        # spec-owned by _shared (canonical delimiter is comma; tolerate legacy '+')
+        return _shared.split_tags(s, delim=STRESS_TAG_DELIM)
 
     def _join_tags(tags: list[str]) -> str:
-        return STRESS_TAG_DELIM.join([t for t in tags if str(t).strip()])
+        return _shared.join_tags(tags, delim=STRESS_TAG_DELIM)
 
     def _append(old: object, add: str) -> str:
         tags0 = _split_tags("" if old is None else str(old))

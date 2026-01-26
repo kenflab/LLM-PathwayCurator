@@ -1,7 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/masking.py
 from __future__ import annotations
 
-import hashlib
 import json
 import random
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from . import _shared
 from .noise_lists import NOISE_LISTS, NOISE_PATTERNS
 
 RESCUE_MODULES_DEFAULT = ("LINC_Noise", "Hemo_Contam")
@@ -31,35 +31,31 @@ class MaskResult:
 # -------------------------
 # Helpers
 # -------------------------
-def _dedup_preserve_order(xs: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in xs:
-        x = str(x).strip()
-        if not x:
-            continue
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _as_gene_list(x: Any) -> list[str]:
-    if x is None:
-        return []
-    if isinstance(x, (list, tuple, set)):
-        genes = [str(g).strip() for g in x if str(g).strip()]
-        return _dedup_preserve_order(genes)
-    s = str(x).strip().replace(";", ",").replace("|", ",")
-    if not s or s.lower() in {"na", "nan", "none"}:
-        return []
-    genes = [g.strip() for g in s.split(",") if g.strip()]
-    return _dedup_preserve_order(genes)
+    """
+    Single source of truth: _shared.parse_genes()
+
+    Policy:
+      - conservative splitting (aligns with distill/modules/select/audit)
+      - NA handling via _shared.NA_TOKENS
+      - deterministic dedup preserving order
+    """
+    genes = _shared.parse_genes(x)
+    # parse_genes already strips/cleans tokens; keep minimal normalization here.
+    genes = [str(g).strip() for g in genes if str(g).strip()]
+    return _shared.dedup_preserve_order(genes)
 
 
 def _sha256_short(payload: object, n: int = 12) -> str:
+    """
+    Deterministic short hash for event payloads.
+
+    Uses the same sha256[:12] primitive as other layers via _shared.sha256_12hex,
+    but keeps JSON canonicalization (sort_keys=True) to stabilize dict payloads.
+    """
     s = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:n]
+    h12 = _shared.sha256_12hex(s)
+    return h12 if int(n) == 12 else h12[: int(n)]
 
 
 def _validate_frac(name: str, x: float) -> float:
@@ -107,7 +103,7 @@ def _build_noise_pool(*, whitelist: set[str]) -> list[str]:
             gg = str(g).strip()
             if gg and gg not in whitelist:
                 pool.append(gg)
-    return _dedup_preserve_order(pool)
+    return _shared.dedup_preserve_order(pool)
 
 
 def _pick_k(rng: random.Random, xs: list[str], k: int) -> list[str]:
@@ -138,7 +134,9 @@ def _row_id_for_events(row: pd.Series, idx: Any) -> int:
 
 
 def _join_genes(xs: list[str]) -> str:
-    return GENE_JOIN_DELIM.join([str(g).strip() for g in xs if str(g).strip()])
+    return GENE_JOIN_DELIM.join(
+        [str(_shared.clean_gene_token(g)).strip() for g in xs if str(g).strip()]
+    )
 
 
 # -------------------------
@@ -250,7 +248,7 @@ def apply_gene_masking(
             if g not in gene_reasons:
                 gene_reasons[g] = reason
 
-        after = _dedup_preserve_order(kept2[:])
+        after = _shared.dedup_preserve_order(kept2[:])
         masked_lists.append(after)
         masked_counts.append(len(removed))
 
@@ -427,7 +425,7 @@ def apply_evidence_stress(
                         if g not in gene_reasons:
                             gene_reasons[g] = "stress_noise_inject"
 
-        genes = _dedup_preserve_order(genes)
+        genes = _shared.dedup_preserve_order(genes)
 
         # 3) contradiction tagging (direction flip downstream)
         flip = False
