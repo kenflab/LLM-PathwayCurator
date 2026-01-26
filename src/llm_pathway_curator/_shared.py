@@ -40,6 +40,36 @@ def is_na_token(s: object) -> bool:
 
 
 # -----------------------------------------------------------------------------
+# TSV-friendly joins (spec-level)
+# -----------------------------------------------------------------------------
+
+# Generic ID join delimiter for TSV exports (term_uids, module_ids, etc.).
+# Keep this stable: changing it can break downstream parsing.
+ID_JOIN_DELIM = ";"
+
+
+def join_id_list_tsv(ids: list[object], *, delim: str = ID_JOIN_DELIM) -> str:
+    """
+    Join generic identifiers into a TSV-friendly string.
+
+    Policy:
+      - strip whitespace
+      - drop empty/NA tokens
+      - preserve order (do NOT sort)
+      - do NOT apply gene-specific cleaning (clean_gene_token), to avoid over-normalization
+    """
+    xs: list[str] = []
+    for x in ids or []:
+        if x is None:
+            continue
+        s = str(x).strip()
+        if not s or is_na_token(s):
+            continue
+        xs.append(s)
+    return delim.join(xs)
+
+
+# -----------------------------------------------------------------------------
 # Decision status (spec-level)
 # -----------------------------------------------------------------------------
 # Single source of truth for decision vocabulary across audit/report/calibrate.
@@ -114,7 +144,8 @@ def parse_id_list(x: object) -> list[str]:
     Policy:
       - NA scalars -> []
       - list/tuple/set -> preserve order (dedup)
-      - string -> split on ',', ';', '|' (fallback: whitespace if no commas)
+      - string -> split on strong delimiters first: ',', ';', '|', '\\t', '\\n'
+      - whitespace split ONLY if all tokens look identifier-like (to avoid destructive splits)
       - normalize whitespace/newlines/tabs
       - drop NA tokens and empties
       - deterministic de-duplication (preserve first-seen order)
@@ -131,19 +162,32 @@ def parse_id_list(x: object) -> list[str]:
         items = [str(t).strip() for t in x if str(t).strip()]
     else:
         s = str(x).strip()
+        if s.startswith("'") and len(s) > 1:
+            s = s[1:].strip()
         if not s or is_na_token(s):
             return []
 
-        s = s.replace(";", ",").replace("|", ",")
+        # normalize whitespace
         s = s.replace("\n", " ").replace("\t", " ")
         s = " ".join(s.split()).strip()
         if not s or is_na_token(s):
             return []
 
-        if "," in s:
-            items = [t.strip() for t in s.split(",") if t.strip()]
+        # strong separators first
+        if any(sep in s for sep in ("|", ";", ",")):
+            s2 = s.replace("|", ",").replace(";", ",")
+            items = [t.strip() for t in s2.split(",") if t.strip()]
         else:
-            items = [t.strip() for t in s.split(" ") if t.strip()]
+            # whitespace split only if all tokens look identifier-like
+            if any(ch.isspace() for ch in s):
+                parts0 = [p for p in s.split() if p.strip()]
+                _ID_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
+                if parts0 and all(bool(_ID_TOKEN.match(tok)) for tok in parts0):
+                    items = [p.strip() for p in parts0 if p.strip()]
+                else:
+                    items = [s]
+            else:
+                items = [s]
 
     out: list[str] = []
     seen: set[str] = set()
@@ -416,6 +460,28 @@ def hash_gene_set_12hex(genes: list[object]) -> str:
     return sha256_12hex(payload)
 
 
+def norm_gene_id_upper(g: object) -> str:
+    """
+    Explicit uppercase normalization for gene IDs/symbols.
+
+    IMPORTANT:
+      - This is an opt-in policy for legacy compatibility in layers that already case-fold.
+      - Default parsing/hash helpers in _shared remain "preserve-case" by default.
+    """
+    return clean_gene_token(g).upper()
+
+
+def hash_gene_set_12hex_upper(genes: list[object]) -> str:
+    """
+    Legacy-compatible gene-set fingerprint (12-hex), set-stable and UPPERCASE-normalized.
+
+    Use this ONLY when you must match older outputs that case-folded gene IDs.
+    """
+    uniq = sorted({norm_gene_id_upper(g) for g in genes if g is not None and str(g).strip()})
+    payload = ",".join([g for g in uniq if g])
+    return sha256_12hex(payload)
+
+
 def canonical_sorted_unique(xs: list[object]) -> list[str]:
     """
     Stable canonicalization for ID payloads:
@@ -538,3 +604,47 @@ def join_genes_tsv(genes: list[object]) -> str:
         str(clean_gene_token(g)).strip() for g in (genes or []) if g is not None and str(g).strip()
     ]
     return GENE_JOIN_DELIM.join([x for x in xs if x])
+
+
+# Public spec API (do not change lightly)
+__all__ = [
+    # NA / parsing
+    "NA_TOKENS",
+    "NA_TOKENS_L",
+    "GENE_JOIN_DELIM",
+    "is_na_token",
+    "is_na_scalar",
+    "parse_id_list",
+    "parse_genes",
+    "join_genes_tsv",
+    "clean_gene_token",
+    "split_gene_string",
+    # vocab
+    "ALLOWED_STATUSES",
+    "normalize_status_str",
+    "normalize_status_series",
+    "validate_status_values",
+    "normalize_direction",
+    # tags
+    "STRESS_TAG_DELIM",
+    "split_tags",
+    "join_tags",
+    # identity / hashing / ids / seeds
+    "looks_like_12hex",
+    "sha256_12hex",
+    "sha256_short",
+    "stable_json_dumps",
+    "hash_gene_set_12hex",
+    "hash_set_12hex",
+    "module_hash_content12",
+    "canonical_sorted_unique",
+    "make_term_uid",
+    "seed_for_term",
+    "seed_int_from_payload",
+    "dedup_preserve_order",
+    "norm_gene_id_upper",
+    "hash_gene_set_12hex_upper",
+    # TSV joins (spec)
+    "ID_JOIN_DELIM",
+    "join_id_list_tsv",
+]

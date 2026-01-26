@@ -578,8 +578,8 @@ def factorize_modules_connected_components(
                 "n_genes": int(len(genes)),
                 "rep_gene_ids": rep,
                 "term_ids": terms,
-                "rep_gene_ids_str": ",".join(rep),
-                "term_ids_str": ",".join(terms),
+                "rep_gene_ids_str": _shared.join_genes_tsv(rep),
+                "term_ids_str": _shared.join_id_list_tsv(terms),
                 "module_method": str(
                     edges_f.attrs["modules"].get("effective_method", effective_method)
                 ),
