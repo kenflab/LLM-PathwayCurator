@@ -2794,15 +2794,12 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         """
         Call fn(*args, **kwargs) but drop kwargs not accepted by fn signature,
         UNLESS fn accepts **kwargs (VAR_KEYWORD), in which case pass all kwargs.
-
-        This keeps pipeline resilient across incremental refactors.
         """
         try:
             sig = inspect.signature(fn)
         except (TypeError, ValueError):
             return fn(*args, **kwargs)
 
-        # If callee has **kwargs, do not filter.
         for p in sig.parameters.values():
             if p.kind == inspect.Parameter.VAR_KEYWORD:
                 return fn(*args, **kwargs)
@@ -2858,7 +2855,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         effective_tau = _resolve_tau(cfg.tau, card)
 
-        # --- sample_card outputs (2 files, clear naming) ---
         sc_raw_path = outdir / "sample_card.raw.json"
         _write_json(sc_raw_path, _dump_model(card_original))
         meta["artifacts"]["sample_card_raw_json"] = str(sc_raw_path)
@@ -2927,8 +2923,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         _mark_step("select_claims")
 
-        # Resolve gate/review modes (env > card.extra),
-        # then enforce compatibility on the FINAL modes.
         context_gate_mode = _norm_gate_mode(
             _resolve_context_gate_mode(card, default="soft"), default="soft"
         )
@@ -2936,7 +2930,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             _resolve_context_review_mode(card, default="proxy"), default="proxy"
         )
 
-        # Final guardrail: hard + off => auto enable proxy review (reviewer-proof)
         compat_final: dict[str, Any] = {"compat_action": "none"}
         if context_gate_mode == "hard" and context_review_mode == "off":
             context_review_mode = "proxy"
@@ -2958,7 +2951,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         claim_mode_env = _env_str("LLMPATH_CLAIM_MODE", "").strip().lower()
         mode_arg = "llm" if claim_mode_env == "llm" else "deterministic"
 
-        # Backend: init once if either claim or review needs it.
         shared_backend: BaseLLMBackend | None = None
         shared_notes = ""
         if _need_llm_backend(claim_mode=claim_mode_env, context_review_mode=context_review_mode):
@@ -3046,7 +3038,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed = _ensure_claim_payload_and_id(proposed, card)
         proposed = _ensure_context_review_fields(proposed, gate_mode=context_gate_mode)
 
-        # Context-score: compute proxies (weights if available) BEFORE review
+        # --- Context IDs (original vs effective; supports context_swap) ---
         ctx_ids = _ctx_ids_from_card(card)
         ctx_id_original = ctx_ids["ctx_id_original"]
         ctx_id_effective = ctx_ids["ctx_id_effective"]
@@ -3056,6 +3048,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["inputs"]["claims"]["context_swap_from"] = ctx_ids.get("swap_from", "")
         meta["inputs"]["claims"]["context_swap_to"] = ctx_ids.get("swap_to", "")
 
+        # --- module×context weights (optional) ---
         weights_df = pd.DataFrame()
         w_meta: dict[str, Any] = {"evaluated": False, "reason": "disabled"}
 
@@ -3098,8 +3091,6 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "on",
         }
         lam = float(_env_float("LLMPATH_CONTEXT_RERANK_LAMBDA", 0.25))
-
-        # Rerank must use FINAL context_score, so we execute it AFTER review/score materialization.
         rerank_pending = bool(rerank)
 
         meta["inputs"]["claims"]["context_weight_learning"] = w_meta
@@ -3112,6 +3103,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         }
         _write_json(meta_path, meta)
 
+        # --- Context review (llm/proxy/off) ---
         proposed, ctx_review_meta = _apply_context_review(
             proposed,
             card,
@@ -3122,6 +3114,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             distilled_for_proxy=distilled2,
         )
 
+        # --- Ensure proxy columns (u01) are present ---
         proposed = _ensure_proxy_context_score_columns(
             proposed, card, ctx_id_override=ctx_id_effective
         )
@@ -3130,13 +3123,16 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed["context_ctx_id_effective"] = ctx_id_effective
         proposed["context_swap_from"] = ctx_ids.get("swap_from", "")
         proposed["context_swap_to"] = ctx_ids.get("swap_to", "")
+
+        # >>> CRITICAL FIX: always materialize FINAL context_score (single source of truth)
+        proposed = _ensure_context_score_columns(proposed)
+
         # --- Post-review rerank (final context_score) ---
         if "rerank_pending" in locals() and bool(rerank_pending):
             proposed = _maybe_rerank_with_context_score(proposed, lam=float(lam))
 
+        # --- Determine score source (log-truthful) ---
         src = "unknown"
-
-        # Prefer "did we actually evaluate context?" over mere non-NA numerics.
         evaluated_any = False
         try:
             if "context_evaluated" in proposed.columns:
@@ -3149,9 +3145,24 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             evaluated_any = False
 
         if evaluated_any:
-            src = "review_confidence"
+            # Prefer explicit method label over inference
+            meth = ""
+            try:
+                if "context_method" in proposed.columns:
+                    m = proposed["context_method"].astype(str).str.strip().str.lower()
+                    meth = m.iloc[0] if len(m) else ""
+            except Exception:
+                meth = ""
+
+            if meth == "llm":
+                src = "llm_review_confidence"
+            elif meth.startswith("proxy"):
+                src = "proxy_review_confidence"
+            elif meth == "off":
+                src = "off"
+            else:
+                src = "review_confidence"
         else:
-            # module-weight proxy should be recognized only when it actually contributed
             used_module_weight = False
             try:
                 if "context_proxy_method" in proposed.columns:
@@ -3323,7 +3334,9 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         proposed = _sync_context_columns_from_claim_json(proposed)
         proposed = _normalize_context_confidence_for_gating(proposed)
 
-        # --- Pre-audit hard gating (single source of truth: audit sees final-gated input) ---
+        # >>> CRITICAL FIX (defensive): keep context_score present even after sync/normalize
+        proposed = _ensure_context_score_columns(proposed)
+
         proposed, pre_audit_gate_meta = _apply_context_gate_to_proposed(
             proposed,
             gate_mode=context_gate_mode,

@@ -1,12 +1,12 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/claim_schema.py
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.aliases import AliasChoices
 
+from . import _shared
 from .audit_reasons import ALL_REASONS
 
 Direction = Literal["up", "down", "na"]
@@ -21,7 +21,7 @@ ContextKey = Literal["condition", "tissue", "perturbation", "comparison"]
 ContextStatus = Literal["PASS", "WARN", "FAIL"]
 ContextMethod = Literal["llm", "proxy", "none"]
 
-_NA = {"na", "nan", "none", ""}
+_NA = _shared.NA_TOKENS
 
 # Keep context explanation minimal to avoid “narrative drift”.
 _MAX_CONTEXT_REASON_CHARS = 160
@@ -29,16 +29,10 @@ _MAX_CONTEXT_NOTES_CHARS = 400
 
 
 def _dedup_preserve_order(xs: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in xs:
-        x = str(x).strip()
-        if not x or x.lower() in _NA:
-            continue
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
+    # delegate to shared spec utility (preserves order, drops empties)
+    return _shared.dedup_preserve_order(
+        [str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() not in _NA]
+    )
 
 
 def _split_listlike(v: Any) -> list[str]:
@@ -63,26 +57,15 @@ def _norm_direction(v: Any) -> str:
 
 
 def _looks_like_12hex(s: str) -> bool:
-    if not s:
-        return False
-    x = s.strip().lower()
-    if len(x) != 12:
-        return False
-    return all(ch in "0123456789abcdef" for ch in x)
+    return _shared.looks_like_12hex(s)
 
 
 def _sha256_12hex(payload: str) -> str:
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.sha256_12hex(payload)
 
 
 def _canonical_sorted_unique(xs: list[str]) -> list[str]:
-    # Stable, order-invariant canonicalization for IDs/hashes.
-    # - strip
-    # - drop NA/empty
-    # - dedup
-    # - sort for determinism
-    ys = [str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() not in _NA]
-    return sorted(set(ys))
+    return _shared.canonical_sorted_unique([str(x) for x in xs])
 
 
 def _stable_claim_id(
@@ -122,11 +105,8 @@ def _stable_claim_id(
 
 
 def _stable_gene_set_hash_from_gene_ids(gene_ids: list[str]) -> str:
-    # Hash should be order-invariant and robust to case/whitespace jitter.
-    # We intentionally do NOT attempt biological ID mapping here.
-    canon = sorted(set([str(g).strip().upper() for g in gene_ids if str(g).strip()]))
-    payload = ",".join(canon)
-    return _sha256_12hex(payload)
+    # align with tool-wide spec (trim-only; NO forced uppercasing)
+    return _shared.hash_gene_set_12hex(list(gene_ids or []))
 
 
 def _stable_gene_set_hash_fallback(term_ids: list[str]) -> str:

@@ -13,14 +13,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from . import _shared
 from .backends import BaseLLMBackend
 from .claim_schema import Claim, EvidenceRef
 from .llm_claims import claims_to_proposed_tsv, propose_claims_llm
 from .sample_card import SampleCard
 
 _ALLOWED_DIRECTIONS = {"up", "down", "na"}
-_NA_TOKENS = {"na", "nan", "none", "", "NA"}
-_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
+_NA_TOKENS_L = _shared.NA_TOKENS
 
 _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
 
@@ -47,16 +47,7 @@ def _is_na_scalar(x: Any) -> bool:
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in items:
-        x = str(x).strip()
-        if not x:
-            continue
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
+    return _shared.dedup_preserve_order([str(x).strip() for x in items])
 
 
 def _get_extra(card: SampleCard) -> dict[str, Any]:
@@ -106,21 +97,18 @@ def _validate_k(k: Any) -> int:
 
 
 def _clean_gene_token(g: Any) -> str:
-    s = str(g).strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
+    return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: Any) -> str:
     """
     Canonical gene id normalization.
 
-    CONTRACT (must match audit.py / modules.py):
+    CONTRACT (must match schema.py / modules.py / audit.py):
       - trim quotes/whitespace/punctuation
-      - UPPERCASE to avoid casing drift across sources
+      - DO NOT force uppercase (species/ID-system dependent)
     """
-    return _clean_gene_token(g).upper()
+    return _clean_gene_token(g)
 
 
 def _norm_direction(x: Any) -> str:
@@ -140,19 +128,12 @@ def _norm_direction(x: Any) -> str:
 
 def _as_gene_list(x: Any) -> list[str]:
     """
-    Tolerant parsing for evidence genes (align with schema/distill):
-      - list/tuple/set -> preserve order (dedup)
-      - string -> supports:
-          "A,B" / "A;B" / "A|B" / "A/B"
-          "['A','B']" / '["A","B"]' / "{A,B}"
-        fallback: whitespace split if no commas and looks tokenized
-      - NA -> []
+    Single source of truth: delegate to _shared.parse_genes().
+    - conservative split
+    - no uppercasing
+    - dedup preserve order
     """
-    if _is_na_scalar(x):
-        return []
-    if isinstance(x, (list, tuple, set)):
-        genes = [str(g).strip() for g in x if str(g).strip()]
-        return _dedup_preserve_order(genes)
+    return _shared.parse_genes(x)
 
     s = str(x).strip()
     if not s or s.lower() in _NA_TOKENS_L:
@@ -181,11 +162,11 @@ def _as_gene_list(x: Any) -> list[str]:
 
 def _hash_gene_set_audit(genes: list[str]) -> str:
     """
-    Audit-grade fingerprint (SET-stable):
-      - same gene set -> same hash, regardless of order
-      - uses _norm_gene_id() (trim + UPPERCASE)
+    Set-stable hash of evidence genes.
+    IMPORTANT: must use the SAME gene list embedded into claim_json.
     """
-    payload = ",".join(sorted({_norm_gene_id(g) for g in genes if str(g).strip()}))
+    canon = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
+    payload = ",".join(canon)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 

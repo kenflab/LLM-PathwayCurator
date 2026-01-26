@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from . import _shared
 from .audit_reasons import (
     ABSTAIN_CONTEXT_MISSING,
     ABSTAIN_CONTEXT_NONSPECIFIC,
@@ -31,21 +32,12 @@ except Exception:  # pragma: no cover
     # Safer than mapping to evidence drift: context failure is a distinct category.
     FAIL_CONTEXT = FAIL_SCHEMA_VIOLATION  # fallback (please add FAIL_CONTEXT in audit_reasons)
 
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
-_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
+# Shared NA tokens / scalar NA check (single source of truth)
+_NA_TOKENS_L = {t.lower() for t in _shared.NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
-    """pd.isna is unsafe for list-like; only treat scalars here."""
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    return _shared.is_na_scalar(x)
 
 
 def _parse_ids(x: Any) -> list[str]:
@@ -93,10 +85,8 @@ def _parse_ids(x: Any) -> list[str]:
 # Gene canonicalization + hashing (compat-safe)
 # -------------------------
 def _clean_gene_id(g: Any) -> str:
-    s = str(g).strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
+    # Align with _shared policy (trim + conservative wrapper stripping; no uppercasing)
+    return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: Any) -> str:
@@ -104,8 +94,8 @@ def _norm_gene_id(g: Any) -> str:
     Canonical gene token for audit comparisons.
 
     IMPORTANT:
-      - Do NOT force uppercasing here (align with schema/distill/modules trim-only).
-      - We still provide a legacy upper hash path for backward compatibility.
+      - Do NOT force uppercasing here (align with _shared).
+      - Canonicalization beyond trimming should be an explicit, opt-in mapping step.
     """
     return _clean_gene_id(g)
 
@@ -1130,7 +1120,6 @@ def _proxy_context_status(
     p_warn = _get_context_proxy_warn_p(card)
     swap_penalty = _get_context_proxy_swap_penalty(card)
 
-    # Helper: safe get + stringify
     def _get_row_str(k: str) -> str:
         v = row.get(k, "")
         if _is_na_scalar(v):
@@ -1142,12 +1131,10 @@ def _proxy_context_status(
     # --------
     parts: list[str] = []
 
-    # 1) original context id (most important)
     ctx0 = _row_original_context_id(row)
     if ctx0:
         parts.append(f"ctx0={ctx0}")
 
-    # 2) cancer/comparison (often stable across swap; keep for separation)
     cancer = _get_row_str("cancer")
     if cancer:
         parts.append(f"cancer={cancer}")
@@ -1156,8 +1143,6 @@ def _proxy_context_status(
     if comp:
         parts.append(f"comparison={comp}")
 
-    # 3) evidence identity (term/module/hash)
-    # term_ids here are already resolved uids (audit_claims resolves them before calling proxy)
     tu = ",".join(sorted({str(t).strip() for t in term_ids if str(t).strip()}))
     if tu:
         parts.append(f"term_uid={tu}")
@@ -1172,19 +1157,15 @@ def _proxy_context_status(
 
     key_base = "|".join([p for p in parts if p]).strip()
     if not key_base:
-        # absolute fallback: must remain stable across swap as much as possible
         key_base = gsh or tu or "proxy_context"
 
-    # u is ONLY from base key (swap invariant)
     u = _deterministic_uniform_0_1(key_base, salt="proxy_context_v3_base")
 
-    swap_active = False
     try:
         swap_active = bool(_row_context_swap_active(row))
     except Exception:
         swap_active = False
 
-    # Effective WARN probability (swap harder, same u)
     p_warn_eff = float(p_warn)
     if swap_active:
         p_warn_eff = min(1.0, float(p_warn) + float(swap_penalty))
@@ -1196,66 +1177,6 @@ def _proxy_context_status(
         f"key_base_fields=ctx0,cancer,comparison,term_uid,module_id,gene_set_hash"
     )
     return True, status, note, float(u), float(p_warn_eff), key_base
-
-    # HARD GUARANTEE:
-    # If swap is present/active, force it into the key even if user misconfigured fields.
-    frm2 = _get_row_str("context_swap_from")
-    to2 = _get_row_str("context_swap_to")
-
-    # Track which fields contributed to the key (for logging/debug only).
-    key_fields_eff: list[str] = []
-
-    if frm2 and to2 and frm2 != to2:
-        parts.append(f"swap:{frm2}->{to2}")
-        key_fields_eff.extend(["context_swap_from", "context_swap_to"])
-
-    # HARD GUARANTEE:
-    # If cancer exists, include it (card.disease can be null).
-    cancer2 = _get_row_str("cancer")
-    if cancer2:
-        parts.append(f"cancer={cancer2}")
-        key_fields_eff.append("cancer")
-
-    key = "|".join([p for p in parts if p])
-    if not key:
-        key = str(gene_set_hash or "").strip() or ",".join([t for t in term_ids if str(t).strip()])
-
-    # --- Paper contract: under context_swap, proxy must not improve PASS rate ---
-    # Instead of forcing WARN (which makes everything ABSTAIN under swap_strict),
-    # we increase WARN probability deterministically.
-    u = _deterministic_uniform_0_1(key, salt="proxy_context_v2")
-
-    try:
-        if _row_context_swap_active(row):
-            # Make swap strictly harder than original:
-            # increase WARN probability but keep some PASS.
-            p_warn_swap = min(1.0, float(p_warn) + 0.6)  # e.g., 0.2 -> 0.8
-            if u < float(p_warn_swap):
-                return (
-                    True,
-                    "WARN",
-                    f"proxy_context_v2: swap_active u={u:.3f} < p_warn_swap={p_warn_swap:.3f}",
-                )
-            return (
-                True,
-                "PASS",
-                f"proxy_context_v2: swap_active u={u:.3f} >= p_warn_swap={p_warn_swap:.3f}",
-            )
-    except Exception:
-        pass
-
-    fields_note = key_fields_eff if key_fields_eff else ["(implicit)"]
-    if u < float(p_warn):
-        return (
-            True,
-            "WARN",
-            f"proxy_context_v2: u={u:.3f} < p_warn={p_warn:.3f} fields={fields_note}",
-        )
-    return (
-        True,
-        "PASS",
-        f"proxy_context_v2: u={u:.3f} >= p_warn={p_warn:.3f} fields={fields_note}",
-    )
 
 
 def _apply_internal_evidence_dropout(
@@ -1452,6 +1373,7 @@ def audit_claims(
     min_overlap_default = _get_min_overlap_default(card)
 
     term_to_gene_set: dict[str, set[str]] = {}
+
     if "evidence_genes" in dist.columns:
         for tk, xs in zip(
             dist["term_uid"].astype(str).str.strip(),
@@ -1460,23 +1382,23 @@ def audit_claims(
         ):
             if not tk or tk.lower() in _NA_TOKENS_L:
                 continue
-            if isinstance(xs, (list, tuple, set)):
-                genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
-            else:
-                genes = [_norm_gene_id(g) for g in _parse_ids(xs)]
+
+            genes = [_norm_gene_id(g) for g in _shared.parse_genes(xs) if str(g).strip()]
             gs = {g for g in genes if g}
             if not gs:
                 continue
             term_to_gene_set.setdefault(tk, set()).update(gs)
+
     elif "evidence_genes_str" in dist.columns:
         for tk, s in zip(
             dist["term_uid"].astype(str).str.strip(),
-            dist["evidence_genes_str"].astype(str),
+            dist["evidence_genes_str"],
             strict=True,
         ):
             if not tk or tk.lower() in _NA_TOKENS_L:
                 continue
-            genes = [_norm_gene_id(g) for g in _parse_ids(s)]
+
+            genes = [_norm_gene_id(g) for g in _shared.parse_genes(s) if str(g).strip()]
             gs = {g for g in genes if g}
             if not gs:
                 continue
@@ -1873,11 +1795,6 @@ def audit_claims(
             if ev2 or st2:
                 c_eval, c_status, c_note = ev2, st2, f"row_fallback: {note2}"
 
-        if (not c_eval) and (not str(c_status or "").strip()):
-            ev2, st2, note2 = _context_eval_from_row(row)
-            if ev2 or st2:
-                c_eval, c_status, c_note = ev2, st2, f"row_fallback: {note2}"
-
         st_norm = str(c_status or "").strip().upper()
         if (not c_eval) and st_norm in {"PASS", "WARN", "FAIL"}:
             c_eval = True
@@ -2058,29 +1975,6 @@ def audit_claims(
                 )
                 _enforce_reason_vocab(out, i)
                 continue
-
-            gsh_after_trim = _hash_gene_set_trim12(list(kept))
-            gsh_after_upper = _hash_gene_set_upper12(list(kept))
-            gsh_eff = str(out.at[i, "gene_set_hash_effective"]).strip().lower()
-
-            if (gsh_after_trim.strip().lower() != gsh_eff) and (
-                gsh_after_upper.strip().lower() != gsh_eff
-            ):
-                out.at[i, "status"] = "ABSTAIN"
-                out.at[i, "stress_ok"] = False
-                out.at[i, "abstain_reason"] = ABSTAIN_INCONCLUSIVE_STRESS
-                out.at[i, "audit_notes"] = _append_note(
-                    out.at[i, "audit_notes"],
-                    (
-                        f"dropout_hash_change: {note} "
-                        f"after(trim={gsh_after_trim}, upper={gsh_after_upper})"
-                    ),
-                )
-                _enforce_reason_vocab(out, i)
-                continue
-
-            out.at[i, "stress_ok"] = True
-            out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], f"dropout_ok: {note}")
 
         if contradictory_p > 0.0 and str(out.at[i, "direction_norm"]).strip().lower() in {
             "up",

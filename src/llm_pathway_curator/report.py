@@ -26,13 +26,15 @@ except Exception:  # pragma: no cover
     risk_coverage_curve = None
     risk_coverage_from_status = None
 
+from . import _shared
 from .utils import build_id_to_symbol_from_distilled, load_id_map_tsv, map_ids_to_symbols
 
 # -----------------------------
 # Small helpers (stable)
 # -----------------------------
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
+_NA_TOKENS = set(_shared.NA_TOKENS)
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
+
 _ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
 
 # Keep stress_tag delimiter consistent across layers.
@@ -42,16 +44,8 @@ STRESS_TAG_DELIM = ","
 
 
 def _is_na_scalar(x: Any) -> bool:
-    """pd.isna is unsafe for list-like; only treat scalars here."""
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    """Single source of truth: _shared.is_na_scalar."""
+    return _shared.is_na_scalar(x)
 
 
 def _json_sanitize(x: Any) -> Any:

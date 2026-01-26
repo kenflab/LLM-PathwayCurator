@@ -12,28 +12,18 @@ from typing import Any
 
 import pandas as pd
 
+from . import _shared
 from .backends import BaseLLMBackend
 from .claim_schema import Claim
 from .sample_card import SampleCard
 
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
+_NA_TOKENS = set(_shared.NA_TOKENS)
 _NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
 
 
-# -------------------------
-# Small utilities
-# -------------------------
 def _is_na_scalar(x: Any) -> bool:
-    """pd.isna is unsafe for list-like; only treat scalars here."""
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    """Single source of truth: _shared.is_na_scalar."""
+    return _shared.is_na_scalar(x)
 
 
 def _strip_na(s: Any) -> str:
@@ -623,11 +613,16 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
         ]
     }
 
+    strict_k = bool(_strict_k_enabled())
+    k_line = (
+        f"Return exactly {int(k)} claims (or fewer only if candidates fewer).\n"
+        if strict_k
+        else f"Return up to {int(k)} claims (prefer exactly {int(k)} when possible).\n"
+    )
+
     header = (
         "You select representative pathway terms for a biomedical analysis tool.\n"
-        "Return VALID JSON ONLY. No markdown. No commentary.\n"
-        f"Return exactly {int(k)} claims (or fewer only if candidates fewer).\n"
-        "\n"
+        "Return VALID JSON ONLY. No markdown. No commentary.\n" + k_line + "\n"
         "CRITICAL COPY RULES:\n"
         "- You MUST choose ONLY from the candidate lines.\n"
         "- evidence_ref.term_ids MUST be a list with EXACTLY ONE string, and it MUST equal "
@@ -1213,7 +1208,7 @@ def claims_to_proposed_tsv(
             keep_term = bool(r.get("keep_term", True))
             keep_reason = str(r.get("keep_reason", "ok"))
             try:
-                context_score = int(r.get("context_score", 0))
+                context_score = pd.to_numeric(r.get("context_score", pd.NA), errors="coerce")
             except Exception:
                 context_score = pd.NA
 

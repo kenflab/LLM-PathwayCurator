@@ -7,6 +7,8 @@ from typing import Literal
 
 import pandas as pd
 
+from . import _shared
+
 # v1 contract (tool-facing): we MUST preserve term×gene.
 # Practical reality:
 # - ORA often has no direction
@@ -155,15 +157,7 @@ class EvidenceTable:
 
     @staticmethod
     def _is_na_scalar(x: object) -> bool:
-        """pd.isna is unsafe for list-like; only treat scalars here."""
-        if x is None:
-            return True
-        if isinstance(x, (list, tuple, set, dict)):
-            return False
-        try:
-            return bool(pd.isna(x))
-        except Exception:
-            return False
+        return _shared.is_na_scalar(x)
 
     @staticmethod
     def _clean_required_str(x: object) -> str:
@@ -207,104 +201,15 @@ class EvidenceTable:
 
     @staticmethod
     def _clean_gene_token(g: str) -> str:
-        """
-        Clean a single gene-like token conservatively.
-
-        NOTE: Do NOT force uppercase.
-        - Mouse gene symbols are case-sensitive in practice (e.g., Trp53).
-        - Ensembl/other IDs may appear in mixed case depending on export.
-        Our downstream logic uses set/hash comparisons; canonicalization beyond trimming
-        should be an explicit, opt-in mapping step (resources/gene_id_maps).
-        """
-        s = str(g).strip().strip('"').strip("'")
-        s = " ".join(s.split())
-        # Strip common wrapping punctuation from list-like exports.
-        s = s.strip(",;|")
-        s = s.strip("[](){}")
-        # Some exports keep trailing commas/brackets mixed.
-        s = s.strip(",;|").strip("[](){}")
-        return s
+        return _shared.clean_gene_token(g)
 
     @classmethod
     def _split_gene_string(cls, s: str) -> list[str]:
-        """
-        Split a gene string into tokens with conservative rules.
-
-        Supports common real-world formats:
-        - "A,B,C"
-        - "A;B;C"
-        - "A|B|C"
-        - "A/B/C" (seen in some core_enrichment exports; only used when no other delimiter present)
-        - "['A', 'B']" / '["A","B"]' / "{A,B}"
-        """
-        s = s.strip()
-        if not s:
-            return []
-
-        # Remove a single leading quote that sometimes appears (TSV quoting issues)
-        if s.startswith("'") and len(s) > 1:
-            s = s[1:].strip()
-
-        # Tolerate explicit list-like wrappers: [..], (..), {..}
-        # We do NOT eval; just strip wrappers if present.
-        if _BRACKETED_LIST_RE.match(s):
-            s = s.strip().lstrip("[({").rstrip("])}").strip()
-
-        # Normalize whitespace
-        s = s.replace("\n", " ").replace("\t", " ")
-        s = " ".join(s.split()).strip()
-        if not s:
-            return []
-
-        # Prefer explicit delimiters first
-        if any(d in s for d in [",", ";", "|"]):
-            s = s.replace(";", ",").replace("|", ",")
-        elif "/" in s:
-            # Use "/" only as a last-resort delimiter (reduces accidental splits)
-            s = s.replace("/", ",")
-        else:
-            # no delimiter
-            pass
-
-        if "," in s:
-            parts = s.split(",")
-        else:
-            parts0 = s.split(" ")
-            # Space-separated fallback ONLY if all tokens look gene-like.
-            if parts0 and all(bool(_GENE_TOKEN.match(tok)) for tok in parts0):
-                parts = parts0
-            else:
-                # treat as a single field (avoid destructive split)
-                parts = [s]
-
-        return parts
+        return _shared.split_gene_string(s)
 
     @classmethod
     def _parse_genes(cls, x: object) -> list[str]:
-        if cls._is_na_scalar(x):
-            return []
-
-        # Already list-like
-        if isinstance(x, (list, tuple, set)):
-            genes = [cls._clean_gene_token(str(g)) for g in x]
-            genes = [g for g in genes if g]
-        else:
-            s = str(x).strip()
-            if not s or s.lower() in {"na", "nan", "none"}:
-                return []
-
-            parts = cls._split_gene_string(s)
-            genes = [cls._clean_gene_token(g) for g in parts]
-            genes = [g for g in genes if g]
-
-        # de-duplicate while preserving order
-        seen: set[str] = set()
-        out: list[str] = []
-        for g in genes:
-            if g not in seen:
-                seen.add(g)
-                out.append(g)
-        return out
+        return _shared.parse_genes(x)
 
     @staticmethod
     def _normalize_bool(x: object) -> bool:
