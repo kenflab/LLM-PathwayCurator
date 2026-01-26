@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 
+from . import _shared
 from .audit import audit_claims
 from .backends import BaseLLMBackend, get_backend_from_env
 from .distill import distill_evidence
@@ -263,94 +264,24 @@ def _resolve_k_claims(cfg: RunConfig, card: SampleCard) -> tuple[int, dict[str, 
 # -------------------------
 # Tool-wide NA parsing helpers (pipeline-owned)
 # -------------------------
-_NA_TOKENS = {"", "na", "nan", "none", "NA"}
-_NA_TOKENS_L = {t.lower() for t in _NA_TOKENS}
+# Shared NA tokens / scalar NA check (single source of truth)
+_NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
-    if x is None:
-        return True
-    if isinstance(x, (list, tuple, set, dict)):
-        return False
-    try:
-        v = pd.isna(x)
-        return bool(v) if isinstance(v, bool) else False
-    except Exception:
-        return False
+    return _shared.is_na_scalar(x)
 
 
 def _parse_ids(x: Any) -> list[str]:
-    """
-    Backward-tolerant ID parser:
-      - accepts list-like
-      - accepts Excel-safe strings (may begin with a single quote)
-      - accepts comma/semicolon/pipe/tab/newline separated strings
-      - whitespace split is LAST resort and only if all tokens look like IDs
-        (to avoid destructive splitting of free text / term names)
-    """
-    if _is_na_scalar(x):
-        return []
-
-    if isinstance(x, (list, tuple, set)):
-        items = [str(t).strip() for t in x if str(t).strip()]
-    else:
-        s = str(x).strip()
-        if s.startswith("'"):
-            s = s[1:].strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-
-        # Strong separators first (safe)
-        if any(sep in s for sep in ("|", ";", "\t", "\n", ",")):
-            s = s.replace("|", ",").replace(";", ",").replace("\t", ",").replace("\n", ",")
-            items = [t.strip() for t in s.split(",") if t.strip()]
-        else:
-            # No strong separators.
-            # Only split on whitespace if every token looks identifier-like.
-            if any(ch.isspace() for ch in s):
-                parts0 = [p for p in s.split() if p.strip()]  # split() handles repeated spaces/tabs
-                _ID_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
-                if parts0 and all(bool(_ID_TOKEN.match(tok)) for tok in parts0):
-                    items = [p.strip() for p in parts0 if p.strip()]
-                else:
-                    items = [s]
-            else:
-                items = [s]
-
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for t in items:
-        tt = str(t).strip()
-        if not tt or tt.lower() in _NA_TOKENS_L:
-            continue
-        if tt not in seen:
-            seen.add(tt)
-            uniq.append(tt)
-    return uniq
-
-
-def _clean_gene_token(g: Any) -> str:
-    s = str(g).strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
+    return _shared.parse_id_list(x)
 
 
 def _norm_gene_id(g: Any) -> str:
-    """
-    Canonical gene id normalization.
-
-    CONTRACT (must match audit.py / modules.py):
-      - trim quotes/whitespace/punctuation
-      - UPPERCASE to avoid casing drift across sources
-    """
-    return _clean_gene_token(g).upper()
+    return _shared.norm_gene_id_upper(g)
 
 
 def _hash_gene_set_12(genes: list[str]) -> str:
-    uniq = sorted({_norm_gene_id(g) for g in genes if str(g).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return _shared.hash_gene_set_12hex_upper(genes)
 
 
 def _extract_claim_evidence(cj: str) -> tuple[list[str], str, str]:

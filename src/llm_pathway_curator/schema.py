@@ -166,34 +166,8 @@ class EvidenceTable:
 
     @staticmethod
     def _normalize_direction(x: object) -> str:
-        if EvidenceTable._is_na_scalar(x):
-            return "na"
-        s = str(x).strip().lower()
-        if s in {
-            "up",
-            "upregulated",
-            "increase",
-            "increased",
-            "activated",
-            "+",
-            "pos",
-            "positive",
-            "1",
-        }:
-            return "up"
-        if s in {
-            "down",
-            "downregulated",
-            "decrease",
-            "decreased",
-            "suppressed",
-            "-",
-            "neg",
-            "negative",
-            "-1",
-        }:
-            return "down"
-        return "na"
+        # Spec-level vocabulary normalization lives in _shared to avoid contract drift.
+        return _shared.normalize_direction(x)
 
     @staticmethod
     def _clean_gene_token(g: str) -> str:
@@ -355,7 +329,7 @@ class EvidenceTable:
 
         # ---- evidence genes parsing ----
         df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
-        df["evidence_genes_str"] = df["evidence_genes"].map(lambda xs: ",".join(xs))
+        df["evidence_genes_str"] = df["evidence_genes"].map(_shared.join_genes_tsv)
 
         # ---- numeric normalization ----
         df["stat"] = pd.to_numeric(df["stat"], errors="coerce")
@@ -586,8 +560,10 @@ class EvidenceTable:
             if EvidenceTable._is_na_scalar(x):
                 return ""
             if isinstance(x, (list, tuple, set)):
-                s = ",".join([str(g) for g in x if str(g).strip()])
+                s = _shared.join_genes_tsv(list(x))
             else:
+                # If already a string, keep as-is (but Excel-safe).
+                # We do NOT re-parse here to avoid unintended destructive normalization on write.
                 s = str(x).strip()
             return _excel_safe_cell(s)
 
