@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 import pandas as pd
@@ -152,6 +153,11 @@ GENE_TOKEN_RE = re.compile(GENE_TOKEN_RE_STR)
 BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
 
 
+# Generic ID-like token (whitespace split fallback for parse_id_list)
+ID_TOKEN_RE_STR = r"^[A-Za-z0-9_.:-]+$"
+ID_TOKEN_RE = re.compile(ID_TOKEN_RE_STR)
+
+
 def is_na_scalar(x: object) -> bool:
     """
     pd.isna is unsafe for list-like; only treat scalars as NA here.
@@ -223,8 +229,7 @@ def parse_id_list(x: object) -> list[str]:
             # whitespace split only if all tokens look identifier-like
             if any(ch.isspace() for ch in s):
                 parts0 = [p for p in s.split() if p.strip()]
-                _ID_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
-                if parts0 and all(bool(_ID_TOKEN.match(tok)) for tok in parts0):
+                if parts0 and all(bool(ID_TOKEN_RE.match(tok)) for tok in parts0):
                     items = [p.strip() for p in parts0 if p.strip()]
                 else:
                     items = [s]
@@ -612,8 +617,6 @@ def stable_json_dumps(obj: object) -> str:
     - sort_keys=True for stable dict ordering
     - separators to avoid whitespace instability
     """
-    import json
-
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 

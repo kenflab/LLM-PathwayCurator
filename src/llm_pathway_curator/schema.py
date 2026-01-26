@@ -9,11 +9,22 @@ import pandas as pd
 
 from . import _shared
 
-# v1 contract (tool-facing): we MUST preserve term×gene.
+# -----------------------------------------------------------------------------
+# EvidenceTable schema gate (tool-facing contract)
+# -----------------------------------------------------------------------------
+# v1 contract: we MUST preserve term×gene.
+#
 # Practical reality:
 # - ORA often has no direction
 # - some exports have no qval (or only p-value)
-# We therefore enforce a "core required" set and auto-fill the rest.
+#
+# Policy:
+# - enforce a "core required" set and auto-fill the rest
+# - record provenance (aliasing, read_mode, salvage) in df.attrs for auditability
+# - keep parsing rules in _shared.py to avoid contract drift
+# -----------------------------------------------------------------------------
+
+EVIDENCE_TABLE_CONTRACT_VERSION = "v1"
 
 CORE_REQUIRED_EVIDENCE_COLS = [
     "term_id",
@@ -33,13 +44,12 @@ NORMALIZED_COLS = [
     "evidence_genes",
 ]
 
+# Excel formula injection starters (output-only defense).
+_EXCEL_FORMULA_START = ("=", "+", "-", "@")
+
 # NOTE:
 # Gene parsing is spec-defined in _shared.py (parse_genes / split_gene_string / clean_gene_token).
 # Do not duplicate parsing regexes here to avoid contract drift.
-
-# Excel formula injection starters.
-_EXCEL_FORMULA_START = ("=", "+", "-", "@")
-
 
 ALIASES = {
     # -------------------------
@@ -143,6 +153,9 @@ class EvidenceReadResult:
 class EvidenceTable:
     df: pd.DataFrame
 
+    # -------------------------
+    # column / scalar helpers
+    # -------------------------
     @staticmethod
     def _normalize_col(c: str) -> str:
         # Normalize common messiness while keeping it conservative.
@@ -170,24 +183,15 @@ class EvidenceTable:
         return _shared.normalize_direction(x)
 
     @staticmethod
-    def _clean_gene_token(g: str) -> str:
-        return _shared.clean_gene_token(g)
-
-    @classmethod
-    def _split_gene_string(cls, s: str) -> list[str]:
-        return _shared.split_gene_string(s)
-
-    @classmethod
-    def _parse_genes(cls, x: object) -> list[str]:
-        return _shared.parse_genes(x)
-
-    @staticmethod
     def _normalize_bool(x: object) -> bool:
         if EvidenceTable._is_na_scalar(x):
             return False
         s = str(x).strip().lower()
         return s in {"1", "true", "t", "yes", "y"}
 
+    # -------------------------
+    # IO
+    # -------------------------
     @classmethod
     def _read_flexible(cls, path: str) -> EvidenceReadResult:
         # robust defaults: BOM, comments, gzip, do not auto-convert NA tokens
@@ -214,6 +218,9 @@ class EvidenceTable:
         df3 = pd.read_csv(path, sep=r"\s+", engine="python", **common_kwargs)
         return EvidenceReadResult(df=df3, read_mode="whitespace")
 
+    # -------------------------
+    # main contract gate
+    # -------------------------
     @classmethod
     def read_tsv(
         cls, path: str, *, strict: bool = False, drop_invalid: bool = True
@@ -233,7 +240,8 @@ class EvidenceTable:
         rr = cls._read_flexible(path)
         df_raw = rr.df
 
-        cols_norm = [cls._normalize_col(c) for c in df_raw.columns]
+        raw_columns = list(df_raw.columns)
+        cols_norm = [cls._normalize_col(c) for c in raw_columns]
         cols_mapped = [ALIASES.get(c, c) for c in cols_norm]
 
         df = df_raw.copy()
@@ -245,8 +253,9 @@ class EvidenceTable:
                 "EvidenceTable has duplicate columns after aliasing: "
                 f"{sorted(set(dup))}. "
                 f"read_mode={rr.read_mode}. "
-                f"raw_columns={list(df_raw.columns)} "
-                f"mapped_columns={list(df.columns)}"
+                f"raw_columns={raw_columns} "
+                f"normalized_columns={cols_norm} "
+                f"mapped_columns={cols_mapped}"
             )
 
         # ---- auto-fill optional normalized columns ----
@@ -260,7 +269,6 @@ class EvidenceTable:
             df["qval"] = pd.NA
         if "pval" not in df.columns:
             df["pval"] = pd.NA
-
         if "direction" not in df.columns:
             df["direction"] = "na"
 
@@ -272,17 +280,18 @@ class EvidenceTable:
         if "group_id" not in df.columns:
             df["group_id"] = pd.NA
 
-        # evidence_genes: must exist
-        # term_id / term_name / stat: must exist
+        # core required columns must exist (after aliasing)
         missing_core = [c for c in CORE_REQUIRED_EVIDENCE_COLS if c not in df.columns]
         if missing_core:
             raise ValueError(
                 f"EvidenceTable missing core columns: {missing_core}. "
                 f"read_mode={rr.read_mode}. "
-                f"raw_columns={list(df_raw.columns)} "
-                f"mapped_columns={list(df.columns)}"
+                f"raw_columns={raw_columns} "
+                f"normalized_columns={cols_norm} "
+                f"mapped_columns={cols_mapped}"
             )
 
+        # ensure normalized cols exist (even if unused by some tools)
         for c in NORMALIZED_COLS:
             if c not in df.columns:
                 df[c] = pd.NA
@@ -296,15 +305,7 @@ class EvidenceTable:
 
         # ---- salvage term_id/term_name conservatively (BEFORE invalid marking) ----
         # Rationale: some exports use "term" to mean name, not id.
-        #
-        # IMPORTANT:
-        #   Salvage is an input hygiene step that can change downstream identities.
-        #   We therefore record salvage flags for auditability.
-        #
-        # Rules:
-        # - If term_id is empty and term_name is present -> copy term_name into term_id.
-        # - If term_name is empty but term_id contains whitespace (looks like a name)
-        #   -> copy term_id into term_name.
+        # IMPORTANT: salvage can change downstream identities; record flags.
         df["term_id_salvaged"] = False
         df["term_name_salvaged"] = False
 
@@ -327,8 +328,8 @@ class EvidenceTable:
         # ---- direction normalization ----
         df["direction"] = df["direction"].map(cls._normalize_direction)
 
-        # ---- evidence genes parsing ----
-        df["evidence_genes"] = df["evidence_genes"].map(cls._parse_genes)
+        # ---- evidence genes parsing (spec-defined) ----
+        df["evidence_genes"] = df["evidence_genes"].map(_shared.parse_genes)
         df["evidence_genes_str"] = df["evidence_genes"].map(_shared.join_genes_tsv)
 
         # ---- numeric normalization ----
@@ -340,7 +341,7 @@ class EvidenceTable:
         df["is_valid"] = True
         df["invalid_reason"] = ""
 
-        # Required string fields
+        # required string fields
         bad_required = df["term_id"].eq("") | df["term_name"].eq("")
         if bad_required.any():
             df.loc[bad_required, "is_valid"] = False
@@ -370,7 +371,7 @@ class EvidenceTable:
                     "Tip: check your input column mapped to 'stat'."
                 )
 
-        # ---- enforce term×gene contract (tolerate + drop/mark invalid) ----
+        # enforce term×gene contract
         empty_ev = df["evidence_genes"].map(len).eq(0)
         if empty_ev.any():
             df.loc[empty_ev, "is_valid"] = False
@@ -387,8 +388,7 @@ class EvidenceTable:
                     "or set strict=False to drop/mark summary rows."
                 )
 
-        # ---- pval/qval range checks (prevent silent mis-mapping) ----
-        # If the user mistakenly mapped logP into pval, it can exceed 1.
+        # pval/qval range checks (prevent silent mis-mapping)
         pval_bad_range = (~df["pval"].isna()) & ((df["pval"] < 0.0) | (df["pval"] > 1.0))
         if pval_bad_range.any():
             df.loc[pval_bad_range, "is_valid"] = False
@@ -425,13 +425,11 @@ class EvidenceTable:
         #   - "bh(pval)": computed from p-values (BH)
         #   - "missing": neither qval nor pval available
         df["qval_source"] = "missing"
-
         if qval_in_input:
             df.loc[~df["qval"].isna(), "qval_source"] = "qval"
 
         def _bh_qvalues(p: pd.Series) -> pd.Series:
             p = pd.to_numeric(p, errors="coerce")
-            # Guard again: p must be in [0,1]
             p = p.where((p >= 0.0) & (p <= 1.0))
             m = int(p.notna().sum())
             if m == 0:
@@ -451,16 +449,18 @@ class EvidenceTable:
             return q
 
         needs_q = df["qval"].isna() & (~df["pval"].isna())
-        # Only compute qvals for rows that are otherwise valid enough to be used.
         needs_q = needs_q & df["is_valid"]
 
-        bh_group_cols = ["source", "direction"]  # conservative grouping
+        # Conservative grouping (documented, deterministic)
+        bh_group_cols = ["source", "direction"]
+
         if needs_q.any():
-            for _, idx in df.loc[needs_q].groupby(bh_group_cols).groups.items():
-                idx = list(idx)
-                q_calc = _bh_qvalues(df.loc[idx, "pval"])
-                df.loc[idx, "qval"] = q_calc
-                df.loc[idx, "qval_source"] = "bh(pval)"
+            grouped = df.loc[needs_q].groupby(bh_group_cols, dropna=False).groups
+            for _, idx in grouped.items():
+                idx_list = list(idx)
+                q_calc = _bh_qvalues(df.loc[idx_list, "pval"])
+                df.loc[idx_list, "qval"] = q_calc
+                df.loc[idx_list, "qval_source"] = "bh(pval)"
 
         df["qval_provided"] = df["qval_source"].eq("qval")
 
@@ -469,22 +469,34 @@ class EvidenceTable:
             df.loc[~df["pval"].isna(), "pval_source"] = "pval"
         df["pval_provided"] = df["pval_source"].eq("pval")
 
-        # ---- drop invalid rows if requested ----
+        # ---- capture invalid/salvage samples for auditability ----
         n_invalid_total = int((~df["is_valid"]).sum())
         n_invalid_empty_ev = int(empty_ev.sum())
 
-        # Capture a small sample of invalid rows for debugging/repro.
         invalid_sample = []
         if n_invalid_total > 0:
             cols = ["term_id", "term_name", "source", "invalid_reason"]
             cols = [c for c in cols if c in df.columns]
             invalid_sample = df.loc[~df["is_valid"], cols].head(5).to_dict(orient="records")
 
+        salvage_sample = []
+        salvaged_any = df["term_id_salvaged"] | df["term_name_salvaged"]
+        if salvaged_any.any():
+            cols = ["term_id", "term_name", "source", "term_id_salvaged", "term_name_salvaged"]
+            cols = [c for c in cols if c in df.columns]
+            salvage_sample = df.loc[salvaged_any, cols].head(5).to_dict(orient="records")
+
         if drop_invalid:
             df = df.loc[df["is_valid"]].copy()
 
-        # provenance
+        # provenance (attrs)
         df.attrs["read_mode"] = rr.read_mode
+        df.attrs["contract_version"] = EVIDENCE_TABLE_CONTRACT_VERSION
+        df.attrs["aliasing"] = {
+            "raw_columns": raw_columns,
+            "normalized_columns": cols_norm,
+            "mapped_columns": cols_mapped,
+        }
 
         genes_n = (
             df["evidence_genes"].map(len)
@@ -492,6 +504,7 @@ class EvidenceTable:
             else pd.Series([], dtype="int64")
         )
         df.attrs["health"] = {
+            "contract_version": EVIDENCE_TABLE_CONTRACT_VERSION,
             "n_terms": int(df.shape[0]),
             "n_terms_genes_le1": int((genes_n <= 1).sum()) if len(genes_n) else 0,
             "genes_per_term_median": float(genes_n.median()) if len(genes_n) else 0.0,
@@ -501,16 +514,17 @@ class EvidenceTable:
             "n_invalid_total": int(n_invalid_total),
             "n_invalid_empty_evidence_genes": int(n_invalid_empty_ev),
             "invalid_sample": invalid_sample,
+            "salvage_sample": salvage_sample,
             "drop_invalid": bool(drop_invalid),
             "strict": bool(strict),
             "bh_group_cols": list(bh_group_cols),
             "read_mode": rr.read_mode,
             "n_salvage_term_id_from_name": int(n_salvage_1),
             "n_salvage_term_name_from_id": int(n_salvage_2),
-            "n_term_id_salvaged": int(df["term_id_salvaged"].sum())
+            "n_term_id_salvaged_kept": int(df["term_id_salvaged"].sum())
             if "term_id_salvaged" in df.columns
             else 0,
-            "n_term_name_salvaged": int(df["term_name_salvaged"].sum())
+            "n_term_name_salvaged_kept": int(df["term_name_salvaged"].sum())
             if "term_name_salvaged" in df.columns
             else 0,
         }
@@ -521,6 +535,7 @@ class EvidenceTable:
         df = self.df
         genes_n = df["evidence_genes"].map(len)
         return {
+            "contract_version": df.attrs.get("contract_version", "unknown"),
             "n_terms": int(df.shape[0]),
             "n_sources": int(df["source"].nunique()),
             "sources": sorted(df["source"].astype(str).unique().tolist()),
@@ -534,53 +549,50 @@ class EvidenceTable:
             if "qval_source" in df.columns
             else {},
             "health": df.attrs.get("health", {}),
+            "aliasing": df.attrs.get("aliasing", {}),
         }
 
     def write_tsv(self, path: str) -> None:
         out = self.df.copy()
 
-        def _excel_safe_cell(s: str) -> str:
-            s = str(s or "")
+        def _excel_safe_cell(txt: object) -> str:
+            s = str(txt or "")
             if not s:
                 return ""
-            # Only guard if it could be interpreted as a formula in Excel-like tools.
+            s = s.strip()
+            if not s:
+                return ""
             if s.startswith(_EXCEL_FORMULA_START):
                 return "'" + s
             return s
 
-        def _excel_safe_series(col: str) -> None:
-            if col in out.columns:
-                out[col] = out[col].map(
-                    lambda x: _excel_safe_cell(str(x).strip())
-                    if not EvidenceTable._is_na_scalar(x)
-                    else ""
-                )
-
-        def _join_genes(x: object) -> str:
-            if EvidenceTable._is_na_scalar(x):
-                return ""
-            if isinstance(x, (list, tuple, set)):
-                s = _shared.join_genes_tsv(list(x))
-            else:
-                # If already a string, keep as-is (but Excel-safe).
-                # We do NOT re-parse here to avoid unintended destructive normalization on write.
-                s = str(x).strip()
-            return _excel_safe_cell(s)
-
         # Excel-safe for common text columns (people paste these into spreadsheets)
         for c in ["term_id", "term_name", "source", "direction"]:
-            _excel_safe_series(c)
+            if c in out.columns:
+                out[c] = out[c].map(
+                    lambda x: _excel_safe_cell(x) if not self._is_na_scalar(x) else ""
+                )
 
+        # evidence_genes: write as TSV-friendly joined string; do NOT re-parse on write
         if "evidence_genes" in out.columns:
-            out["evidence_genes_str"] = out["evidence_genes"].map(_join_genes)
-        elif "evidence_genes_str" in out.columns:
-            out["evidence_genes_str"] = out["evidence_genes_str"].map(
-                lambda x: _excel_safe_cell(str(x).strip())
+            out["evidence_genes_str"] = out["evidence_genes"].map(
+                lambda x: _excel_safe_cell(_shared.join_genes_tsv(list(x)))
+                if isinstance(x, (list, tuple, set))
+                else _excel_safe_cell(x)
             )
+        elif "evidence_genes_str" in out.columns:
+            out["evidence_genes_str"] = out["evidence_genes_str"].map(_excel_safe_cell)
         else:
             out["evidence_genes_str"] = ""
 
         out = out.drop(columns=["evidence_genes"], errors="ignore")
         out = out.rename(columns={"evidence_genes_str": "evidence_genes"})
+
+        # Stable column order for reproducibility:
+        # - normalized contract columns first
+        # - then the rest (sorted) to reduce drift across versions
+        first = [c for c in NORMALIZED_COLS if c in out.columns]
+        rest = [c for c in out.columns if c not in first]
+        out = out.loc[:, first + sorted(rest)]
 
         out.to_csv(path, sep="\t", index=False)

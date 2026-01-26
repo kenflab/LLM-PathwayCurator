@@ -324,7 +324,16 @@ def _loo_survival_from_replicates(
             {"term_uid": tu, "term_survival_loo": surv, "loo_n_total": total, "loo_n_ok": ok}
         )
 
-    return pd.DataFrame(rows)
+    tbl = pd.DataFrame(rows)
+
+    # Explicitly mark as proxy survival to avoid "LOO" ambiguity in papers.
+    # Keep legacy column name for backward compatibility; add proxy-named alias.
+    if "term_survival_loo" in tbl.columns:
+        tbl["term_survival_proxy"] = pd.to_numeric(
+            tbl["term_survival_loo"], errors="coerce"
+        ).astype("Float64")
+
+    return tbl
 
 
 def distill_evidence(
@@ -527,6 +536,8 @@ def distill_evidence(
         for xs in out["evidence_genes"].tolist():
             all_genes.extend(xs)
         gene_pool = np.array(sorted({g for g in all_genes if str(g).strip()}), dtype=object)
+        out["distill_gene_pool_n"] = int(gene_pool.size)
+        out["distill_gene_pool_is_masked"] = True
 
         user_min_genes: int | None = None
         if user_min_genes_raw is not None:
@@ -543,6 +554,7 @@ def distill_evidence(
         n_total_list: list[int] = []
         base_hashes: list[str] = []
         drift_rate_list: list[float] = []
+        min_genes_eff_list: list[int] = []
 
         # Avoid zip(strict=...) portability concerns; iterate by index explicitly.
         for i in range(len(out)):
@@ -561,7 +573,7 @@ def distill_evidence(
                 min_genes_eff = max(1, int(np.ceil(min_keep_frac * max(1, len(xs)))))
             else:
                 min_genes_eff = user_min_genes
-
+            min_genes_eff_list.append(int(min_genes_eff))
             rng_term = np.random.default_rng(_seed_for_term(seed, tu, term_row_id=rid))
 
             ok = 0
@@ -602,6 +614,7 @@ def distill_evidence(
 
         trust_input_survival = bool(_get_distill_knob(card, "trust_input_survival", False))
         out["distill_trust_input_survival"] = bool(trust_input_survival)
+        out["distill_min_genes_effective_per_term"] = pd.Series(min_genes_eff_list, dtype="Int64")
 
         if "term_survival" in out.columns:
             out["term_survival_input"] = pd.to_numeric(
@@ -634,6 +647,8 @@ def distill_evidence(
         out["distill_n_perturb"] = pd.Series([n_reps] * len(out), dtype="Int64")
         out["distill_gene_dropout_p"] = pd.Series([p_drop] * len(out), dtype="Float64")
         out["distill_gene_jitter_p"] = pd.Series([p_add] * len(out), dtype="Float64")
+        out["distill_gene_pool_n"] = _ensure_int64_na_series(len(out))
+        out["distill_gene_pool_is_masked"] = pd.NA
         out["distill_evidence_jaccard_min"] = float(j_min)
         out["distill_evidence_recall_min"] = float(r_min)
         out["distill_evidence_precision_min"] = float(p_min)

@@ -699,12 +699,13 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
     """
     Backfill stress/contradiction columns on claims using distilled annotations.
 
-    - If claims already include stress_* columns, do nothing (respect caller).
-    - Else if distilled has stress_tag:
-        non-empty tag => stress_status=ABSTAIN, stress_reason="STRESS_TAG"
-    - If claims already include contradiction_* columns, do nothing.
-    - Else if distilled has contradiction_flip:
-        True => contradiction_status=FAIL, contradiction_reason="CONTRADICTION_FLIP"
+    Policy:
+      - If claims already include stress_* columns, do nothing (respect caller).
+      - If claims already include contradiction_* columns, do nothing.
+      - Map using term_uid when possible; fall back to raw term_id -> unique term_uid mapping.
+      - stress_tag is normalized via _shared.split_tags/join_tags (spec-level).
+      - contradiction_flip is a *robustness probe tag* (NOT a logical contradiction proof):
+          => inject contradiction_status=ABSTAIN (inconclusive), not FAIL.
     """
     out2 = out.copy()
 
@@ -720,8 +721,12 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
             "contradiction_ok",
         ]
     )
+    if claim_has_stress and claim_has_contra:
+        return out2
 
     dist = distilled.copy()
+
+    # Ensure dist.term_uid
     if "term_uid" not in dist.columns:
         if {"source", "term_id"}.issubset(set(dist.columns)):
             dist["term_uid"] = dist.apply(
@@ -729,44 +734,78 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
                 axis=1,
             )
         elif "term_id" in dist.columns:
-            # best-effort fallback (unknown source); keep raw term_id only
             dist["term_uid"] = dist["term_id"].astype(str).str.strip()
         else:
             return out2
 
     dist["term_uid"] = dist["term_uid"].astype(str).str.strip()
 
-    stress_map: dict[str, str] = {}
-    if (not claim_has_stress) and ("stress_tag" in dist.columns):
-        for tu, tag in zip(dist["term_uid"].tolist(), dist["stress_tag"].tolist(), strict=False):
-            t = "" if _is_na_scalar(tag) else str(tag).strip()
-            if not t or not tu:
-                continue
-            if tu not in stress_map:
-                stress_map[tu] = t
+    # Build raw term_id -> unique term_uid mapping (best-effort)
+    known, raw_unique, _raw_amb = _build_term_uid_maps(dist[["term_uid"]].copy())
 
-    contra_map: dict[str, bool] = {}
+    # Build stress map
+    stress_map_uid: dict[str, str] = {}
+    stress_map_raw_unique: dict[str, str] = {}
+
+    if (not claim_has_stress) and ("stress_tag" in dist.columns):
+        # normalize tags per spec (tolerate legacy '+')
+        tags_norm = []
+        for x in dist["stress_tag"].tolist():
+            if _is_na_scalar(x):
+                tags_norm.append("")
+            else:
+                tags = _shared.split_tags(x)
+                tags_norm.append(_shared.join_tags(tags) if tags else "")
+
+        for tu, tag in zip(dist["term_uid"].tolist(), tags_norm, strict=False):
+            if not tu or not tag:
+                continue
+            if tu not in stress_map_uid:
+                stress_map_uid[tu] = tag
+
+        # raw term_id -> tag only when raw term_id maps uniquely to a single term_uid
+        for raw, tu in raw_unique.items():
+            tag = stress_map_uid.get(tu, "")
+            if tag and raw not in stress_map_raw_unique:
+                stress_map_raw_unique[raw] = tag
+
+    # Build contradiction map
+    contra_uid: dict[str, bool] = {}
+    contra_raw_unique: dict[str, bool] = {}
+
     if (not claim_has_contra) and ("contradiction_flip" in dist.columns):
         for tu, v in zip(
             dist["term_uid"].tolist(), dist["contradiction_flip"].tolist(), strict=False
         ):
-            if not tu or tu in contra_map:
+            if not tu or tu in contra_uid:
                 continue
             if _is_na_scalar(v):
                 continue
             try:
-                contra_map[tu] = bool(v)
+                contra_uid[tu] = bool(v)
             except Exception:
                 continue
 
-    if not stress_map and not contra_map:
+        for raw, tu in raw_unique.items():
+            if raw in contra_raw_unique:
+                continue
+            if tu in contra_uid:
+                contra_raw_unique[raw] = bool(contra_uid[tu])
+
+    if (
+        (not stress_map_uid)
+        and (not stress_map_raw_unique)
+        and (not contra_uid)
+        and (not contra_raw_unique)
+    ):
         return out2
 
-    if stress_map and (not claim_has_stress):
+    # Create columns only if absent (respect caller)
+    if (not claim_has_stress) and (stress_map_uid or stress_map_raw_unique):
         out2["stress_status"] = ""
         out2["stress_reason"] = ""
         out2["stress_notes"] = ""
-    if contra_map and (not claim_has_contra):
+    if (not claim_has_contra) and (contra_uid or contra_raw_unique):
         out2["contradiction_status"] = ""
         out2["contradiction_reason"] = ""
         out2["contradiction_notes"] = ""
@@ -780,22 +819,48 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
         if not term_ids:
             continue
 
-        if stress_map and (not claim_has_stress):
-            tags = [stress_map.get(t, "") for t in term_ids]
+        # Resolve each term_id to (1) exact term_uid, else (2) raw term_id if unique
+        def _lookup_stress(t: str) -> str:
+            tt = str(t).strip()
+            if not tt:
+                return ""
+            if tt in stress_map_uid:
+                return stress_map_uid.get(tt, "")
+            raw = tt.split(":", 1)[-1].strip()
+            return stress_map_raw_unique.get(raw, "")
+
+        def _lookup_contra(t: str) -> bool:
+            tt = str(t).strip()
+            if not tt:
+                return False
+            if tt in contra_uid:
+                return bool(contra_uid.get(tt, False))
+            raw = tt.split(":", 1)[-1].strip()
+            return bool(contra_raw_unique.get(raw, False))
+
+        if (not claim_has_stress) and (stress_map_uid or stress_map_raw_unique):
+            tags = [_lookup_stress(t) for t in term_ids]
             tags = [t for t in tags if t]
             if tags:
+                # Robustness probe: treat as inconclusive stress (do not FAIL).
                 out2.at[i, "stress_status"] = "ABSTAIN"
                 out2.at[i, "stress_reason"] = "STRESS_TAG"
+                # keep notes deterministic and compact
+                uniq = _shared.dedup_preserve_order(tags)
                 out2.at[i, "stress_notes"] = (
-                    f"stress_tag={tags[0]}" if len(tags) == 1 else f"stress_tag={tags}"
+                    f"stress_tag={uniq[0]}" if len(uniq) == 1 else f"stress_tag={uniq}"
                 )
 
-        if contra_map and (not claim_has_contra):
-            flips = [contra_map.get(t, False) for t in term_ids]
+        if (not claim_has_contra) and (contra_uid or contra_raw_unique):
+            flips = [_lookup_contra(t) for t in term_ids]
             if any(bool(x) for x in flips):
-                out2.at[i, "contradiction_status"] = "FAIL"
+                # IMPORTANT: contradiction_flip is a tag for direction-flip probe,
+                # not a logical contradiction proof.
+                # Mark as inconclusive (ABSTAIN),
+                # and let audit layer map it to ABSTAIN_INCONCLUSIVE_STRESS.
+                out2.at[i, "contradiction_status"] = "ABSTAIN"
                 out2.at[i, "contradiction_reason"] = "CONTRADICTION_FLIP"
-                out2.at[i, "contradiction_notes"] = "distilled.contradiction_flip=True"
+                out2.at[i, "contradiction_notes"] = "distilled.contradiction_flip=True (probe)"
 
     return out2
 
@@ -1241,20 +1306,22 @@ def audit_claims(
     Mechanical audit (tool-facing).
     Status priority: FAIL > ABSTAIN > PASS
     """
-    caller_cols = set(claims.columns)
     out = claims.copy()
 
+    # Backfill stress/contradiction from distilled (if claims don't already have them).
     out = _inject_stress_from_distilled(out, distilled)
 
+    # IMPORTANT:
+    # Use *out.columns* (post-injection) so injected columns are actually connected to gating.
+    cols_now = set(out.columns)
+
     input_stress_cols = [
-        c
-        for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"]
-        if c in caller_cols
+        c for c in ["stress_status", "stress_ok", "stress_reason", "stress_notes"] if c in cols_now
     ]
     input_contra_cols = [
         c
         for c in ["contradiction_status", "contradiction_reason", "contradiction_notes"]
-        if c in caller_cols
+        if c in cols_now
     ]
 
     out["status"] = "PASS"
