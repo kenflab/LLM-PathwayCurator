@@ -45,7 +45,9 @@ def _hash_set_short12(items: list[str]) -> str:
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Gene-set stable short hash (12 hex), normalized (trim-only), spec-owned by _shared.
+    Gene-set stable short hash (12 hex).
+    Spec-owned by _shared.hash_gene_set_12hex (order-invariant; trim-only).
+    This wrapper exists only for local readability in modules.py.
     """
     return _shared.hash_gene_set_12hex([_norm_gene_id(x) for x in (genes or [])])
 
@@ -106,9 +108,13 @@ def build_term_gene_edges(
         return out
 
     edges = df[[term_id_col, "_genes_list"]].explode("_genes_list", ignore_index=True)
+
     edges = edges.rename(columns={term_id_col: "term_uid", "_genes_list": "gene_id"})
     edges["gene_id"] = edges["gene_id"].astype(str).map(_norm_gene_id)
     edges = edges[edges["gene_id"].ne("")].copy()
+    # Term UID hygiene (spec-level): ensure trimming is applied AFTER explode/rename too.
+    edges["term_uid"] = edges["term_uid"].astype(str).str.strip()
+    edges = edges[edges["term_uid"].ne("")].copy()
     if edges.empty:
         out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
         out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
@@ -410,6 +416,8 @@ def factorize_modules_connected_components(
                 "term_ids_str",
                 "module_method",
                 "module_min_shared_genes",
+                "module_requested_method",
+                "module_effective_method",
                 "module_jaccard_min",
                 "hub_filter_max_gene_term_degree",
                 "hub_filter_n_hubs",
@@ -577,6 +585,10 @@ def factorize_modules_connected_components(
                 "rep_gene_ids_str": _shared.join_genes_tsv(rep),
                 "term_ids_str": _shared.join_id_list_tsv(terms),
                 "module_method": str(
+                    edges_f.attrs["modules"].get("effective_method", effective_method)
+                ),
+                "module_requested_method": str(requested_method),
+                "module_effective_method": str(
                     edges_f.attrs["modules"].get("effective_method", effective_method)
                 ),
                 "module_min_shared_genes": int(min_shared_genes),

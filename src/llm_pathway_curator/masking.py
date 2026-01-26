@@ -361,19 +361,13 @@ def apply_evidence_stress(
         before = genes0[:]
         row_id = _row_id_for_events(row, idx)
 
-        # If term_uid is empty, include row_index as a fallback
-        # to avoid identical per-term RNG streams.
-        seed_payload = {
-            "seed": seed,
-            "term_uid": term_uid,
-            "row_index": int(row_id) if not term_uid else None,
-        }
+        # Deterministic per-term RNG stream (spec-level).
+        # Use (seed, term_uid, row_id) to avoid collisions when term_uid duplicates exist.
         term_seed = _shared.seed_for_term(
             seed=int(seed),
             term_uid=term_uid,
-            term_row_id=(int(row_id) if not term_uid else None),
+            term_row_id=int(row_id),
         )
-        term_seed = _shared.seed_int_from_payload(seed_payload)
         trng = random.Random(int(term_seed))
 
         # 1) dropout (floor-based + optional min k)
@@ -427,7 +421,7 @@ def apply_evidence_stress(
         if flip:
             tags.append("contradiction_flip")
 
-        tag = ",".join(tags) if tags else ""
+        tag = _shared.join_tags(tags) if tags else ""
 
         after = genes[:]
         stressed_lists.append(after)
@@ -437,7 +431,7 @@ def apply_evidence_stress(
         events.append(
             {
                 "row_index": int(row_id),
-                "df_index": int(idx) if str(idx).isdigit() else str(idx),
+                "df_index": str(idx),
                 "term_uid": term_uid,
                 "mode": "stress",
                 "seed": int(seed),
