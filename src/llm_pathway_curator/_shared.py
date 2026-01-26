@@ -1,6 +1,19 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/_shared.py
 from __future__ import annotations
 
+# -----------------------------------------------------------------------------
+# SPEC POLICY (DO NOT CHANGE LIGHTLY)
+# -----------------------------------------------------------------------------
+# This module defines "spec-level" helpers that can affect:
+#   - IDs / hashes
+#   - module factorization outputs
+#   - audit outcomes / denominators
+#   - TSV round-trips (parse <-> join)
+#
+# Rule of thumb:
+#   - If a change can alter report.jsonl content or evidence identity, it belongs here.
+#   - Convenience helpers that only affect UI/formatting should live in utils.py/report.py.
+# -----------------------------------------------------------------------------
 import hashlib
 import json
 import re
@@ -122,7 +135,9 @@ ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
 def normalize_status_str(x: object) -> str:
     """
     Normalize a status scalar to canonical uppercase string.
-    This is spec-level: changing this changes denominators/metrics downstream.
+    NOTE:
+      - This function does NOT validate membership in ALLOWED_STATUSES.
+      - Call validate_status_values() after normalization when strictness is required.
     """
     s = str(x or "").strip().upper()
     return s
@@ -653,43 +668,56 @@ def join_genes_tsv(genes: list[object]) -> str:
 
 # Public spec API (do not change lightly)
 __all__ = [
-    # NA / parsing
+    # -------------------------
+    # NA / parsing (spec)
+    # -------------------------
     "NA_TOKENS",
     "NA_TOKENS_L",
-    "GENE_JOIN_DELIM",
     "is_na_token",
     "is_na_scalar",
+    "dedup_preserve_order",
     "parse_id_list",
-    "parse_genes",
-    "join_genes_tsv",
+    "BRACKETED_LIST_RE",
+    "ID_TOKEN_RE",
+    "GENE_JOIN_DELIM",
+    "GENE_TOKEN_RE",
     "clean_gene_token",
     "split_gene_string",
-    # vocab
+    "parse_genes",
+    "join_genes_tsv",
+    # -------------------------
+    # Vocab (spec)
+    # -------------------------
     "ALLOWED_STATUSES",
     "normalize_status_str",
     "normalize_status_series",
     "validate_status_values",
     "normalize_direction",
-    # tags
+    # -------------------------
+    # Tags (spec)
+    # -------------------------
     "STRESS_TAG_DELIM",
     "split_tags",
     "join_tags",
-    # identity / hashing / ids / seeds
+    # -------------------------
+    # Identity / hashing / IDs / seeds (spec)
+    # -------------------------
     "looks_like_12hex",
     "sha256_12hex",
-    "sha256_short",
     "stable_json_dumps",
+    "sha256_short",
     "hash_gene_set_12hex",
-    "hash_set_12hex",
-    "module_hash_content12",
-    "canonical_sorted_unique",
-    "make_term_uid",
-    "seed_for_term",
-    "seed_int_from_payload",
-    "dedup_preserve_order",
     "norm_gene_id_upper",
     "hash_gene_set_12hex_upper",
-    # TSV joins (spec)
+    "canonical_sorted_unique",
+    "hash_set_12hex",
+    "make_term_uid",
+    "module_hash_content12",
+    "seed_for_term",
+    "seed_int_from_payload",
+    # -------------------------
+    # TSV / Excel-safe joins (spec)
+    # -------------------------
     "ID_JOIN_DELIM",
     "join_id_list_tsv",
     "strip_excel_text_prefix",
