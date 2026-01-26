@@ -29,10 +29,14 @@ _MAX_CONTEXT_NOTES_CHARS = 400
 
 
 def _dedup_preserve_order(xs: list[str]) -> list[str]:
-    # delegate to shared spec utility (preserves order, drops empties)
-    return _shared.dedup_preserve_order(
-        [str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() not in _NA]
-    )
+    # delegate to shared spec utility (preserves order, drops empties/NA tokens)
+    cleaned: list[str] = []
+    for x in xs or []:
+        s = str(x).strip()
+        if not s or _shared.is_na_token(s):
+            continue
+        cleaned.append(s)
+    return _shared.dedup_preserve_order(cleaned)
 
 
 def _split_listlike(v: Any) -> list[str]:
@@ -171,7 +175,7 @@ class EvidenceRef(BaseModel):
     @classmethod
     def _ensure_gene_list(cls, v: Any) -> list[str]:
         # Keep original casing for display as much as possible (only strip/dedup).
-        # Hashing uses a canonicalized uppercase+sorted representation internally.
+        # Hashing is tool-wide spec: trim-only canonicalization (NO forced uppercasing).
         return _dedup_preserve_order(_split_listlike(v))
 
     @field_validator("term_ids", mode="before")
@@ -193,17 +197,36 @@ class EvidenceRef(BaseModel):
         if len(self.term_ids) < 1:
             raise ValueError("EvidenceRef.term_ids must contain at least one term_uid")
 
+        # Track how gene_set_hash was determined (auditable provenance).
+        src = "input"
+
         h = str(self.gene_set_hash or "").strip().lower()
         if not _looks_like_12hex(h):
             if self.gene_ids:
                 h = _stable_gene_set_hash_from_gene_ids(self.gene_ids)
+                src = "from_gene_ids"
             else:
                 h = _stable_gene_set_hash_fallback(self.term_ids)
+                src = "from_term_ids"
 
         if not _looks_like_12hex(h):
             raise ValueError("EvidenceRef.gene_set_hash must be 12-hex (sha256[:12])")
 
         self.gene_set_hash = h
+
+        # extra="allow" so this is safe and non-breaking.
+        try:
+            self.gene_set_hash_source = src
+        except Exception:
+            pass
+
+        # Optional: flag raw term_ids (non-term_uid) for debugging, without rejecting.
+        try:
+            has_raw = any((":" not in str(t)) for t in (self.term_ids or []))
+            self.term_ids_has_raw = bool(has_raw)
+        except Exception:
+            pass
+
         return self
 
 

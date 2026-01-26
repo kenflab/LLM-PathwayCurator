@@ -33,13 +33,9 @@ NORMALIZED_COLS = [
     "evidence_genes",
 ]
 
-# Gene-like token heuristic for whitespace-separated lists (fallback path).
-# Keep conservative to avoid destructive split.
-_GENE_TOKEN_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-_GENE_TOKEN = re.compile(_GENE_TOKEN_RE)
-
-# Used to recognize bracketed/list-like strings that should be split.
-_BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
+# NOTE:
+# Gene parsing is spec-defined in _shared.py (parse_genes / split_gene_string / clean_gene_token).
+# Do not duplicate parsing regexes here to avoid contract drift.
 
 # Excel formula injection starters.
 _EXCEL_FORMULA_START = ("=", "+", "-", "@")
@@ -164,7 +160,7 @@ class EvidenceTable:
         if EvidenceTable._is_na_scalar(x):
             return ""
         s = str(x).strip()
-        if s.lower() in {"na", "nan", "none"}:
+        if _shared.is_na_token(s):
             return ""
         return s
 
@@ -326,10 +322,18 @@ class EvidenceTable:
 
         # ---- salvage term_id/term_name conservatively (BEFORE invalid marking) ----
         # Rationale: some exports use "term" to mean name, not id.
-        # We keep ALIASES for backward compatibility, but rescue common cases here.
+        #
+        # IMPORTANT:
+        #   Salvage is an input hygiene step that can change downstream identities.
+        #   We therefore record salvage flags for auditability.
+        #
+        # Rules:
         # - If term_id is empty and term_name is present -> copy term_name into term_id.
         # - If term_name is empty but term_id contains whitespace (looks like a name)
         #   -> copy term_id into term_name.
+        df["term_id_salvaged"] = False
+        df["term_name_salvaged"] = False
+
         term_id_empty = df["term_id"].eq("")
         term_name_empty = df["term_name"].eq("")
 
@@ -337,12 +341,14 @@ class EvidenceTable:
         n_salvage_1 = int(salvage_1.sum())
         if n_salvage_1 > 0:
             df.loc[salvage_1, "term_id"] = df.loc[salvage_1, "term_name"]
+            df.loc[salvage_1, "term_id_salvaged"] = True
 
         looks_like_name = df["term_id"].astype(str).str.contains(r"\s+", regex=True)
         salvage_2 = term_name_empty & (~term_id_empty) & looks_like_name
         n_salvage_2 = int(salvage_2.sum())
         if n_salvage_2 > 0:
             df.loc[salvage_2, "term_name"] = df.loc[salvage_2, "term_id"]
+            df.loc[salvage_2, "term_name_salvaged"] = True
 
         # ---- direction normalization ----
         df["direction"] = df["direction"].map(cls._normalize_direction)
@@ -527,6 +533,12 @@ class EvidenceTable:
             "read_mode": rr.read_mode,
             "n_salvage_term_id_from_name": int(n_salvage_1),
             "n_salvage_term_name_from_id": int(n_salvage_2),
+            "n_term_id_salvaged": int(df["term_id_salvaged"].sum())
+            if "term_id_salvaged" in df.columns
+            else 0,
+            "n_term_name_salvaged": int(df["term_name_salvaged"].sum())
+            if "term_name_salvaged" in df.columns
+            else 0,
         }
 
         return cls(df=df)

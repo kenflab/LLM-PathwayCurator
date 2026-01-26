@@ -33,52 +33,11 @@ except Exception:  # pragma: no cover
     FAIL_CONTEXT = FAIL_SCHEMA_VIOLATION  # fallback (please add FAIL_CONTEXT in audit_reasons)
 
 # Shared NA tokens / scalar NA check (single source of truth)
-_NA_TOKENS_L = {t.lower() for t in _shared.NA_TOKENS}
+_NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
     return _shared.is_na_scalar(x)
-
-
-def _parse_ids(x: Any) -> list[str]:
-    """
-    Parse ids into list[str] with tolerant separators:
-      - list/tuple/set: preserve order (dedup)
-      - string: split on , ; | (fallback: whitespace if no commas)
-      - NA -> []
-    Safe against list-like inputs (won't call pd.isna on list).
-    """
-    if _is_na_scalar(x):
-        return []
-
-    if isinstance(x, (list, tuple, set)):
-        items = [str(t).strip() for t in x if str(t).strip()]
-    else:
-        s = str(x).strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-
-        s = s.replace(";", ",").replace("|", ",")
-        s = s.replace("\n", " ").replace("\t", " ")
-        s = " ".join(s.split()).strip()
-        if not s or s.lower() in _NA_TOKENS_L:
-            return []
-
-        if "," in s:
-            items = [t.strip() for t in s.split(",") if t.strip()]
-        else:
-            items = [t.strip() for t in s.split(" ") if t.strip()]
-
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for t in items:
-        tt = str(t).strip()
-        if not tt or tt.lower() in _NA_TOKENS_L:
-            continue
-        if tt not in seen:
-            seen.add(tt)
-            uniq.append(tt)
-    return uniq
 
 
 # -------------------------
@@ -119,13 +78,6 @@ def _hash_gene_set_upper12(genes: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def _hash_term_ids(term_ids: list[str]) -> str:
-    """Set-stable hash for referenced term IDs (fallback contradiction key)."""
-    uniq = sorted({str(t).strip() for t in term_ids if str(t).strip()})
-    payload = ",".join(uniq)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-
-
 def _jaccard(a: set[str], b: set[str]) -> float:
     if not a and not b:
         return 1.0
@@ -162,16 +114,6 @@ def _get_stress_jaccard_soft(card: SampleCard, default: float = 0.5) -> float:
     except Exception:
         return float(default)
     return min(1.0, max(0.0, x))
-
-
-def _looks_like_hex_hash(x: Any) -> bool:
-    """12-hex short hash (sha256[:12])."""
-    if _is_na_scalar(x):
-        return False
-    s = str(x).strip().lower()
-    if len(s) != 12:
-        return False
-    return all(ch in "0123456789abcdef" for ch in s)
 
 
 # -------- SampleCard knob access (single boundary, with robust fallback) --------
@@ -572,12 +514,6 @@ def _get_contradictory_p(card: SampleCard, default: float = 0.0) -> float:
     return min(1.0, max(0.0, p))
 
 
-def _norm_status(x: Any) -> str:
-    if _is_na_scalar(x):
-        return ""
-    return str(x).strip().upper()
-
-
 def _append_note(old: str, msg: str) -> str:
     old = "" if _is_na_scalar(old) else str(old)
     return msg if not old else f"{old} | {msg}"
@@ -609,8 +545,8 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
     if not isinstance(ev, dict):
         return ([], [], None, None)
 
-    term_ids = _parse_ids(ev.get("term_ids") or ev.get("term_id") or "")
-    gene_ids = _parse_ids(ev.get("gene_ids") or ev.get("gene_id") or "")
+    term_ids = _shared.parse_id_list(ev.get("term_ids") or ev.get("term_id") or "")
+    gene_ids = _shared.parse_id_list(ev.get("gene_ids") or ev.get("gene_id") or "")
     gsh = ev.get("gene_set_hash")
     mid = ev.get("module_id")
     if isinstance(mid, (list, tuple, set)):
@@ -680,7 +616,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
 
             st = ""
             if "context_review_status" in row.index:
-                st = _norm_status(row.get("context_review_status"))
+                st = _shared.normalize_status_str(row.get("context_review_status"))
                 if st == "ABSTAIN":
                     st = "WARN"
                 if st and st not in {"PASS", "WARN", "FAIL"}:
@@ -715,7 +651,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
 
         st = ""
         if "context_status" in row.index:
-            st = _norm_status(row.get("context_status"))
+            st = _shared.normalize_status_str(row.get("context_status"))
             if st == "ABSTAIN":
                 st = "WARN"
             if st and st not in {"PASS", "WARN", "FAIL"}:
@@ -727,7 +663,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
         return (ev, st, f"context_evaluated={ev}" + (f" status={st}" if st else ""))
 
     if "context_status" in row.index:
-        st = _norm_status(row.get("context_status"))
+        st = _shared.normalize_status_str(row.get("context_status"))
         if st in {"PASS", "WARN", "FAIL", "ABSTAIN"}:
             if st == "ABSTAIN":
                 st = "WARN"
@@ -778,12 +714,12 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
     dist = distilled.copy()
     if "term_uid" not in dist.columns:
         if {"source", "term_id"}.issubset(set(dist.columns)):
-            dist["term_uid"] = (
-                dist["source"].astype(str).str.strip()
-                + ":"
-                + dist["term_id"].astype(str).str.strip()
+            dist["term_uid"] = dist.apply(
+                lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+                axis=1,
             )
         elif "term_id" in dist.columns:
+            # best-effort fallback (unknown source); keep raw term_id only
             dist["term_uid"] = dist["term_id"].astype(str).str.strip()
         else:
             return out2
@@ -867,7 +803,7 @@ def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> 
     if "contradiction_status" not in out.columns:
         return
 
-    st = _norm_status(row.get("contradiction_status"))
+    st = _shared.normalize_status_str(row.get("contradiction_status"))
     if not st:
         out.at[i, "audit_notes"] = _append_note(
             out.at[i, "audit_notes"], "contradiction_status missing"
@@ -968,7 +904,7 @@ def _apply_external_stress(
             out.at[i, "audit_notes"] = _append_note(out.at[i, "audit_notes"], "stress_ok=False")
         return
 
-    st = _norm_status(row.get("stress_status"))
+    st = _shared.normalize_status_str(row.get("stress_status"))
     rs_raw = str(row.get("stress_reason", "")).strip()
     nt = str(row.get("stress_notes", "")).strip()
 
@@ -1207,7 +1143,7 @@ def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], 
 
     raw_to_uids: dict[str, set[str]] = {}
     for tu in known:
-        raw = tu.split(":", 1)[-1].strip()
+        raw = _term_uid_to_raw_term_id(tu)
         if not raw:
             continue
         raw_to_uids.setdefault(raw, set()).add(tu)
@@ -1215,6 +1151,18 @@ def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], 
     raw_unique = {raw: next(iter(u)) for raw, u in raw_to_uids.items() if len(u) == 1}
     raw_amb = {raw for raw, u in raw_to_uids.items() if len(u) > 1}
     return known, raw_unique, raw_amb
+
+
+def _term_uid_to_raw_term_id(tu: str) -> str:
+    """
+    Extract raw term_id from term_uid.
+    We intentionally avoid depending on source normalization details.
+    """
+    s = "" if tu is None else str(tu).strip()
+    if not s:
+        return ""
+    # Robust to sources that might contain ":" by splitting from the right.
+    return s.rsplit(":", 1)[-1].strip()
 
 
 def _resolve_term_ids_to_uids(
@@ -1332,10 +1280,9 @@ def audit_claims(
     dist = distilled.copy()
     if "term_uid" not in dist.columns:
         if {"source", "term_id"}.issubset(set(dist.columns)):
-            dist["term_uid"] = (
-                dist["source"].astype(str).str.strip()
-                + ":"
-                + dist["term_id"].astype(str).str.strip()
+            dist["term_uid"] = dist.apply(
+                lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+                axis=1,
             )
         elif "term_id" in dist.columns:
             dist["term_uid"] = dist["term_id"].astype(str).str.strip()
@@ -1546,10 +1493,10 @@ def audit_claims(
 
         computed_gsh_trim = _hash_gene_set_trim12(ev_union) if ev_union else ""
         computed_gsh_upper = _hash_gene_set_upper12(ev_union) if ev_union else ""
-        out.at[i, "term_ids_set_hash"] = _hash_term_ids(term_ids)
+        out.at[i, "term_ids_set_hash"] = _shared.hash_set_12hex(term_ids)
 
         gsh_norm = "" if _is_na_scalar(gsh) else str(gsh).strip().lower()
-        if not _looks_like_hex_hash(gsh_norm):
+        if not _shared.looks_like_12hex(gsh_norm):
             if strict_evidence:
                 out.at[i, "status"] = "FAIL"
                 out.at[i, "link_ok"] = False

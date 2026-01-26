@@ -17,9 +17,8 @@ class ModuleOutputs:
     edges_df: pd.DataFrame
 
 
-# Keep stress_tag delimiter consistent across layers.
-# masking.apply_evidence_stress uses comma-joined tags.
-STRESS_TAG_DELIM = ","
+# Keep stress_tag delimiter consistent across layers (spec-owned by _shared).
+STRESS_TAG_DELIM = _shared.STRESS_TAG_DELIM
 
 
 # -------------------------
@@ -68,13 +67,6 @@ def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
 # -------------------------
 # Edges: term x gene (bipartite)
 # -------------------------
-def _parse_genes_fallback(x: object) -> list[str]:
-    genes = _shared.parse_genes(x)
-    genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
-    genes = [g for g in genes if g]
-    return _shared.dedup_preserve_order(genes)
-
-
 def build_term_gene_edges(
     evidence_df: pd.DataFrame,
     *,
@@ -104,13 +96,13 @@ def build_term_gene_edges(
         out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
         return out
 
-    def _to_list(x: object) -> list[str]:
+    def _to_genes_list(x: object) -> list[str]:
         genes = _shared.parse_genes(x)  # list/str/NA 全部ここで処理
         genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
         genes = [g for g in genes if g]
         return _shared.dedup_preserve_order(genes)
 
-    df["_genes_list"] = df[genes_col].map(_to_list)
+    df["_genes_list"] = df[genes_col].map(_to_genes_list)
     df = df[df["_genes_list"].map(len).gt(0)].copy()
     if df.empty:
         out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])
@@ -753,11 +745,11 @@ def attach_module_drift_stress_tag(
     if stress_col not in out.columns:
         out[stress_col] = ""
 
-    def _split_tags(s: str) -> list[str]:
+    def _split_tags(s: object) -> list[str]:
         # spec-owned by _shared (canonical delimiter is comma; tolerate legacy '+')
         return _shared.split_tags(s, delim=STRESS_TAG_DELIM)
 
-    def _join_tags(tags: list[str]) -> str:
+    def _join_tags(tags: list[object]) -> str:
         return _shared.join_tags(tags, delim=STRESS_TAG_DELIM)
 
     def _append(old: object, add: str) -> str:

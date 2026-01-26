@@ -1,7 +1,6 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/distill.py
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 import numpy as np
@@ -10,8 +9,6 @@ import pandas as pd
 from . import _shared
 from .masking import apply_gene_masking
 from .sample_card import SampleCard
-
-_NA_TOKENS_L = {t.lower() for t in _shared.NA_TOKENS}
 
 
 def _is_na_scalar(x: Any) -> bool:
@@ -39,38 +36,8 @@ def _get_distill_knob(card: SampleCard, key: str, default: Any) -> Any:
 
 
 def _normalize_direction(x: Any) -> str:
-    """
-    Keep direction vocabulary consistent with schema.py:
-      - up/down/na
-    """
-    if _is_na_scalar(x):
-        return "na"
-    s = str(x).strip().lower()
-    if s in {
-        "up",
-        "upregulated",
-        "increase",
-        "increased",
-        "activated",
-        "+",
-        "pos",
-        "positive",
-        "1",
-    }:
-        return "up"
-    if s in {
-        "down",
-        "downregulated",
-        "decrease",
-        "decreased",
-        "suppressed",
-        "-",
-        "neg",
-        "negative",
-        "-1",
-    }:
-        return "down"
-    return "na"
+    """Single source of truth: _shared.normalize_direction()."""
+    return _shared.normalize_direction(x)
 
 
 def _clean_gene_token(g: str) -> str:
@@ -103,19 +70,8 @@ def _ensure_int64_na_series(n: int) -> pd.Series:
 
 
 def _seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = None) -> int:
-    """
-    Order-invariant deterministic seed derived from (seed, term_uid, term_row_id).
-    term_row_id is included to avoid collisions when term_uid duplicates exist.
-    """
-    base = 0 if seed is None else int(seed)
-    h = hashlib.blake2b(digest_size=8)
-    h.update(str(base).encode("utf-8"))
-    h.update(b"|")
-    h.update(str(term_uid).encode("utf-8"))
-    if term_row_id is not None:
-        h.update(b"|")
-        h.update(str(int(term_row_id)).encode("utf-8"))
-    return int.from_bytes(h.digest(), byteorder="little", signed=False)
+    """Single source of truth: _shared.seed_for_term()."""
+    return _shared.seed_for_term(seed, term_uid, term_row_id=term_row_id)
 
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
@@ -447,8 +403,9 @@ def distill_evidence(
     # Stable IDs for joins/reports
     out = out.reset_index(drop=True)
     out["term_row_id"] = range(len(out))
-    out["term_uid"] = (
-        out["source"].astype(str).str.strip() + ":" + out["term_id"].astype(str).str.strip()
+    out["term_uid"] = out.apply(
+        lambda r: _shared.make_term_uid(r.get("source"), r.get("term_id")),
+        axis=1,
     )
 
     # TSV-friendly genes

@@ -7,6 +7,8 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+from . import _shared
+
 Status = Literal["PASS", "ABSTAIN", "FAIL"]
 CalibMethod = Literal["none", "temperature", "isotonic"]
 
@@ -14,34 +16,12 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 # -----------------------------
 # Core definitions: Risk/Coverage
 # -----------------------------
-_ALLOWED = {"PASS", "FAIL", "ABSTAIN"}
-_NA_TOKENS_L = {"", "na", "nan", "none", "null"}
-
-
-def _normalize_status(s: pd.Series) -> pd.Series:
-    """
-    Normalize a status column to uppercase strings.
-
-    Notes:
-      - pd.NA/NaN become "NA" strings after astype(str); we treat those as invalid.
-      - This is intentionally strict because downstream risk/coverage denominators
-        must be auditable.
-    """
-    return s.astype(str).str.strip().str.upper()
-
-
-def _validate_status_values(s_norm: pd.Series) -> None:
-    bad = sorted(set(s_norm.unique().tolist()) - _ALLOWED)
-    if bad:
-        raise ValueError(f"invalid status values: {bad} (allowed={sorted(_ALLOWED)})")
-
-
 def compute_counts(status: pd.Series) -> dict[str, int]:
     """
     Count PASS/FAIL/ABSTAIN/TOTAL from a status series (strict validation).
     """
-    s = _normalize_status(status)
-    _validate_status_values(s)
+    s = _shared.normalize_status_series(status)
+    _shared.validate_status_values(s)
 
     n_pass = int((s == "PASS").sum())
     n_fail = int((s == "FAIL").sum())
@@ -190,8 +170,8 @@ def risk_coverage_curve(
     )
     scores = scores_s.to_numpy(dtype=float)
 
-    base_status = _normalize_status(df[status_col])
-    _validate_status_values(base_status)
+    base_status = _shared.normalize_status_series(df[status_col])
+    _shared.validate_status_values(base_status)
 
     # thresholds
     if decision_thresholds is not None:
