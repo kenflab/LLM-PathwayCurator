@@ -94,13 +94,20 @@ def build_term_gene_edges(
         out.attrs["edges"] = {"term_id_col": term_id_col, "genes_col": genes_col, "n_edges": 0}
         return out
 
-    def _to_genes_list(x: object) -> list[str]:
-        genes = _shared.parse_genes(x)  # list/str/NA 全部ここで処理
+    def _normalize_list_like(xs: object) -> list[str]:
+        # Fast path: list/tuple/set is already tokenized upstream (schema/distill).
+        if isinstance(xs, (list, tuple, set)):
+            genes = [_norm_gene_id(g) for g in xs if str(g).strip()]
+            genes = [g for g in genes if g]
+            return _shared.dedup_preserve_order(genes)
+
+        # Slow path: scalar/string legacy inputs
+        genes = _shared.parse_genes(xs)
         genes = [_norm_gene_id(g) for g in genes if str(g).strip()]
         genes = [g for g in genes if g]
         return _shared.dedup_preserve_order(genes)
 
-    df["_genes_list"] = df[genes_col].map(_to_genes_list)
+    df["_genes_list"] = df[genes_col].map(_normalize_list_like)
     df = df[df["_genes_list"].map(len).gt(0)].copy()
     if df.empty:
         out = pd.DataFrame(columns=["term_uid", "gene_id", "weight"])

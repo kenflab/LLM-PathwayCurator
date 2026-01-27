@@ -870,15 +870,52 @@ def _apply_evidence_gene_dropout(
 
 
 def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
+    """
+    Build mapping for resolving term_ids to term_uids.
+
+    Safer policy:
+      - Prefer using explicit term_id/source columns when available.
+      - Avoid parsing term_uid by splitting on ':' (term_id may contain ':').
+    """
+    # Known term_uids
+    if "term_uid" not in dist.columns:
+        return set(), {}, set()
+
     term_uids = dist["term_uid"].astype(str).str.strip().tolist()
     known = {t for t in term_uids if t and t.lower() not in _NA_TOKENS_L}
 
     raw_to_uids: dict[str, set[str]] = {}
-    for tu in known:
-        raw = tu.split(":", 1)[-1].strip()
-        if not raw:
-            continue
-        raw_to_uids.setdefault(raw, set()).add(tu)
+
+    # Preferred: if term_id exists, map raw term_id
+    # -> term_uid (may still be ambiguous across sources)
+    if "term_id" in dist.columns:
+        term_ids = dist["term_id"].astype(str).str.strip().tolist()
+        # If source exists, we can reduce false ambiguity for raw matches
+        sources = (
+            dist["source"].astype(str).str.strip().tolist() if "source" in dist.columns else None
+        )
+
+        for tu, tid in zip(term_uids, term_ids, strict=False):
+            if not tu or tu.lower() in _NA_TOKENS_L:
+                continue
+            if not tid or tid.lower() in _NA_TOKENS_L:
+                continue
+            raw_to_uids.setdefault(tid, set()).add(tu)
+
+        # Also allow source-qualified raw keys when source exists: "source:term_id"
+        if sources is not None:
+            for tu, tid, src in zip(term_uids, term_ids, sources, strict=False):
+                if not tu or tu.lower() in _NA_TOKENS_L:
+                    continue
+                if not tid or tid.lower() in _NA_TOKENS_L:
+                    continue
+                if not src or src.lower() in _NA_TOKENS_L:
+                    continue
+                raw_to_uids.setdefault(f"{src}:{tid}", set()).add(tu)
+    else:
+        # Fallback (legacy): use exact term_uid itself as "raw"
+        for tu in known:
+            raw_to_uids.setdefault(tu, set()).add(tu)
 
     raw_unique = {raw: next(iter(u)) for raw, u in raw_to_uids.items() if len(u) == 1}
     raw_amb = {raw for raw, u in raw_to_uids.items() if len(u) > 1}
@@ -892,6 +929,15 @@ def _resolve_term_ids_to_uids(
     raw_unique: dict[str, str],
     raw_ambiguous: set[str],
 ) -> tuple[list[str], list[str], list[str]]:
+    """
+    Resolve input term identifiers to canonical term_uid strings.
+
+    Policy:
+      - Accept exact term_uid matches.
+      - Accept raw term_id matches (if uniquely mappable).
+      - Accept source-qualified "source:term_id" matches when uniquely mappable.
+      - If ambiguous, ABSTAIN with explicit reason.
+    """
     resolved: list[str] = []
     unknown: list[str] = []
     ambiguous: list[str] = []
@@ -900,14 +946,26 @@ def _resolve_term_ids_to_uids(
         tt = str(t).strip()
         if not tt:
             continue
+
+        # exact term_uid
         if tt in known:
             resolved.append(tt)
             continue
+
+        # try raw_unique by exact string first (supports "source:term_id" too)
+        if tt in raw_unique:
+            resolved.append(raw_unique[tt])
+            continue
+        if tt in raw_ambiguous:
+            ambiguous.append(tt)
+            continue
+
+        # fallback: try raw term_id (last component) ONLY if present in mapping
+        # (This is intentionally conservative; do not split term_uid generally.)
         raw = tt.split(":", 1)[-1].strip()
         if raw in raw_unique:
             resolved.append(raw_unique[raw])
-            continue
-        if raw in raw_ambiguous:
+        elif raw in raw_ambiguous:
             ambiguous.append(tt)
         else:
             unknown.append(tt)
@@ -1028,20 +1086,48 @@ def _score_dropout_stress_on_claims(
             n_abstain += 1
             continue
 
-        gsh_stress = _hash_gene_set_12(union).lower()
+        # --- Compute stress hash under BOTH policies (preserve-case and UPPER) ---
+        # Rationale:
+        #   claim_json.evidence_ref.gene_set_hash might have been produced by either legacy (UPPER)
+        #   or newer preserve-case hashing. To avoid false FAIL, accept either match and record it.
+        gsh_ref_norm = str(gsh_ref).strip().lower()
+
+        try:
+            gsh_stress_upper = _shared.hash_gene_set_12hex_upper(union).lower()
+        except Exception:
+            gsh_stress_upper = ""
+
+        try:
+            gsh_stress_preserve = _shared.hash_gene_set_12hex(union).lower()
+        except Exception:
+            gsh_stress_preserve = ""
+
         n_eval += 1
 
-        if gsh_stress != str(gsh_ref).strip().lower():
+        matched_policy = ""
+        if gsh_stress_upper and (gsh_stress_upper == gsh_ref_norm):
+            matched_policy = "upper"
+        elif gsh_stress_preserve and (gsh_stress_preserve == gsh_ref_norm):
+            matched_policy = "preserve"
+        else:
+            matched_policy = ""
+
+        if not matched_policy:
             out.at[i, "stress_status"] = "FAIL"
             out.at[i, "stress_reason"] = "EVIDENCE_DROPOUT_GENESET_HASH_DRIFT"
             out.at[i, "stress_notes"] = (
-                f"hash_stress={gsh_stress} != hash_ref={str(gsh_ref).strip().lower()}"
+                f"hash_ref={gsh_ref_norm} "
+                f"hash_stress_upper={gsh_stress_upper or 'NA'} "
+                f"hash_stress_preserve={gsh_stress_preserve or 'NA'}"
             )
             n_fail += 1
         else:
             out.at[i, "stress_status"] = "PASS"
             out.at[i, "stress_reason"] = ""
-            out.at[i, "stress_notes"] = f"hash_stress={gsh_stress} (ok)"
+            out.at[i, "stress_notes"] = (
+                f"hash_ref={gsh_ref_norm} "
+                f"hash_stress={gsh_ref_norm} (match_policy={matched_policy})"
+            )
             n_pass += 1
 
     stats = {
@@ -2737,33 +2823,17 @@ def _apply_context_gate_to_audited(
 
 
 def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
-    if _is_na_scalar(x):
+    """
+    Pipeline wrapper for spec-level Excel-safe ID serialization.
+
+    IMPORTANT:
+      - Delegate to _shared.excel_safe_ids to avoid contract drift.
+      - Keep list_sep default aligned with _shared.ID_JOIN_DELIM (";").
+    """
+    try:
+        return _shared.excel_safe_ids(x, list_sep=str(list_sep))
+    except Exception:
         return ""
-
-    if isinstance(x, (list, tuple, set)):
-        parts = [str(t).strip() for t in x if str(t).strip()]
-        s = list_sep.join(parts)
-        if not s:
-            return ""
-        return s if s.startswith("'") else ("'" + s)
-
-    s0 = str(x).strip()
-    if not s0 or s0.lower() in _NA_TOKENS_L:
-        return ""
-
-    s = (
-        s0.replace("|", ";")
-        .replace(",", ";")
-        .replace("\t", ";")
-        .replace("\n", ";")
-        .replace(" ", ";")
-    )
-    parts = [p.strip() for p in s.split(";") if p.strip()]
-    s_norm = list_sep.join(parts)
-
-    if not s_norm:
-        return ""
-    return s_norm if s_norm.startswith("'") else ("'" + s_norm)
 
 
 def _fail_if_empty(df: pd.DataFrame, *, step: str, outdir: Path) -> None:
