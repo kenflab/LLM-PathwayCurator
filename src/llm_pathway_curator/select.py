@@ -1397,10 +1397,20 @@ def _select_claims_deterministic(
             module_reason = "missing_module_id"
             module_missing = True
 
+        # Gene-set hash MUST match gene_ids embedded in claim_json (bounded by max_gene_ids).
         if genes_claim:
             gene_set_hash = _hash_gene_set_claim(genes_claim)
         else:
             gene_set_hash = _hash_term_set_fallback([term_uid])
+
+        # IMPORTANT (reproducibility):
+        # module_id fallback should NOT depend on max_gene_ids_in_claim, otherwise module diversity
+        # and ranking can change just by changing display/embedding limits.
+        if module_missing:
+            content_hash = _shared.module_hash_content12(terms=[term_uid], genes=genes_full_norm)
+            module_id = f"M{content_hash}"
+            module_reason = "missing_module_id"
+            module_missing = True
 
         claim = Claim(
             entity=term_name if term_name else term_id,
@@ -1433,7 +1443,9 @@ def _select_claims_deterministic(
             "gene_ids_snippet": gene_snippet,
             "gene_ids_n_total": int(len(genes_full_norm)),
             "gene_ids_n_in_claim": int(len(genes_claim)),
-            "term_ids": ",".join(claim.evidence_ref.term_ids),
+            "term_ids": _shared.join_id_list_tsv(
+                claim.evidence_ref.term_ids, delim=_shared.ID_JOIN_DELIM
+            ),
             "gene_set_hash": claim.evidence_ref.gene_set_hash,
             # Pipeline-owned (review) context signals (if present in distilled). Never overwritten.
             "context_score": r.get("context_score", pd.NA),

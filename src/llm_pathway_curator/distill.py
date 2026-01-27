@@ -532,10 +532,12 @@ def distill_evidence(
         # EVIDENCE-LEVEL PERTURBATION
         # ===========================
         # Build pool from MASKED evidence genes (post apply_gene_masking).
+        # Normalize tokens via spec-level cleaning to keep jitter pool consistent.
         all_genes: list[str] = []
         for xs in out["evidence_genes"].tolist():
-            all_genes.extend(xs)
-        gene_pool = np.array(sorted({g for g in all_genes if str(g).strip()}), dtype=object)
+            all_genes.extend([_clean_gene_token(g) for g in xs if str(g).strip()])
+
+        gene_pool = np.array(sorted({g for g in all_genes if g and str(g).strip()}), dtype=object)
         out["distill_gene_pool_n"] = int(gene_pool.size)
         out["distill_gene_pool_is_masked"] = True
 
@@ -647,8 +649,6 @@ def distill_evidence(
         out["distill_n_perturb"] = pd.Series([n_reps] * len(out), dtype="Int64")
         out["distill_gene_dropout_p"] = pd.Series([p_drop] * len(out), dtype="Float64")
         out["distill_gene_jitter_p"] = pd.Series([p_add] * len(out), dtype="Float64")
-        out["distill_gene_pool_n"] = _ensure_int64_na_series(len(out))
-        out["distill_gene_pool_is_masked"] = pd.NA
         out["distill_evidence_jaccard_min"] = float(j_min)
         out["distill_evidence_recall_min"] = float(r_min)
         out["distill_evidence_precision_min"] = float(p_min)

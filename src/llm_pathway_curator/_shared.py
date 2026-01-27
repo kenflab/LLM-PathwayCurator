@@ -222,7 +222,11 @@ def parse_id_list(x: object) -> list[str]:
         return []
 
     if isinstance(x, (list, tuple, set)):
-        items = [str(t).strip() for t in x if str(t).strip()]
+        # Determinism: sets are unordered; sort to avoid non-reproducible outputs.
+        it = list(x)
+        if isinstance(x, set):
+            it = sorted([str(t) for t in it], key=lambda z: z)
+        items = [str(t).strip() for t in it if str(t).strip()]
     else:
         s = str(x).strip()
         if s.startswith("'") and len(s) > 1:
@@ -352,9 +356,13 @@ def parse_genes(x: object) -> list[str]:
     if is_na_scalar(x):
         return []
 
-    # Already list-like
     if isinstance(x, (list, tuple, set)):
-        genes = [clean_gene_token(g) for g in x]
+        # Determinism: sets are unordered; sort to avoid non-reproducible outputs.
+        it = list(x)
+        if isinstance(x, set):
+            it = sorted([str(t) for t in it], key=lambda z: z)
+
+        genes = [clean_gene_token(g) for g in it]
         genes = [g for g in genes if g and str(g).strip()]
         return dedup_preserve_order([str(g) for g in genes if str(g).strip()])
 
@@ -638,12 +646,29 @@ def stable_json_dumps(obj: object) -> str:
 def sha256_short(obj: object, n: int = 12) -> str:
     """
     Deterministic short hash for arbitrary payloads (dict/list/str).
-    Uses stable_json_dumps + sha256_12hex.
+
+    Contract:
+      - n can be any positive integer.
+      - For n <= 64: return sha256 hexdigest truncated to n chars.
+      - For n == 12: preserve legacy behavior (sha256[:12]).
+
+    Rationale:
+      - Previous implementation silently could not produce >12 chars because it was
+        based on sha256_12hex. This fixes that while keeping n=12 identical.
     """
-    s = stable_json_dumps(obj)
-    h12 = sha256_12hex(s)
     nn = 12 if n is None else int(n)
-    return h12 if nn == 12 else h12[:nn]
+    if nn <= 0:
+        raise ValueError(f"sha256_short n must be positive; got {nn}")
+
+    s = stable_json_dumps(obj)
+
+    # Legacy fast path (exactly matches previous outputs)
+    if nn == 12:
+        return sha256_12hex(s)
+
+    # Full sha256 for general n
+    full = hashlib.sha256(str(s).encode("utf-8")).hexdigest()
+    return full[:nn]
 
 
 def seed_int_from_payload(payload: object, *, mod: int = 2**31 - 1) -> int:
@@ -658,12 +683,20 @@ def seed_int_from_payload(payload: object, *, mod: int = 2**31 - 1) -> int:
 def join_genes_tsv(genes: list[object]) -> str:
     """
     Join genes into a TSV-friendly string using GENE_JOIN_DELIM.
-    Applies clean_gene_token() per token and drops empties.
+    Applies clean_gene_token() per token and drops empties/NA tokens.
     """
-    xs = [
-        str(clean_gene_token(g)).strip() for g in (genes or []) if g is not None and str(g).strip()
-    ]
-    return GENE_JOIN_DELIM.join([x for x in xs if x])
+    xs: list[str] = []
+    for g in genes or []:
+        if g is None:
+            continue
+        raw = str(g).strip()
+        if not raw:
+            continue
+        s = str(clean_gene_token(raw)).strip()
+        if not s or is_na_token(s):
+            continue
+        xs.append(s)
+    return GENE_JOIN_DELIM.join(xs)
 
 
 # Public spec API (do not change lightly)

@@ -276,13 +276,12 @@ def _get_context_proxy_key_fields(
         s = default
     items = [t.strip().lower() for t in str(s).split(",") if t.strip()]
 
-    # Ensure swap dependence by default even if user provided a too-minimal list.
-    # (If swap columns don't exist, they just contribute nothing.)
-    if "context_swap_to" not in items:
-        items.append("context_swap_to")
+    # Default safety: keep proxy key informative, but DO NOT make it swap-variant.
+    # Swap strictness must be implemented via p_warn_eff penalty (monotone), not by changing u.
     if "cancer" not in items:
         items.append("cancer")
 
+    # Do not force swap fields into the key. User can opt-in explicitly if desired.
     return items or [t.strip().lower() for t in str(default).split(",") if t.strip()]
 
 
@@ -392,10 +391,8 @@ def _row_context_swap_active(row: pd.Series) -> bool:
     # 1) Explicit flag wins
     v = row.get("context_swap_active", None)
     if not _is_na_scalar(v):
-        try:
-            return bool(v)
-        except Exception:
-            return True
+        # Robust: avoid bool("False")==True
+        return _as_bool(v, default=True)
 
     # 2) Variant marker (recommended)
     variant = row.get("variant", None)
@@ -1210,7 +1207,7 @@ def _proxy_context_status(
     note = (
         f"proxy_context_v3: swap_active={int(swap_active)} "
         f"u={u:.3f} p_warn={float(p_warn):.3f} p_warn_eff={float(p_warn_eff):.3f} "
-        f"key_base_fields=ctx0,cancer,comparison,term_uid,module_id,gene_set_hash"
+        f"key_fields={fields}"
     )
     return True, status, note, float(u), float(p_warn_eff), key_base
 

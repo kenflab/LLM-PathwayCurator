@@ -249,14 +249,63 @@ class EvidenceTable:
 
         dup = df.columns[df.columns.duplicated()].tolist()
         if dup:
-            raise ValueError(
-                "EvidenceTable has duplicate columns after aliasing: "
-                f"{sorted(set(dup))}. "
-                f"read_mode={rr.read_mode}. "
-                f"raw_columns={raw_columns} "
-                f"normalized_columns={cols_norm} "
-                f"mapped_columns={cols_mapped}"
-            )
+            # Coalesce duplicate columns deterministically instead of hard-failing.
+            #
+            # Rationale:
+            #   Real-world EA exports often contain multiple synonymous columns
+            #   (e.g., genes + symbols, description + name). Hard failure here
+            #   reduces usability and causes avoidable pipeline aborts.
+            #
+            # Policy:
+            #   - For each duplicated name, keep the leftmost column as the target.
+            #   - Fill empty/NA-like cells in the target from subsequent duplicates (left-to-right).
+            #   - Record the coalescing action in df.attrs for auditability.
+            dup_names = sorted(set(dup))
+            coalesced: dict[str, list[str]] = {}
+
+            for name in dup_names:
+                idxs = [i for i, c in enumerate(df.columns) if c == name]
+                if len(idxs) <= 1:
+                    continue
+
+                # Column labels may repeat; build explicit positional column references.
+                # Use iloc to access by position safely.
+                target_pos = idxs[0]
+                src_positions = idxs[1:]
+
+                target = df.iloc[:, target_pos]
+                used_sources: list[str] = []
+
+                # Define "empty" conservatively: NA scalar or empty string after strip,
+                # or NA tokens defined by spec.
+                def _is_empty_cell(v: object) -> bool:
+                    if _shared.is_na_scalar(v):
+                        return True
+                    s = str(v).strip()
+                    return (not s) or _shared.is_na_token(s)
+
+                empty_mask = target.map(_is_empty_cell)
+
+                for pos in src_positions:
+                    src = df.iloc[:, pos]
+                    fill_mask = empty_mask & (~src.map(_is_empty_cell))
+                    if fill_mask.any():
+                        target = target.mask(fill_mask, src)
+                        empty_mask = target.map(_is_empty_cell)
+                        used_sources.append(f"pos{pos}")
+
+                # Write back merged target into the original target position.
+                df.iloc[:, target_pos] = target
+
+                # Drop all other duplicate columns by position
+                # (from right to left to keep positions valid).
+                for pos in sorted(src_positions, reverse=True):
+                    df = df.drop(df.columns[pos], axis=1)
+
+                coalesced[name] = used_sources if used_sources else ["no_nonempty_fills"]
+
+            # Attach provenance for auditability (attrs preserved downstream in summarize()).
+            df.attrs["coalesced_duplicate_columns"] = coalesced
 
         # ---- auto-fill optional normalized columns ----
         if "source" not in df.columns:

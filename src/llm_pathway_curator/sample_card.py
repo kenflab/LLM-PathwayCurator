@@ -8,6 +8,8 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from . import _shared
+
 NA_TOKEN = "NA"
 
 # Tool-facing core context keys:
@@ -114,7 +116,7 @@ def _norm_str(x: Any) -> str:
     x = x.strip().lstrip("\ufeff")
     if not x:
         return NA_TOKEN
-    if x.lower() in {"na", "nan", "none"}:
+    if x.lower() in _shared.NA_TOKENS_L:
         return NA_TOKEN
     return x
 
