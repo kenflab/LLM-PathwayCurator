@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import re
 from pathlib import Path
 
@@ -12,17 +13,17 @@ import pandas as pd
 def _infer_keys_from_path(audit_path: Path, root: Path) -> dict[str, str]:
     """
     Supports BOTH layouts:
-      new: root/<CANCER>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv
-      old: root/<CANCER>/<VARIANT>/tau_*/audit_log.tsv
+      new: root/<condition>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv
+      old: root/<condition>/<VARIANT>/tau_*/audit_log.tsv
     """
     rel = audit_path.relative_to(root)
     parts = rel.parts
-    out = {"cancer": "", "variant": "", "gate_mode": "", "tau": ""}
+    out = {"condition": "", "variant": "", "gate_mode": "", "tau": ""}
 
     if len(parts) < 3:
         return out
 
-    out["cancer"] = str(parts[0])
+    out["condition"] = str(parts[0])
     out["variant"] = str(parts[1])
 
     third = str(parts[2])
@@ -42,23 +43,41 @@ def _iter_audit_logs(root: Path) -> list[Path]:
     return files
 
 
-def _pick_candidates(df: pd.DataFrame, n: int, prefer_status: str = "PASS") -> pd.DataFrame:
-    """
-    Pick labeling candidates per audit_log:
-    - Prefer a given status (default PASS) to match Fig2 risk-in-pass.
-    - Fall back to all rows if not enough.
-    """
+def _pick_candidates(
+    df: pd.DataFrame,
+    n: int,
+    prefer_status: str = "PASS",
+    seed: int = 42,
+) -> pd.DataFrame:
     if n <= 0:
         return df
-    if "status" in df.columns:
-        s = df["status"].astype(str).str.upper().str.strip()
-        preferred = df[s == prefer_status].copy()
-        if len(preferred) >= n:
-            return preferred.head(n)
-        # If not enough PASS, include remaining from all rows (stable order)
-        rest = df[~df.index.isin(preferred.index)]
-        return pd.concat([preferred, rest], axis=0).head(n)
-    return df.head(n)
+
+    d = df
+    if "status" in d.columns:
+        s = d["status"].astype(str).str.upper().str.strip()
+        preferred = d[s == prefer_status].copy()
+        other = d[s != prefer_status].copy()
+    else:
+        preferred = d.copy()
+        other = d.iloc[0:0].copy()
+
+    # stable-ish random sample (reproducible)
+    rng = random.Random(int(seed))
+
+    def _sample_rows(x: pd.DataFrame, k: int) -> pd.DataFrame:
+        if k <= 0 or x.empty:
+            return x.iloc[0:0].copy()
+        idx = list(x.index)
+        rng.shuffle(idx)
+        take = idx[: min(k, len(idx))]
+        return x.loc[take].copy()
+
+    if len(preferred) >= n:
+        return _sample_rows(preferred, n)
+
+    k_pref = len(preferred)
+    k_rest = n - k_pref
+    return pd.concat([preferred, _sample_rows(other, k_rest)], axis=0)
 
 
 def main() -> None:
@@ -89,6 +108,18 @@ def main() -> None:
         action="store_true",
         help="Add helper columns for faster human labeling (ignored by bench).",
     )
+    ap.add_argument(
+        "--condition",
+        default="",
+        help="If set, only include this condition (e.g., HNSC). Default: all.",
+    )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for sampling when --per-run>0 (default: 42).",
+    )
+
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -99,14 +130,24 @@ def main() -> None:
     rows: list[dict[str, str]] = []
     for p in logs:
         keys = _infer_keys_from_path(p, root)
+        if str(args.condition).strip():
+            if keys["condition"].strip() != str(args.condition).strip():
+                continue
+
         audit = pd.read_csv(p, sep="\t", dtype=str).fillna("")
         if "claim_id" not in audit.columns:
+            continue
+
+        audit["claim_id"] = audit["claim_id"].astype(str).str.strip()
+        audit = audit[audit["claim_id"] != ""].copy()
+        if audit.empty:
             continue
 
         audit = _pick_candidates(
             audit,
             n=int(args.per_run),
             prefer_status=str(args.prefer_status).upper().strip(),
+            seed=int(args.seed),
         )
 
         for _, r in audit.iterrows():
@@ -115,37 +156,23 @@ def main() -> None:
                 continue
 
             rec = {
-                # bench_fig2.py expects these columns
                 "claim_id": cid,
-                # fill later: ACCEPT/REJECT/SHOULD_ABSTAIN (partial labels allowed)
                 "human_label": "",
                 "rater_id": str(args.rater_id).strip(),
                 "label_version": str(args.label_version).strip(),
             }
 
             if args.with_hints:
-                # Optional helper columns (do not affect bench)
                 rec.update(
                     {
-                        "cancer": keys["cancer"],
-                        "variant": keys["variant"],
-                        "gate_mode": keys["gate_mode"],
-                        "tau": keys["tau"],
+                        "condition": keys["condition"],
                         "entity": str(r.get("entity", "")),
                         "direction": str(r.get("direction", "")),
                         "term_name": str(r.get("term_name", "")),
+                        "gene_symbols_str": str(r.get("gene_symbols_str", "")),
                         "module_id_effective": str(
                             r.get("module_id_effective", r.get("module_id", ""))
                         ),
-                        "gene_symbols_str": str(r.get("gene_symbols_str", "")),
-                        "term_ids_str": str(r.get("term_ids_str", "")),
-                        "term_survival_agg": str(r.get("term_survival_agg", "")),
-                        "context_score": str(r.get("context_score", "")),
-                        "status": str(r.get("status", "")),
-                        "abstain_reason": str(r.get("abstain_reason", "")),
-                        "fail_reason": str(r.get("fail_reason", "")),
-                        "audit_notes": str(r.get("audit_notes", "")),
-                        "claim_json": str(r.get("claim_json", "")),
                         "_src": str(p),
                     }
                 )
