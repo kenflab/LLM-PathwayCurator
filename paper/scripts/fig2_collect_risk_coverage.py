@@ -26,23 +26,23 @@ def _infer_keys_from_path(audit_path: Path, root: Path) -> dict[str, str]:
     Supports BOTH layouts:
 
     New (preferred):
-      root/<CANCER>/<VARIANT>/gate_<GATE_MODE>/tau_xx/audit_log.tsv
+      root/<condition>/<VARIANT>/gate_<GATE_MODE>/tau_xx/audit_log.tsv
 
     Old:
-      root/<CANCER>/<VARIANT>/tau_xx/audit_log.tsv
+      root/<condition>/<VARIANT>/tau_xx/audit_log.tsv
 
-    Returns: cancer, variant, gate_mode (may be "")
+    Returns: condition, variant, gate_mode (may be "")
     """
     rel = audit_path.relative_to(root)
     parts = rel.parts
 
-    out = {"cancer": "", "variant": "", "gate_mode": ""}
+    out = {"condition": "", "variant": "", "gate_mode": ""}
 
-    # Must at least have: <CANCER>/<VARIANT>/...
+    # Must at least have: <condition>/<VARIANT>/...
     if len(parts) < 3:
         return out
 
-    out["cancer"] = str(parts[0])
+    out["condition"] = str(parts[0])
     out["variant"] = str(parts[1])
 
     # New: third component is gate_<MODE>
@@ -119,10 +119,22 @@ def _compute_from_audit(audit: pd.DataFrame) -> dict[str, float]:
         raise ValueError("audit_log.tsv missing column: status")
 
     st = audit["status"].astype(str).str.upper().str.strip()
+
     n_total = float(len(audit))
     n_pass = float((st == "PASS").sum())
-    coverage_pass = (n_pass / n_total) if n_total > 0 else float("nan")
+    n_abstain = float((st == "ABSTAIN").sum())
+    n_fail = float((st == "FAIL").sum())
 
+    coverage_pass = (n_pass / n_total) if n_total > 0 else float("nan")
+    abstain_rate_total = (n_abstain / n_total) if n_total > 0 else float("nan")
+    fail_rate_total = (n_fail / n_total) if n_total > 0 else float("nan")
+
+    n_answered = float(n_pass + n_fail)  # answered = PASS or FAIL (exclude ABSTAIN)
+    fail_rate_answered = (n_fail / n_answered) if n_answered > 0 else float("nan")
+
+    # -------------------------
+    # Optional: human labels (only evaluated among PASS)
+    # -------------------------
     n_pass_labeled = 0.0
     risk_human_reject = float("nan")
     risk_human_nonaccept = float("nan")
@@ -139,6 +151,10 @@ def _compute_from_audit(audit: pd.DataFrame) -> dict[str, float]:
             risk_human_reject = n_reject / n_pass_labeled
             risk_human_nonaccept = (n_reject + n_should_abstain) / n_pass_labeled
 
+    # -------------------------
+    # Debug-only proxy: PASS notes containing "warning-ish" tokens
+    # (Keep, but do NOT use as paper risk.)
+    # -------------------------
     warn_tokens = [
         "under_supported",
         "context_nonspecific",
@@ -163,7 +179,17 @@ def _compute_from_audit(audit: pd.DataFrame) -> dict[str, float]:
     return {
         "n_total": float(n_total),
         "n_pass": float(n_pass),
+        "n_abstain": float(n_abstain),
+        "n_fail": float(n_fail),
+        "n_answered": float(n_answered),
         "coverage_pass": float(coverage_pass),
+        "abstain_rate_total": float(abstain_rate_total)
+        if pd.notna(abstain_rate_total)
+        else float("nan"),
+        "fail_rate_total": float(fail_rate_total) if pd.notna(fail_rate_total) else float("nan"),
+        "fail_rate_answered": float(fail_rate_answered)
+        if pd.notna(fail_rate_answered)
+        else float("nan"),
         "n_pass_labeled": float(n_pass_labeled),
         "risk_human_reject": float(risk_human_reject)
         if pd.notna(risk_human_reject)
@@ -180,8 +206,8 @@ def main() -> None:
         description=(
             "Collect Fig2 points from audit_log.tsv (dev/debug). "
             "Supports both layouts:\n"
-            "  new: out/<CANCER>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv\n"
-            "  old: out/<CANCER>/<VARIANT>/tau_*/audit_log.tsv"
+            "  new: out/<condition>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv\n"
+            "  old: out/<condition>/<VARIANT>/tau_*/audit_log.tsv"
         )
     )
     ap.add_argument("--root", required=True)
@@ -215,11 +241,11 @@ def main() -> None:
             continue
 
         keys = _infer_keys_from_path(audit_path, root)
-        cancer = keys["cancer"].strip()
+        condition = keys["condition"].strip()
         variant = keys["variant"].strip()
         gate_mode = keys["gate_mode"].strip()  # may be ""
 
-        if not cancer or not variant:
+        if not condition or not variant:
             continue
 
         run_dir = audit_path.parent
@@ -234,18 +260,24 @@ def main() -> None:
         rows.append(
             {
                 "benchmark_id": benchmark_id,
-                "cancer": cancer,
+                "condition": condition,
                 "method": method,
                 "variant": variant,
                 "gate_mode": gate_mode,
                 "tau": float(tau),
                 "coverage_pass": m["coverage_pass"],
+                "abstain_rate_total": m["abstain_rate_total"],
+                "fail_rate_total": m["fail_rate_total"],
+                "fail_rate_answered": m["fail_rate_answered"],
+                "n_total": m["n_total"],
+                "n_pass": m["n_pass"],
+                "n_abstain": m["n_abstain"],
+                "n_fail": m["n_fail"],
+                "n_answered": m["n_answered"],
                 "risk_human_reject": m["risk_human_reject"],
                 "risk_human_nonaccept": m["risk_human_nonaccept"],
                 "n_pass_labeled": m["n_pass_labeled"],
                 "risk_proxy": m["risk_proxy"],
-                "n_total": m["n_total"],
-                "n_pass": m["n_pass"],
                 "_src": str(audit_path),
             }
         )

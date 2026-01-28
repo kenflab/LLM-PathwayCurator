@@ -42,25 +42,86 @@ def method_style(method: str) -> dict[str, object]:
     return {"linestyle": "-", "marker": None}
 
 
+def variant_style(variant: str) -> dict[str, object]:
+    v = str(variant or "").strip().lower()
+    if v in ("ours",):
+        return {"linestyle": "-", "marker": "o"}
+    if v in ("context_swap", "shuffled_context", "shuffled-context"):
+        return {"linestyle": ":", "marker": "x"}
+    if v in ("stress",):
+        return {"linestyle": "--", "marker": "s"}
+    return {"linestyle": "-", "marker": None}
+
+
+def _canon(s: str) -> str:
+    return str(s or "").strip().lower()
+
+
+def variant_label(variant: str, *, mode: str = "proposed") -> str:
+    """
+    Paper-facing legend label.
+    - Keep code identifiers (ours/context_swap/stress) unchanged elsewhere.
+    - Only rewrite what appears in the figure legend.
+
+    mode:
+      - "proposed": use Proposed (τ-audit) for ours (recommended)
+      - "ours": use Ours (audit+τ) for ours
+    """
+    v = _canon(variant)
+
+    if v == "ours":
+        return "Proposed (τ-audit)" if mode == "proposed" else "Ours (audit+τ)"
+    if v in ("context_swap", "shuffled_context", "shuffled-context"):
+        return "Context swap"
+    if v == "stress":
+        # your stress is evidence dropout (and optionally contradiction); keep short
+        return "Evidence dropout"
+    return str(variant)
+
+
+def method_label(method: str) -> str:
+    """
+    Optional: only used when label_mode=variant_method.
+    Keep minimal and safe.
+    """
+    m = _canon(method)
+    if m in ("ours", "method_ours"):
+        return "Ours"
+    if m in ("baseline_qonly", "qonly"):
+        return "Q-only"
+    if m in ("baseline_nonllm_selector", "nonllm_selector"):
+        return "Non-LLM selector"
+    if m in ("no_modules", "ablation_no_modules"):
+        return "No modules"
+    if m in ("shuffled_labels", "shuffled"):
+        return "Shuffled labels"
+    return str(method)
+
+
 def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t")
 
-    required = {"benchmark_id", "cancer", "method", "tau", "coverage_pass", ycol}
+    required = {"benchmark_id", "condition", "variant", "method", "tau", "coverage_pass", ycol}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"risk_coverage.tsv missing columns: {sorted(missing)}")
 
     numeric_cols = ["tau", "coverage_pass", ycol]
+
     # Only require these if present/needed (human risk mode)
-    for c in ["n_pass_labeled"]:
-        if c in df.columns:
-            numeric_cols.append(c)
+    if ycol in ("risk_human_reject", "risk_human_nonaccept"):
+        if "n_pass_labeled" not in df.columns:
+            raise ValueError(
+                "risk_coverage.tsv missing columns: ['n_pass_labeled'] (human risk mode)"
+            )
+        numeric_cols.append("n_pass_labeled")
 
     for c in numeric_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df["benchmark_id"] = df["benchmark_id"].astype(str)
-    df["cancer"] = df["cancer"].astype(str)
+    df["condition"] = df["condition"].astype(str)
+    df["variant"] = df["variant"].astype(str)
     df["method"] = df["method"].astype(str)
 
     df = df.dropna(subset=["coverage_pass", "tau"])
@@ -72,23 +133,26 @@ def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
 def _panel_plot(
     ax,
     d: pd.DataFrame,
-    methods: list[str],
-    cancer: str,
+    variants: list[str],
+    condition: str,
     *,
     ycol: str,
+    label_mode: str = "variant",  # "variant" or "variant_method"
+    ours_label_mode: str = "proposed",  # "proposed" or "ours"
 ) -> None:
-    d = d.sort_values(["method", "tau"], kind="mergesort")
+    d = d.sort_values(["variant", "method", "tau"], kind="mergesort")
 
-    for method in methods:
-        g = d[d["method"] == method].copy()
+    for variant in variants:
+        g = d[d["variant"] == variant].copy()
         if g.empty:
             continue
 
         g = g.sort_values("tau", kind="mergesort")
         g = g.dropna(subset=[ycol])
+        g = g[(g[ycol] >= 0) & (g[ycol] <= 1)]
 
-        # Human-label risk requires labeled PASS count
-        if ycol == "risk_human_reject":
+        # Human-label risk requires labeled PASS count (only computed among PASS)
+        if ycol in ("risk_human_reject", "risk_human_nonaccept"):
             if "n_pass_labeled" not in g.columns:
                 continue
             g = g[g["n_pass_labeled"] > 0]
@@ -96,14 +160,29 @@ def _panel_plot(
         if g.empty:
             continue
 
-        ax.plot(
-            g["coverage_pass"],
-            g[ycol],
-            label=method,
-            **method_style(method),
-        )
+        # If multiple methods exist inside a variant, optionally split label
+        methods_in = sorted(g["method"].unique().tolist())
+        if label_mode == "variant_method" and len(methods_in) > 1:
+            for method in methods_in:
+                gg = g[g["method"] == method].copy()
+                if gg.empty:
+                    continue
+                lbl = f"{variant_label(variant, mode=ours_label_mode)} / {method_label(method)}"
+                ax.plot(
+                    gg["coverage_pass"],
+                    gg[ycol],
+                    label=lbl,
+                    **variant_style(variant),
+                )
+        else:
+            ax.plot(
+                g["coverage_pass"],
+                g[ycol],
+                label=variant_label(variant, mode=ours_label_mode),
+                **variant_style(variant),
+            )
 
-    ax.set_title(cancer)
+    ax.set_title(condition)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.grid(True, linewidth=0.5, alpha=0.35)
@@ -112,9 +191,19 @@ def _panel_plot(
 
 
 def _ylabel_for(ycol: str) -> str:
+    if ycol == "fail_rate_answered":
+        return "Non-accept risk (FAIL among answered = PASS+FAIL)"
+    if ycol == "fail_rate_total":
+        return "Non-accept rate (FAIL among total)"
+    if ycol == "abstain_rate_total":
+        return "ABSTAIN rate (fraction of total claims)"
+    if ycol == "risk_human_reject":
+        return "Risk (Human REJECT among PASS)"
+    if ycol == "risk_human_nonaccept":
+        return "Risk (Human non-accept among PASS)"
     if ycol == "risk_proxy":
         return "Risk proxy (flagged PASS among PASS)"
-    return "Risk (Human REJECT among PASS)"
+    return str(ycol)
 
 
 def main() -> None:
@@ -126,14 +215,43 @@ def main() -> None:
     ap.add_argument("--fontsize", type=int, default=16, help="base font size (default 16)")
     ap.add_argument(
         "--title",
-        default="Risk–coverage curves across cancers",
-        help="figure title",
+        default="",
+        help="optional figure title (default: none; Nature-style)",
     )
     ap.add_argument(
         "--ycol",
-        default="risk_human_reject",
-        choices=["risk_human_reject", "risk_proxy"],
-        help="y-axis column (default: risk_human_reject)",
+        default="fail_rate_answered",
+        choices=[
+            "fail_rate_answered",
+            "fail_rate_total",
+            "abstain_rate_total",
+            "risk_human_reject",
+            "risk_human_nonaccept",
+            "risk_proxy",
+        ],
+        help="y-axis column (default: fail_rate_answered)",
+    )
+    ap.add_argument(
+        "--variants",
+        default="ours,context_swap,stress",
+        help="Comma list of variants to plot (default: ours,context_swap,stress)",
+    )
+    ap.add_argument(
+        "--label-mode",
+        default="variant",
+        choices=["variant", "variant_method"],
+        help="Legend label mode (default: variant). Use variant_method only if needed.",
+    )
+    ap.add_argument(
+        "--ours-label",
+        default="proposed",
+        choices=["proposed", "ours"],
+        help="Legend label for variant=ours (default: proposed -> 'Proposed (τ-audit)')",
+    )
+    ap.add_argument(
+        "--condition",
+        default="",
+        help="If set, plot only this condition (single-panel mode). e.g., HNSC",
     )
     args = ap.parse_args()
 
@@ -145,42 +263,54 @@ def main() -> None:
         if df.empty:
             raise ValueError(f"No rows match benchmark_id={args.benchmark_id}")
 
-    cancers = sorted(df["cancer"].unique().tolist())
-    methods = sorted(df["method"].unique().tolist())
-    if not cancers:
-        raise ValueError("No cancers to plot.")
+    # Optional single-condition filter (recommended for human-label plots)
+    if str(args.condition).strip():
+        df = df[df["condition"] == str(args.condition).strip()]
+        if df.empty:
+            raise ValueError(f"No rows match condition={args.condition}")
 
-    cols = max(1, int(args.cols))
-    rows = int(math.ceil(len(cancers) / cols))
+    conditions = sorted(df["condition"].unique().tolist())
+    variants_all = sorted(df["variant"].unique().tolist())
+    if not conditions:
+        raise ValueError("No conditions to plot.")
+
+    want = [x.strip() for x in str(args.variants).split(",") if x.strip()]
+    variants = [v for v in want if v in set(variants_all)]
+    if not variants:
+        raise ValueError(
+            f"No matching variants to plot. available={variants_all}, requested={want}"
+        )
+
+    # Single-panel mode if only one condition remains
+    if len(conditions) == 1:
+        cols = 1
+    else:
+        cols = max(1, int(args.cols))
+    rows = int(math.ceil(len(conditions) / cols))
 
     apply_pub_style(fontsize=int(args.fontsize))
 
     fig_w = max(8.5, cols * 3.2)
     fig_h = max(6.5, rows * 2.8)
-    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h), dpi=150)
+    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h), dpi=300)
     axes_list = list(axes.ravel()) if hasattr(axes, "ravel") else [axes]
 
-    for idx, cancer in enumerate(cancers):
+    for idx, condition in enumerate(conditions):
         ax = axes_list[idx]
         _panel_plot(
             ax,
-            df[df["cancer"] == cancer].copy(),
-            methods,
-            cancer,
+            df[df["condition"] == condition].copy(),
+            variants,
+            condition,
             ycol=ycol,
+            label_mode=str(args.label_mode),
+            ours_label_mode=str(args.ours_label),
         )
 
-        if idx % cols == 0:
-            ax.set_ylabel(_ylabel_for(ycol))
-        else:
-            ax.set_ylabel("")
+        ax.set_ylabel("")
+        ax.set_xlabel("")
 
-        if idx // cols == rows - 1:
-            ax.set_xlabel("Coverage (PASS rate)")
-        else:
-            ax.set_xlabel("")
-
-    for j in range(len(cancers), len(axes_list)):
+    for j in range(len(conditions), len(axes_list)):
         axes_list[j].axis("off")
 
     # shared legend (outside)
@@ -191,7 +321,15 @@ def main() -> None:
             handles, labels = h, lbls
             break
 
-    fig.suptitle(str(args.title), y=0.995)
+    if str(args.title).strip():
+        fig.suptitle(str(args.title).strip(), y=0.995)
+
+    fig.supxlabel(
+        "PASS rate (n_pass / n_total)\n(fraction of total claims passing audit)",
+        y=0.02,
+    )
+
+    fig.supylabel(_ylabel_for(ycol), x=0.01)
 
     if handles:
         fig.legend(
@@ -202,8 +340,9 @@ def main() -> None:
             frameon=False,
         )
 
-    fig.tight_layout(rect=[0.0, 0.0, 0.86, 0.96])
-
+    # fig.tight_layout(rect=[0.06, 0.06, 0.86, 0.95])
+    # fig.subplots_adjust(wspace=0.35, hspace=0.45)
+    fig.tight_layout()
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
