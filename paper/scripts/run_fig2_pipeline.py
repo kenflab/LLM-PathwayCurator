@@ -17,11 +17,7 @@ from llm_pathway_curator.pipeline import RunConfig, run_pipeline
 from llm_pathway_curator.schema import EvidenceTable
 
 PAPER = Path(__file__).resolve().parents[1]  # paper/
-SD = PAPER / "source_data" / "PANCAN_TP53_v1"
 
-EVID_DIR = SD / "evidence_tables"
-CARD_DIR = SD / "sample_cards"
-OUT_DIR = SD / "out"
 
 # Runner controls pipeline stress knobs via env injection (job-local) for backward compatibility
 ENV_STRESS = {
@@ -75,7 +71,6 @@ def _sha256_file(path: Path) -> str:
 
 
 def _maybe_git_rev() -> str:
-    # Best-effort: works in git checkout; safe in tarball (returns "").
     try:
         out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
         return out.decode("utf-8").strip()
@@ -84,14 +79,6 @@ def _maybe_git_rev() -> str:
 
 
 def _require_backend_env_for_context_review() -> None:
-    """
-    Runner does NOT construct backends.
-    It only validates that the minimal env contract is present when context review is enabled.
-
-    Minimal env contract:
-      LLMPATH_BACKEND=openai|ollama|gemini
-    Backend-specific secrets/config are handled inside the pipeline/backend classes.
-    """
     kind = str(os.environ.get("LLMPATH_BACKEND", "")).strip().lower()
     if not kind:
         _die(
@@ -113,17 +100,6 @@ def _validate_evidence_table(path: Path) -> None:
         EvidenceTable.read_tsv(str(path))
     except Exception as e:
         _die(f"[run_fig2] invalid EvidenceTable contract: {path}\n{e}")
-
-
-def _iter_all_cancers() -> list[str]:
-    if not EVID_DIR.exists():
-        _die(f"[run_fig2] missing dir: {EVID_DIR}")
-    cancers: list[str] = []
-    for p in sorted(EVID_DIR.glob("*.evidence_table.tsv")):
-        cancers.append(p.name.split(".")[0].upper())
-    if not cancers:
-        _die("[run_fig2] no evidence_tables found (*.evidence_table.tsv)")
-    return cancers
 
 
 def _parse_csv(arg: str) -> list[str]:
@@ -152,10 +128,6 @@ def _parse_gate_modes(s: str) -> list[str]:
 
 def _parse_variants(s: str) -> list[str]:
     variants = _parse_csv(s)
-    # Meaningful names only; no internal versioning.
-    # - ours: baseline
-    # - context_swap: swap disease context in sample card (paper ablation)
-    # - stress: enable stress knobs (dropout / contradiction) for robustness demo
     allowed = {"ours", "context_swap", "stress"}
     bad = sorted(set(variants) - allowed)
     if bad:
@@ -206,18 +178,12 @@ def _set_audit_tau(
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
-
-    # ---- schema normalization (paper contract) ----
-    # k_claims is top-level only (never inside extra)
     if "k_claims" in extra:
         extra.pop("k_claims", None)
-
     extra["audit_tau"] = float(tau)
     card["extra"] = extra
-
     if k_claims is not None:
         card["k_claims"] = int(k_claims)
-
     return card
 
 
@@ -226,11 +192,9 @@ def _set_stress_gate_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
     allowed = {"off", "note", "hard"}
     if mode not in allowed:
         _die(f"[run_fig2] invalid stress_gate_mode={mode} (allowed={sorted(allowed)})")
-
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
-
     extra["stress_gate_mode"] = mode
     card["extra"] = extra
     return card
@@ -241,42 +205,17 @@ def _set_context_review_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
     allowed = {"off", "llm"}
     if mode not in allowed:
         _die(f"[run_fig2] invalid context_review_mode={mode} (allowed={sorted(allowed)})")
-
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
-
     extra["context_review_mode"] = mode
     card["extra"] = extra
     return card
 
 
-def _write_card_with_tau(
-    src_card_path: Path,
-    dst_card_path: Path,
-    *,
-    tau: float,
-    k_claims: int,
-    stress_gate_mode: str | None = None,
-    context_review_mode: str | None = None,
-) -> None:
-    if src_card_path.resolve() == dst_card_path.resolve():
-        _die(f"[run_fig2] _write_card_with_tau src==dst: {src_card_path}")
-    card = _read_json(src_card_path)
-    card = _set_audit_tau(card, tau, k_claims=int(k_claims))
-    if stress_gate_mode is not None:
-        card = _set_stress_gate_mode(card, stress_gate_mode)
-    if context_review_mode is not None:
-        card = _set_context_review_mode(card, context_review_mode)
-    _validate_card_schema(card)
-    _write_json(dst_card_path, card)
-
-
 def _outdir_for(
     *, out_root: Path, condition: str, variant: str, gate_mode: str, tau: float
 ) -> Path:
-    # Paper-friendly layout:
-    # out/HNSC/ours/gate_hard/tau_0.20/
     return out_root / condition / variant / f"gate_{gate_mode}" / f"tau_{tau:.2f}"
 
 
@@ -309,12 +248,11 @@ def _patch_report_jsonl(
             except Exception as e:
                 _die(f"[run_fig2] invalid JSON in {report_path} line {ln}\n{e}")
 
-            # Stable Fig2 metadata for aggregation (downstream scripts depend on these).
             rec["benchmark_id"] = benchmark_id
             rec["condition"] = condition
-            rec["method"] = method  # e.g. "ours"
-            rec["variant"] = variant  # ours / context_swap / stress
-            rec["gate_mode"] = gate_mode  # hard / note
+            rec["method"] = method
+            rec["variant"] = variant
+            rec["gate_mode"] = gate_mode
             rec["tau"] = float(tau)
 
             out_lines.append(json.dumps(rec, ensure_ascii=False))
@@ -325,19 +263,14 @@ def _patch_report_jsonl(
     report_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
 
-def _make_shuffled_mapping_all(all_cancers: list[str]) -> dict[str, str]:
-    # Deterministic mapping independent of the selected subset.
-    if len(all_cancers) < 2:
-        _die("[run_fig2] context_swap requires >=2 cancers in evidence_tables/")
-    rot = all_cancers[1:] + all_cancers[:1]
-    return dict(zip(all_cancers, rot, strict=False))
+def _make_shuffled_mapping_all(all_conditions: list[str]) -> dict[str, str]:
+    if len(all_conditions) < 2:
+        _die("[run_fig2] context_swap requires >=2 conditions in evidence_tables/")
+    rot = all_conditions[1:] + all_conditions[:1]
+    return dict(zip(all_conditions, rot, strict=False))
 
 
 def _with_temp_env(env_updates: dict[str, str]) -> dict[str, str]:
-    """
-    Apply env_updates to os.environ and return previous values (or missing marker).
-    Caller must restore via _restore_env.
-    """
     old: dict[str, str] = {}
     for k, v in env_updates.items():
         if k in os.environ:
@@ -419,7 +352,6 @@ def _write_manifest(
             "cwd": str(Path.cwd()),
             "LLMPATH_K_CLAIMS": os.environ.get("LLMPATH_K_CLAIMS", ""),
             "LLMPATH_BACKEND": os.environ.get("LLMPATH_BACKEND", ""),
-            # stress env snapshot (explicit for reproducibility)
             ENV_STRESS["dropout_p"]: os.environ.get(ENV_STRESS["dropout_p"], ""),
             ENV_STRESS["min_keep"]: os.environ.get(ENV_STRESS["min_keep"], ""),
             ENV_STRESS["contra_p"]: os.environ.get(ENV_STRESS["contra_p"], ""),
@@ -435,12 +367,6 @@ def _write_manifest(
 
 
 def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
-    """
-    Best-effort validation that stress was actually applied.
-    - reads run_meta.json written by pipeline (not runner)
-    - warns if pipeline recorded stress as off despite runner intending non-zeros
-    - warns if claims.proposed.tsv lacks stress_* columns when runtime says enabled
-    """
     rm = outdir / "run_meta.json"
     if not rm.exists():
         _warn(f"missing run_meta.json for stress check: {rm}")
@@ -456,8 +382,6 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
         return
 
     inputs = meta.get("inputs", {})
-
-    # ---- accept both new and legacy keys ----
     s = inputs.get("stress", None)
     r = inputs.get("stress_runtime", None)
     if s is None and r is None:
@@ -467,14 +391,12 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
         s = s or {}
         r = r or {}
 
-    # ---- parse knobs from meta ----
     try:
         p_drop = float(s.get("evidence_dropout_p", 0.0) or 0.0)
         p_contra = float(s.get("contradictory_p", 0.0) or 0.0)
     except Exception:
         p_drop, p_contra = 0.0, 0.0
 
-    # If pipeline truly thinks stress is off, warn *only* when runner expected on.
     if p_drop <= 0.0 and p_contra <= 0.0:
         _warn(
             "stress variant ran but pipeline recorded both evidence_dropout_p=0 and "
@@ -482,7 +404,6 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
             f"outdir={outdir}"
         )
 
-    # ---- schema sanity: if runtime says enabled, TSV should carry stress_* columns ----
     claims = outdir / "claims.proposed.tsv"
     if not claims.exists():
         _warn(f"missing claims.proposed.tsv for stress check: {claims}")
@@ -521,7 +442,6 @@ class Job:
     outdir: Path
     context_swap_from: str = ""
     context_swap_to: str = ""
-    # stress (job-local)
     stress_evidence_dropout_p: float = 0.0
     stress_evidence_dropout_min_keep: int = 1
     stress_contradictory_p: float = 0.0
@@ -537,7 +457,6 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
     plan2 = dict(plan)
     plan2["started_unix"] = started
 
-    # Decide stress knobs for this job:
     if job.variant == "stress":
         stress = {
             "enabled": True,
@@ -559,7 +478,6 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
             "contradictory_max_extra": int(job.stress_contradictory_max_extra),
         }
 
-    # Inject job-local env (pipeline currently reads these knobs from env)
     env_updates = {
         ENV_STRESS["dropout_p"]: str(stress["evidence_dropout_p"]),
         ENV_STRESS["min_keep"]: str(stress["evidence_dropout_min_keep"]),
@@ -569,7 +487,6 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
     old_env = _with_temp_env(env_updates)
 
     try:
-        # Runner-level run meta (do not collide with pipeline's run_meta.json)
         run_meta_runner = {
             "benchmark_id": job.benchmark_id,
             "condition": job.condition,
@@ -664,11 +581,36 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
         _restore_env(old_env)
 
 
+def _resolve_sd(benchmark_id: str) -> Path:
+    # --- BEATAML/PANCAN switch ---
+    # Expect benchmark_id to equal directory name under paper/source_data/
+    p = PAPER / "source_data" / benchmark_id
+    if not p.exists():
+        _die(f"[run_fig2] benchmark directory not found: {p}")
+    return p
+
+
+def _iter_all_conditions(evid_dir: Path) -> list[str]:
+    if not evid_dir.exists():
+        _die(f"[run_fig2] missing dir: {evid_dir}")
+    conds: list[str] = []
+    for p in sorted(evid_dir.glob("*.evidence_table.tsv")):
+        conds.append(p.name.split(".")[0].upper())
+    if not conds:
+        _die("[run_fig2] no evidence_tables found (*.evidence_table.tsv)")
+    return conds
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Fig2 (paper): deterministic tau-sweep over cancers × variants × gate modes."
+        description=(
+            "Fig2 (paper/supp): deterministic tau-sweep over conditions × variants × gate modes."
+        )
     )
     ap.add_argument("--benchmark-id", default="PANCAN_TP53_v1")
+    ap.add_argument(
+        "--conditions", default="", help="Alias of --cancers (recommended for BeatAML)."
+    )
     ap.add_argument("--cancers", default="ALL", help="Comma list like HNSC,LUAD or ALL")
 
     ap.add_argument(
@@ -688,8 +630,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42, help="Paper default seed (fixed).")
     ap.add_argument(
         "--out-root",
-        default=str(OUT_DIR),
-        help="Output root directory (default: paper/source_data/.../out)",
+        default="",
+        help="Override output root. Default: <benchmark>/out",
     )
     ap.add_argument(
         "--force",
@@ -748,7 +690,6 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # Validate minimal backend contract (runner does not instantiate backends).
     if str(args.context_review_mode).strip().lower() == "llm":
         _require_backend_env_for_context_review()
 
@@ -764,59 +705,47 @@ def main() -> None:
         contra_cap=int(args.stress_contradictory_max_extra),
     )
 
-    out_root = Path(str(args.out_root)).resolve()
+    # --- benchmark switch ---
+    sd = _resolve_sd(benchmark_id)
+    evid_dir = sd / "evidence_tables"
+    card_dir = sd / "sample_cards"
+    default_out_dir = sd / "out"
 
-    all_cancers = _iter_all_cancers()
-    if str(args.cancers).strip().upper() == "ALL":
-        cancers = all_cancers
+    out_root = (
+        Path(str(args.out_root)).resolve()
+        if str(args.out_root).strip()
+        else default_out_dir.resolve()
+    )
+
+    # conditions list:
+    # - if --conditions given: use it
+    # - else fallback to --cancers (backward compatibility)
+    all_conds = _iter_all_conditions(evid_dir)
+
+    cond_arg = str(args.conditions).strip()
+    cancers_arg = str(args.cancers).strip()
+
+    # Prefer --conditions; fall back to legacy --cancers
+    sel_arg = cond_arg if cond_arg else cancers_arg
+
+    if not sel_arg:
+        _die("[run_fig2] no conditions specified (use --conditions or --cancers)")
+
+    if sel_arg.upper() == "ALL":
+        conditions = all_conds
     else:
-        cancers = [c.strip().upper() for c in _parse_csv(str(args.cancers))]
-        if not cancers:
-            _die("[run_fig2] --cancers must not be empty")
-        missing = sorted(set(cancers) - set(all_cancers))
-        if missing:
-            _die(f"[run_fig2] cancers missing evidence_table.tsv: {missing}")
+        conditions = [c.strip().upper() for c in _parse_csv(sel_arg)]
+
+    if not conditions:
+        _die("[run_fig2] no conditions selected")
+
+    missing = sorted(set(conditions) - set(all_conds))
+    if missing:
+        _die(f"[run_fig2] conditions missing evidence_table.tsv: {missing}")
 
     variants = _parse_variants(str(args.variants))
     taus = _parse_taus(str(args.taus))
     gate_modes = _parse_gate_modes(str(args.gate_modes))
-
-    # Demo-safety: if stress is requested, warn on "off"
-    if "stress" in variants:
-        if (
-            _stress_recipe(
-                p_drop=float(args.stress_evidence_dropout_p),
-                p_contra=float(args.stress_contradictory_p),
-            )
-            == "off"
-        ):
-            _warn(
-                "variants include 'stress' but both --stress-evidence-dropout-p and "
-                "--stress-contradictory-p are 0.0. This will likely produce outputs "
-                "indistinguishable from 'ours'."
-            )
-
-    # Validate inputs (fail-fast).
-    for condition in cancers:
-        ev_path = EVID_DIR / f"{condition}.evidence_table.tsv"
-        _ensure_file(ev_path, f"evidence_table ({condition})")
-        _validate_evidence_table(ev_path)
-
-        for gm in gate_modes:
-            _ensure_file(
-                CARD_DIR / f"{condition}.{gm}.sample_card.json", f"sample_card {gm} ({condition})"
-            )
-
-    # Deterministic mapping independent of selected subset for context_swap
-    swap_map_all = _make_shuffled_mapping_all(all_cancers) if "context_swap" in variants else {}
-
-    forced_dst = str(args.context_swap_to).strip().upper()
-    if forced_dst:
-        if forced_dst not in set(all_cancers):
-            _die(
-                "[run_fig2] --context-swap-to must be one of cancers with evidence_tables "
-                f"(got {forced_dst})"
-            )
 
     stress_plan = {
         "evidence_dropout_p": float(args.stress_evidence_dropout_p),
@@ -831,7 +760,7 @@ def main() -> None:
 
     plan = {
         "benchmark_id": benchmark_id,
-        "cancers": cancers,
+        "conditions": conditions,
         "variants": variants,
         "gate_modes": gate_modes,
         "taus": [float(t) for t in taus],
@@ -843,9 +772,12 @@ def main() -> None:
         "stress": stress_plan,
     }
 
+    # --- context_swap target (forced) ---
+    forced_dst = str(args.context_swap_to).strip().upper()
+
     print("[run_fig2] plan")
     print(f"  benchmark_id: {benchmark_id}")
-    print(f"  cancers: {','.join(cancers)}")
+    print(f"  conditions: {','.join(conditions)}")
     print(f"  variants: {','.join(variants)}")
     print(f"  gate_modes: {','.join(gate_modes)}")
     print(f"  taus: {','.join([f'{t:.2f}' for t in taus])}")
@@ -866,18 +798,57 @@ def main() -> None:
         print("[run_fig2] plan-only: exiting.")
         return
 
+    # Validate inputs (fail-fast).
+    for condition in conditions:
+        ev_path = evid_dir / f"{condition}.evidence_table.tsv"
+        _ensure_file(ev_path, f"evidence_table ({condition})")
+        _validate_evidence_table(ev_path)
+
+        for gm in gate_modes:
+            _ensure_file(
+                card_dir / f"{condition}.{gm}.sample_card.json",
+                f"sample_card {gm} ({condition})",
+            )
+
+    # context_swap policy:
+    # - default: requires >=2 conditions in evidence_tables/ (for deterministic rotation)
+    # - exception: if --context-swap-to is set, allow even when evidence_tables has 1 condition,
+    #              but require that the target sample_card exists for every gate_mode.
+    swap_map_all: dict[str, str] = {}
+    if "context_swap" in variants:
+        if forced_dst:
+            for gm in gate_modes:
+                sc = card_dir / f"{forced_dst}.{gm}.sample_card.json"
+                _ensure_file(sc, f"context_swap target sample_card {gm} ({forced_dst})")
+            # rotation map unused when forced
+            swap_map_all = {}
+        else:
+            if len(all_conds) < 2:
+                _warn(
+                    "context_swap requested but evidence_tables has <2 conditions. "
+                    "Dropping context_swap for this run (provide --context-swap-to to force)."
+                )
+                variants = [v for v in variants if v != "context_swap"]
+                swap_map_all = {}
+            else:
+                swap_map_all = _make_shuffled_mapping_all(all_conds)
+
+    # Demo-safety warning
+    if "stress" in variants and stress_plan["recipe"] == "off":
+        _warn(
+            "variants include 'stress' but both --stress-evidence-dropout-p and "
+            "--stress-contradictory-p are 0.0. Outputs may be indistinguishable from 'ours'."
+        )
+
     jobs: list[Job] = []
 
-    for condition in cancers:
-        ev = EVID_DIR / f"{condition}.evidence_table.tsv"
+    for condition in conditions:
+        ev = evid_dir / f"{condition}.evidence_table.tsv"
 
         for tau in taus:
             for gate_mode in gate_modes:
-                # -------------------------
-                # Variant: ours
-                # -------------------------
                 if "ours" in variants:
-                    src_sc = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
+                    src_sc = card_dir / f"{condition}.{gate_mode}.sample_card.json"
                     outdir = _outdir_for(
                         out_root=out_root,
                         condition=condition,
@@ -886,7 +857,6 @@ def main() -> None:
                         tau=tau,
                     )
                     outdir.mkdir(parents=True, exist_ok=True)
-
                     jobs.append(
                         Job(
                             benchmark_id=benchmark_id,
@@ -900,7 +870,6 @@ def main() -> None:
                             evidence_table=ev,
                             sample_card=src_sc,
                             outdir=outdir,
-                            # ensure stress off for non-stress variants
                             stress_evidence_dropout_p=0.0,
                             stress_evidence_dropout_min_keep=int(
                                 args.stress_evidence_dropout_min_keep
@@ -910,11 +879,8 @@ def main() -> None:
                         )
                     )
 
-                # -------------------------
-                # Variant: stress (robustness demo)
-                # -------------------------
                 if "stress" in variants:
-                    src_sc = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
+                    src_sc = card_dir / f"{condition}.{gate_mode}.sample_card.json"
                     outdir = _outdir_for(
                         out_root=out_root,
                         condition=condition,
@@ -923,7 +889,6 @@ def main() -> None:
                         tau=tau,
                     )
                     outdir.mkdir(parents=True, exist_ok=True)
-
                     jobs.append(
                         Job(
                             benchmark_id=benchmark_id,
@@ -946,53 +911,39 @@ def main() -> None:
                         )
                     )
 
-                # -------------------------
-                # Variant: context_swap (paper ablation; formerly shuffled_context)
-                # -------------------------
                 if "context_swap" in variants:
-                    dst_cancer = forced_dst or swap_map_all.get(condition, "")
-                    if not dst_cancer:
+                    dst_cond = forced_dst or swap_map_all.get(condition, "")
+                    if not dst_cond:
                         _die("[run_fig2] internal error: context swap map missing condition")
 
-                    # Source card (same condition as evidence_table)
-                    src_sc_path = CARD_DIR / f"{condition}.{gate_mode}.sample_card.json"
+                    src_sc_path = card_dir / f"{condition}.{gate_mode}.sample_card.json"
                     src = _read_json(src_sc_path)
 
-                    # Destination card (swap-in context keys)
-                    dst_sc_path = CARD_DIR / f"{dst_cancer}.{gate_mode}.sample_card.json"
+                    dst_sc_path = card_dir / f"{dst_cond}.{gate_mode}.sample_card.json"
                     if not dst_sc_path.exists():
-                        _die(
-                            f"[run_fig2] context_swap target card missing: {dst_sc_path} "
-                            f"(dst_cancer={dst_cancer}, gate_mode={gate_mode})"
-                        )
+                        _die(f"[run_fig2] context_swap target card missing: {dst_sc_path}")
                     dst = _read_json(dst_sc_path)
 
                     extra = src.get("extra", {})
                     if not isinstance(extra, dict):
                         extra = {}
 
-                    # Prefer condition (often condition-specific); fall back to disease.
                     extra["context_swap_from"] = str(
                         src.get("condition") or src.get("disease") or ""
                     ).strip()
                     extra["context_swap_to"] = str(
                         dst.get("condition") or dst.get("disease") or ""
                     ).strip()
-
-                    extra["context_swap_to_cancer"] = dst_cancer
+                    extra["context_swap_to_condition"] = dst_cond
                     src["extra"] = extra
 
-                    # Counterfactual: swap core context keys (template-only; no external knowledge).
-                    # NOTE: include "condition" because many sample cards encode condition there.
                     for k in ("condition", "disease", "tissue", "perturbation", "comparison"):
                         v = dst.get(k, "")
                         if isinstance(v, str) and v.strip():
                             src[k] = v
                         elif v not in (None, "", []):
-                            # allow non-str (e.g., structured comparisons) if present
                             src[k] = v
 
-                    # Ensure tau + k_claims are set in the card copy.
                     src = _set_audit_tau(src, float(tau), k_claims=int(args.k_claims))
                     src = _set_context_review_mode(src, str(args.context_review_mode))
 
@@ -1005,10 +956,9 @@ def main() -> None:
                     )
                     outdir2.mkdir(parents=True, exist_ok=True)
 
-                    # write swapped card to job-local path (so pipeline actually sees swap fields)
                     swap_card_path = (
                         outdir2
-                        / f"sample_card.context_swap.{dst_cancer}.{gate_mode}.tau_{tau:.2f}.json"
+                        / f"sample_card.context_swap.{dst_cond}.{gate_mode}.tau_{tau:.2f}.json"
                     )
                     _write_json(swap_card_path, src)
 
@@ -1027,7 +977,6 @@ def main() -> None:
                             outdir=outdir2,
                             context_swap_from=str(extra.get("context_swap_from", "")),
                             context_swap_to=str(extra.get("context_swap_to", "")),
-                            # ensure stress off
                             stress_evidence_dropout_p=0.0,
                             stress_evidence_dropout_min_keep=int(
                                 args.stress_evidence_dropout_min_keep

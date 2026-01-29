@@ -1077,6 +1077,121 @@ def _maybe_apply_llm_context_review(
     return df
 
 
+def _maybe_inject_context_snapshot(claim: Claim, r: pd.Series) -> Claim:
+    """
+    Snapshot pipeline-owned context review fields into the Claim object.
+
+    Policy:
+      - Inject only when row indicates a real evaluation:
+          context_evaluated == True AND context_status in {PASS, WARN, FAIL}
+      - Never invent PASS; if missing/invalid, leave claim unchanged.
+      - Do NOT mutate the Claim instance; return a new Claim for validator safety.
+    """
+    # evaluated?
+    try:
+        ev = bool(r.get("context_evaluated", False))
+    except Exception:
+        ev = False
+
+    st = str(r.get("context_status", "") or "").strip().upper()
+    if (not ev) or (st not in {"PASS", "WARN", "FAIL"}):
+        return claim
+
+    method = str(r.get("context_method", "") or "").strip().lower()
+    if method not in {"llm", "proxy"}:
+        # schema requires method != "none" when evaluated=True
+        method = "proxy"
+
+    reason = str(r.get("context_reason", "") or "").strip() or None
+    notes = str(r.get("context_notes", "") or "").strip() or None
+
+    # Rebuild Claim to ensure model validators are applied consistently.
+    return Claim(
+        claim_id=str(claim.claim_id or ""),
+        entity=str(claim.entity),
+        direction=str(claim.direction),
+        context_keys=list(claim.context_keys or []),
+        context_evaluated=True,
+        context_method=method,  # type: ignore[arg-type]
+        context_status=st,  # type: ignore[arg-type]
+        context_reason=reason,
+        context_notes=notes,
+        evidence_ref=claim.evidence_ref,
+    )
+
+
+def _inject_context_snapshot_into_claim_json(
+    out_df: pd.DataFrame,
+    distilled_ctx: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Post-hoc inject pipeline-owned context review fields into claim_json for LLM-mode outputs.
+
+    Safety policy (do not break working runs):
+      - Only inject when distilled_ctx has a real evaluation
+        (context_evaluated True and status in PASS/WARN/FAIL).
+      - Do NOT overwrite claim_json if it already has context_evaluated=True
+        (assume it's authoritative).
+      - Match rows by term_uid (stable key).
+      - Best-effort: failures do not crash selection; they just skip injection.
+
+    """
+    if not isinstance(out_df, pd.DataFrame) or out_df.empty:
+        return out_df
+    if "claim_json" not in out_df.columns or "term_uid" not in out_df.columns:
+        return out_df
+    if not isinstance(distilled_ctx, pd.DataFrame) or distilled_ctx.empty:
+        return out_df
+    if "term_uid" not in distilled_ctx.columns:
+        return out_df
+
+    ctx = distilled_ctx.copy()
+    ctx["term_uid"] = ctx["term_uid"].astype(str).str.strip()
+    ctx = ctx.drop_duplicates(subset=["term_uid"], keep="first")
+    by_uid = ctx.set_index("term_uid", drop=False)
+
+    out = out_df.copy()
+    out["term_uid"] = out["term_uid"].astype(str).str.strip()
+
+    for i, r in out.iterrows():
+        tu = str(r.get("term_uid") or "").strip()
+        cj = r.get("claim_json", None)
+        if (not tu) or _is_na_scalar(cj):
+            continue
+        if tu not in by_uid.index:
+            continue
+
+        cj_s = str(cj)
+
+        # If claim_json already contains evaluated context, do NOT overwrite.
+        try:
+            obj0 = json.loads(cj_s)
+            if isinstance(obj0, dict) and bool(obj0.get("context_evaluated", False)):
+                continue
+        except Exception:
+            # if claim_json is malformed, don't risk changing it here
+            continue
+
+        try:
+            c0 = Claim.model_validate_json(cj_s)
+        except Exception:
+            continue
+
+        try:
+            c1 = _maybe_inject_context_snapshot(c0, by_uid.loc[tu])
+        except Exception:
+            continue
+
+        # Only write back if something actually changed (cheap check)
+        try:
+            if c1.context_evaluated and (not c0.context_evaluated):
+                out.at[i, "claim_json"] = c1.model_dump_json()
+        except Exception:
+            pass
+
+    return out
+
+
 # ===========================
 # Deterministic selection
 # ===========================
@@ -1424,6 +1539,10 @@ def _select_claims_deterministic(
             ),
         )
 
+        # IMPORTANT: snapshot pipeline-owned context review outputs into claim_json
+        # (decision object)
+        claim = _maybe_inject_context_snapshot(claim, r)
+
         gene_snippet = ",".join([str(g) for g in genes_suggest])
 
         rec: dict[str, Any] = {
@@ -1573,6 +1692,18 @@ def select_claims(
 
     # ---- LLM mode ----
     if mode_eff == "llm":
+        # If the run asks for LLM context review, populate pipeline-owned context fields
+        # BEFORE claim proposal, so later claim_json snapshot injection has ground truth.
+        distilled2 = _maybe_apply_llm_context_review(
+            distilled,
+            card,
+            review_backend=review_be,
+            k=int(k_eff),
+            seed=seed,
+            outdir=outdir,
+            context_review_mode=str(context_review_mode or "off"),
+        )
+
         if backend is None:
             out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
             out_det["claim_mode"] = "deterministic"
@@ -1584,7 +1715,7 @@ def select_claims(
         try:
             res = _call_compat(
                 propose_claims_llm,
-                distilled_with_modules=distilled,
+                distilled_with_modules=distilled2,
                 card=card,
                 backend=backend,
                 k=int(k_eff),
@@ -1613,7 +1744,7 @@ def select_claims(
                     out_llm = _call_compat(
                         claims_to_proposed_tsv,
                         claims=claims_obj,
-                        distilled_with_modules=distilled,
+                        distilled_with_modules=distilled2,
                         card=card,
                     )
                     used_fallback = False
@@ -1627,6 +1758,8 @@ def select_claims(
             out_llm = out_llm.copy()
             out_llm["claim_mode"] = "llm"
             out_llm["llm_notes"] = notes
+            # Ensure decision-grade claim_json contains context review snapshot when available.
+            out_llm = _inject_context_snapshot_into_claim_json(out_llm, distilled2)
             return out_llm
 
         out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)

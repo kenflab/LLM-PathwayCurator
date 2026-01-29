@@ -1,0 +1,28 @@
+{
+  "k": 50,
+  "seed": 42,
+  "top_n": 50,
+  "require_gene_set_hash": true,
+  "context_keys_resolved": [
+    "condition",
+    "tissue",
+    "perturbation",
+    "comparison"
+  ],
+  "context_proxy_enabled": false,
+  "candidates_sha256": "da547dbe56bab784f93e986c3ae1e5c8c5570d23e2f41a25eeae6d33d1a09685",
+  "notes": "ok",
+  "backend_class": "OllamaBackend",
+  "artifact_tag": "",
+  "strict_k": false,
+  "top_n_mode": "auto",
+  "top_n_env": "",
+  "top_n_alpha": 12,
+  "top_n_min": 15,
+  "top_n_max": 80,
+  "top_n_max_small": 50,
+  "top_n_small_model": true,
+  "top_n_model_hint": "llama3.1:8b",
+  "top_n_hard_max": null,
+  "top_n_soft_max": null
+}

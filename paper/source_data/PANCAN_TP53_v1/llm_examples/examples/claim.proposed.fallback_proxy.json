@@ -1,0 +1,63 @@
+{
+  "claim_id": "c_de0c536ad356",
+  "entity": "HALLMARK_APOPTOSIS",
+  "direction": "up",
+  "context_keys": [
+    "condition",
+    "tissue",
+    "perturbation",
+    "comparison"
+  ],
+  "context_evaluated": false,
+  "context_method": "none",
+  "context_status": null,
+  "context_reason": null,
+  "context_notes": null,
+  "evidence_ref": {
+    "module_id": "Mdf6350d89cee",
+    "gene_ids": [
+      "4060",
+      "1499",
+      "7818",
+      "6304",
+      "5970",
+      "3301",
+      "4000",
+      "633",
+      "2879",
+      "3482",
+      "1676",
+      "8878",
+      "8837",
+      "2064",
+      "5366",
+      "7417",
+      "840",
+      "5747",
+      "1634",
+      "1806",
+      "835",
+      "2876",
+      "5058",
+      "595",
+      "4092",
+      "6041",
+      "331",
+      "2069",
+      "5914",
+      "3553",
+      "4744",
+      "3569",
+      "3725",
+      "3552",
+      "4616",
+      "5159"
+    ],
+    "term_ids": [
+      "fgsea_msigdb_H_entrez:HALLMARK_APOPTOSIS"
+    ],
+    "gene_set_hash": "1b912bf139ec",
+    "gene_set_hash_source": "input",
+    "term_ids_has_raw": false
+  }
+}

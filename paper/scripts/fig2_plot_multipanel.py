@@ -130,6 +130,47 @@ def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
     return df
 
 
+def mm_to_inch(mm: float) -> float:
+    return float(mm) / 25.4
+
+
+def resolve_figsize(
+    *,
+    cols: int,
+    rows: int,
+    figsize: tuple[float, float] | None,
+    width_mm: float | None,
+    height_mm: float | None,
+) -> tuple[float, float]:
+    """
+    Priority:
+      1) --figsize W H (inches)
+      2) --width-mm / --height-mm (mm; if one missing, infer from grid aspect)
+      3) fallback auto sizing (current behavior)
+    """
+    if figsize is not None:
+        w, h = float(figsize[0]), float(figsize[1])
+        if w <= 0 or h <= 0:
+            raise ValueError("--figsize must be positive: e.g. --figsize 7.2 6.0")
+        return (w, h)
+
+    if width_mm is not None or height_mm is not None:
+        if width_mm is None and height_mm is None:
+            pass
+        # infer missing side from grid aspect ratio
+        aspect = (rows * 2.8) / max(1e-6, (cols * 3.2))  # matches your current heuristic
+        if width_mm is None:
+            width_mm = float(height_mm) / max(1e-6, aspect)
+        if height_mm is None:
+            height_mm = float(width_mm) * aspect
+        return (mm_to_inch(float(width_mm)), mm_to_inch(float(height_mm)))
+
+    # fallback (existing behavior)
+    fig_w = max(8.5, cols * 3.2)
+    fig_h = max(6.5, rows * 2.8)
+    return (fig_w, fig_h)
+
+
 def _panel_plot(
     ax,
     d: pd.DataFrame,
@@ -253,6 +294,26 @@ def main() -> None:
         default="",
         help="If set, plot only this condition (single-panel mode). e.g., HNSC",
     )
+    ap.add_argument(
+        "--figsize",
+        nargs=2,
+        type=float,
+        default=None,
+        metavar=("W_IN", "H_IN"),
+        help="Figure size in inches (overrides auto sizing). e.g. --figsize 7.2 6.0",
+    )
+    ap.add_argument(
+        "--width-mm",
+        type=float,
+        default=None,
+        help="Figure width in mm (Nature: 89 single-col, 183 double-col). Overrides auto sizing.",
+    )
+    ap.add_argument(
+        "--height-mm",
+        type=float,
+        default=None,
+        help="Figure height in mm (Nature max ~170). Overrides auto sizing.",
+    )
     args = ap.parse_args()
 
     ycol = str(args.ycol).strip()
@@ -290,9 +351,15 @@ def main() -> None:
 
     apply_pub_style(fontsize=int(args.fontsize))
 
-    fig_w = max(8.5, cols * 3.2)
-    fig_h = max(6.5, rows * 2.8)
+    fig_w, fig_h = resolve_figsize(
+        cols=cols,
+        rows=rows,
+        figsize=tuple(args.figsize) if args.figsize is not None else None,
+        width_mm=args.width_mm,
+        height_mm=args.height_mm,
+    )
     fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h), dpi=300)
+
     axes_list = list(axes.ravel()) if hasattr(axes, "ravel") else [axes]
 
     for idx, condition in enumerate(conditions):

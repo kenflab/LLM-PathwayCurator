@@ -1,0 +1,16 @@
+{
+  "comparison": "TP53_mut_vs_TP53_wt",
+  "condition": "LUAD",
+  "extra": {
+    "audit_tau": 0.8,
+    "benchmark_id": "BEATAML_TP53_v1",
+    "context_gate_mode": "hard",
+    "gene_id_map_tsv": "resources/gene_id_maps/ensembl_id_map.tsv.gz",
+    "goal": "context-conditioned pathway claim selection with calibrated abstention",
+    "groups_tsv": "derived/groups/BEATAML.groups.tsv"
+  },
+  "k_claims": 100,
+  "notes": "COUNTERFACTUAL sample card for context_swap ablation (Supplement). Do not use for biological interpretation; used only to swap context keys against BeatAML evidence.",
+  "perturbation": "genotype",
+  "tissue": "tumor"
+}
