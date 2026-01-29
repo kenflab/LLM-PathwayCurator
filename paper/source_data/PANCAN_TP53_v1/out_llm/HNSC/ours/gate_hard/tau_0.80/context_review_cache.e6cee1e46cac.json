@@ -1,0 +1,302 @@
+{
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_APICAL_SURFACE": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "Term 'HALLMARK_APICAL_SURFACE' is not related to the context's condition 'HNSC'",
+    "_latency_s": 20.652719020843506
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ALLOGRAFT_REJECTION": {
+    "status": "FAIL",
+    "confidence": 0,
+    "reason": "Term 'HALLMARK_ALLOGRAFT_REJECTION' is not context-consistent with sample condition 'HNSC', which is a specific cancer type, whereas the term is related to allograft rejection.",
+    "_latency_s": 10.713984727859497
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY' is not related to the context's condition 'HNSC', which is Head and Neck Squamous Cell Carcinoma, a cancer type that is more closely associated with DNA damage response pathways such as TP53 rather than reactive oxygen species.",
+    "_latency_s": 12.684411764144897
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_NOTCH_SIGNALING": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term HALLMARK_NOTCH_SIGNALING is not related to the context's condition (HNSC) or comparison (TP53_mut_vs_TP53_wt)",
+    "_latency_s": 9.297375202178955
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_HEDGEHOG_SIGNALING": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_HEDGEHOG_SIGNALING is known to be associated with TP53 mutations in the context of HNSC tumors.",
+    "_latency_s": 8.291459798812866
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_COAGULATION": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_COAGULATION is associated with various cancer types and has a high overlap with the given context's signature (context_signature: e6cee1e46cac)",
+    "_latency_s": 9.805850982666016
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION' does not match the context's condition 'HNSC', which is a specific cancer type, while the term is more general and could apply to various cancers.",
+    "_latency_s": 11.925346851348877
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_INFLAMMATORY_RESPONSE": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_INFLAMMATORY_RESPONSE' is not related to the context's condition 'HNSC', which is a specific cancer type.",
+    "_latency_s": 9.738656520843506
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_APOPTOSIS": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_APOPTOSIS is relevant to the context of TP53 mutation in a tumor sample (HNSC), as apoptosis is often associated with cancer and TP53 mutations can trigger apoptotic pathways.",
+    "_latency_s": 10.880398750305176
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_CHOLESTEROL_HOMEOSTASIS": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term HALLMARK_CHOLESTEROL_HOMEOSTASIS is not related to the context condition HNSC or cancer type.",
+    "_latency_s": 9.46792197227478
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_P53_PATHWAY": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_P53_PATHWAY is relevant to the context condition HNSC and perturbation genotype TP53_mut_vs_TP53_wt.",
+    "_latency_s": 9.868842840194702
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_XENOBIOTIC_METABOLISM": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_XENOBIOTIC_METABOLISM' does not match the context's condition 'HNSC', which is a specific cancer type, whereas the term is related to xenobiotic metabolism, which may be relevant in various contexts.",
+    "_latency_s": 13.791802167892456
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_MYC_TARGETS_V1": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_MYC_TARGETS_V1' is not expected to be active in a TP53 mutation context.",
+    "_latency_s": 9.733161687850952
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_TNFA_SIGNALING_VIA_NFKB": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_TNFA_SIGNALING_VIA_NFKB is associated with genes involved in TNF-alpha signaling via NF-kappa B pathway, which is relevant to the context of HNSC (Head and Neck Squamous Cell Carcinoma) tumor samples.",
+    "_latency_s": 13.285888195037842
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_UNFOLDED_PROTEIN_RESPONSE": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_UNFOLDED_PROTEIN_RESPONSE is associated with cellular stress responses and unfolded protein response pathways are often dysregulated in cancer, including HNSC.",
+    "_latency_s": 11.550997972488403
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_BILE_ACID_METABOLISM": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "No clear connection between HALLMARK_BILE_ACID_METABOLISM and the sample context (HNSC tumor)",
+    "_latency_s": 10.781766891479492
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ESTROGEN_RESPONSE_EARLY": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_ESTROGEN_RESPONSE_EARLY' is not related to the context's condition 'HNSC', which is a type of Head and Neck Squamous Cell Carcinoma, and does not involve estrogen response.",
+    "_latency_s": 15.652260780334473
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_IL6_JAK_STAT3_SIGNALING": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term is associated with IL-6/JAK/STAT3 signaling pathway, which is relevant to HNSC (Head and Neck Squamous Cell Carcinoma) and tumor samples.",
+    "_latency_s": 12.95763611793518
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_HYPOXIA": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_HYPOXIA is associated with hypoxia in various cancer types, including HNSC (Head and Neck Squamous Cell Carcinoma). The context signature e6cee1e46cac suggests a tumor environment, which is consistent with the term's definition.",
+    "_latency_s": 14.409213066101074
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ANGIOGENESIS": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_ANGIOGENESIS is associated with angiogenesis, which is a characteristic of tumor tissues.",
+    "_latency_s": 7.866035223007202
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_MTORC1_SIGNALING": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_MTORC1_SIGNALING is associated with MTOR signaling pathway, which is relevant to cancer and particularly to TP53 mutations.",
+    "_latency_s": 9.774029016494751
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_WNT_BETA_CATENIN_SIGNALING": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "Term 'HALLMARK_WNT_BETA_CATENIN_SIGNALING' does not match context condition 'HNSC'",
+    "_latency_s": 8.375554084777832
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_COMPLEMENT": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_COMPLEMENT is associated with various cancer types and has a high overlap with the given context's signature (context_signature: e6cee1e46cac)",
+    "_latency_s": 9.719911575317383
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_OXIDATIVE_PHOSPHORYLATION": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_OXIDATIVE_PHOSPHORYLATION is relevant to the context of HNSC tumor samples with TP53 mutation compared to wild-type, as oxidative phosphorylation is a known process affected by TP53 mutations.",
+    "_latency_s": 12.170670986175537
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_MYOGENESIS": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term HALLMARK_MYOGENESIS is not related to the context condition HNSC or tissue tumor.",
+    "_latency_s": 8.89356780052185
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_G2M_CHECKPOINT": {
+    "status": "PASS",
+    "confidence": 0.8,
+    "reason": "The term HALLMARK_G2M_CHECKPOINT is associated with cell cycle regulation and checkpoint control, which is relevant to tumor samples.",
+    "_latency_s": 9.047754287719727
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_INTERFERON_GAMMA_RESPONSE": {
+    "status": "FAIL",
+    "confidence": 0,
+    "reason": "The term 'HALLMARK_INTERFERON_GAMMA_RESPONSE' is not relevant to the context of HNSC (Head and Neck Squamous Cell Carcinoma) tumor samples, especially considering the comparison between TP53 mutant and wild-type samples.",
+    "_latency_s": 11.389074563980103
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_DNA_REPAIR": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_DNA_REPAIR is relevant to DNA repair mechanisms, which are often impaired in tumor tissues (like HNSC). The presence of TP53 mutations may also indicate a disruption in normal DNA repair processes.",
+    "_latency_s": 11.265276193618774
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_SPERMATOGENESIS": {
+    "status": "FAIL",
+    "confidence": 0,
+    "reason": "Term HALLMARK_SPERMATOGENESIS is not context-consistent with sample condition HNSC and tissue tumor.",
+    "_latency_s": 8.994520425796509
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_HEME_METABOLISM": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_HEME_METABOLISM' is not related to the context's condition 'HNSC', which is a specific cancer type.",
+    "_latency_s": 10.397408246994019
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_KRAS_SIGNALING_DN": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_KRAS_SIGNALING_DN is associated with KRAS mutations, which are relevant to the TP53_mut_vs_TP53_wt comparison in the context of HNSC tumors.",
+    "_latency_s": 11.054803848266602
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_PROTEIN_SECRETION": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_PROTEIN_SECRETION' is not clearly context-consistent with the sample context.",
+    "_latency_s": 8.185215711593628
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_UV_RESPONSE_UP": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_UV_RESPONSE_UP is relevant to skin cancer (HNSC) and involves UV response, which aligns with the context.",
+    "_latency_s": 9.545368194580078
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_PEROXISOME": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_PEROXISOME is associated with genes involved in peroxisome function, which are relevant to cancer biology and specifically to the context of TP53 mutation vs wildtype comparison.",
+    "_latency_s": 10.413713693618774
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_IL2_STAT5_SIGNALING": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_IL2_STAT5_SIGNALING is associated with IL-2 signaling pathway, which is relevant to tumor samples and TP53 mutations.",
+    "_latency_s": 9.886155843734741
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ADIPOGENESIS": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term HALLMARK_ADIPOGENESIS is not related to the context condition HNSC or tissue tumor.",
+    "_latency_s": 9.285463571548462
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_MITOTIC_SPINDLE": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_MITOTIC_SPINDLE is associated with genes involved in cell cycle regulation, which is consistent with the context of a tumor sample (HNSC) and a comparison involving TP53 mutation status.",
+    "_latency_s": 11.924481868743896
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_GLYCOLYSIS": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_GLYCOLYSIS is relevant to the context of a tumor (HNSC) with a genotype perturbation involving TP53 mutation.",
+    "_latency_s": 11.07834267616272
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ESTROGEN_RESPONSE_LATE": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_ESTROGEN_RESPONSE_LATE' is not related to the context's condition 'HNSC', which is a type of Head and Neck Squamous Cell Carcinoma, and does not typically involve estrogen response.",
+    "_latency_s": 13.33322548866272
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_TGF_BETA_SIGNALING": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_TGF_BETA_SIGNALING is known to be associated with TGF-beta signaling pathway, which is relevant in the context of TP53 mutation vs wildtype comparison in a tumor sample.",
+    "_latency_s": 12.187328100204468
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_ANDROGEN_RESPONSE": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_ANDROGEN_RESPONSE' is not related to the context's condition 'HNSC', which is Head and Neck Squamous Cell Carcinoma, a cancer type that does not typically involve androgen response.",
+    "_latency_s": 11.642022371292114
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_E2F_TARGETS": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_E2F_TARGETS is associated with E2F target genes, which are often upregulated in TP53 mutant tumors compared to wild-type tumors.",
+    "_latency_s": 10.035743951797485
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_UV_RESPONSE_DN": {
+    "status": "PASS",
+    "confidence": 0.85,
+    "reason": "The term HALLMARK_UV_RESPONSE_DN is associated with UV damage response and is relevant to skin cancer (HNSC), which aligns with the context.",
+    "_latency_s": 10.27532434463501
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_APICAL_JUNCTION": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_APICAL_JUNCTION is associated with apical junctions in epithelial cells, which are relevant to tumor tissues.",
+    "_latency_s": 9.351696252822876
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_PI3K_AKT_MTOR_SIGNALING": {
+    "status": "PASS",
+    "confidence": 0.95,
+    "reason": "The term HALLMARK_PI3K_AKT_MTOR_SIGNALING is associated with PI3K/Akt/mTOR signaling pathway, which is relevant to cancer and particularly to TP53 mutations.",
+    "_latency_s": 11.05924391746521
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_FATTY_ACID_METABOLISM": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term HALLMARK_FATTY_ACID_METABOLISM is not related to the context condition HNSC or tissue tumor.",
+    "_latency_s": 9.407424211502075
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_INTERFERON_ALPHA_RESPONSE": {
+    "status": "PASS",
+    "confidence": 1.0,
+    "reason": "The term HALLMARK_INTERFERON_ALPHA_RESPONSE is associated with interferon-alpha signaling pathway, which is relevant to tumor context and TP53 mutation comparison.",
+    "_latency_s": 8.709809064865112
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_KRAS_SIGNALING_UP": {
+    "status": "PASS",
+    "confidence": 0.9,
+    "reason": "The term HALLMARK_KRAS_SIGNALING_UP is associated with KRAS signaling pathway, which is relevant to TP53 mutations in HNSC cancer type.",
+    "_latency_s": 9.869335651397705
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_PANCREAS_BETA_CELLS": {
+    "status": "FAIL",
+    "confidence": 0,
+    "reason": "Term 'HALLMARK_PANCREAS_BETA_CELLS' is not context-consistent with sample context: condition='HNSC', tissue='tumor'",
+    "_latency_s": 9.432970523834229
+  },
+  "e6cee1e46cac::fgsea_msigdb_H_entrez:HALLMARK_MYC_TARGETS_V2": {
+    "status": "FAIL",
+    "confidence": 0.0,
+    "reason": "The term 'HALLMARK_MYC_TARGETS_V2' is not clearly context-consistent with the sample context.",
+    "_latency_s": 8.511504173278809
+  }
+}

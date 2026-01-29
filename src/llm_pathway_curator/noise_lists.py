@@ -22,7 +22,19 @@ Notes
 # Regex patterns for biological noise modules (Human & Mouse compatible)
 NOISE_PATTERNS = {
     # --- Technical / Mapping Artifacts ---
-    "Ensembl_ID": r"^(ENSG|ENSMUSG)\d+",  # Meaningless IDs for LLMs
+    # NOTE (PathwayCurator):
+    # Ensembl IDs (ENSG/ENSMUSG) are *meaningless for LLM prompting*,
+    # but they are *essential evidence identifiers* for distill/audit/modules
+    # in LLM-PathwayCurator (e.g., survival, Jaccard modules).
+    #
+    # Masking them here would collapse evidence_genes to empty lists
+    # (e.g., fgsea_msigdb_H_ensembl inputs), breaking downstream logic.
+    #
+    # Therefore, Ensembl_ID masking is intentionally DISABLED at this layer.
+    # If needed, handle Ensembl→symbol conversion or masking only
+    # in prompt-facing / LLM-scCurator layers.
+    #
+    # "Ensembl_ID": r"^(ENSG|ENSMUSG)\d+", # Meaningless IDs for LLMs
     "LINC_Noise": r"^(LINC|linc)\d+$",  # Human LINC#### / linc####
     "Mouse_Predicted_Gm": r"^Gm\d+$",  # Mouse predicted genes
     "Mouse_Rik": r"^[0-9A-Za-z]+Rik$",  # Mouse Rik

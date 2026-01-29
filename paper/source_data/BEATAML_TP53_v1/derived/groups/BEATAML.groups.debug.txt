@@ -1,0 +1,20 @@
+BeatAML TP53 groups debug
+counts_path=/work/paper/source_data/BEATAML_TP53_v1/raw/beataml_waves1to4_counts_dbgap.txt
+mutations_path=/work/paper/source_data/BEATAML_TP53_v1/raw/beataml_wes_wv1to4_mutations_dbgap.txt
+clinical_path=/work/paper/source_data/BEATAML_TP53_v1/raw/beataml_wv1to4_clinical.xlsx
+counts_n=710
+mutations_shape=(11721, 32)
+gene_col=symbol
+effect_col=variant_classification
+mut_id_col=dbgap_sample_id
+counts_key_level=rnaseq
+clinical_filter_applied=True
+TP53_rows=173
+TP53_protein_altering_rows=173
+TP53_mut_raw_ids=82
+clinical_subject_col=dbgap_subject_id
+clinical_rnaseq_col=dbgap_rnaseq_sample
+clinical_dnaseq_col=dbgap_dnaseq_sample
+clinical_tp53_col=TP53
+clinical_tp53_pos_subjects=81
+group_counts={'TP53_wt_wes': 552, 'TP53_mut_wes': 58, 'TP53_clinical_only': 3}

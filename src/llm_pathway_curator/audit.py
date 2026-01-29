@@ -246,7 +246,7 @@ def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.05) -> float:
 
 
 def _get_context_proxy_key_fields(
-    card: SampleCard, default: str = "context_keys,term_uid,cancer,context_swap_to"
+    card: SampleCard, default: str = "ctx0,context_keys,term_uid,cancer"
 ) -> list[str]:
     """
     Comma-separated list of fields to build deterministic proxy key.
@@ -392,7 +392,7 @@ def _row_context_swap_active(row: pd.Series) -> bool:
     v = row.get("context_swap_active", None)
     if not _is_na_scalar(v):
         # Robust: avoid bool("False")==True
-        return _as_bool(v, default=True)
+        return _as_bool(v, default=False)
 
     # 2) Variant marker (recommended)
     variant = row.get("variant", None)

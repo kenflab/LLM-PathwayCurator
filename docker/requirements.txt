@@ -12,4 +12,4 @@ google-generativeai
 # Safety net (optional; keep if you might use it in modules/validation later)
 networkx>=3.2
 jsonschema>=4.21
-networkx
+openpyxl>=3.1

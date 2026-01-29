@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "abstain_reason": "nan",
+  "fail_reason": "nan",
+  "audit_notes": "nan",
+  "link_ok": true,
+  "stability_ok": true,
+  "stress_evaluated": false,
+  "stress_ok": false,
+  "tau_used": 0.8,
+  "term_survival_agg": 1.0,
+  "stability_scope": "module",
+  "evidence_key": "73cbba12ef1c",
+  "gene_set_hash_effective": "73cbba12ef1c",
+  "gene_set_hash_match_mode": "trim",
+  "term_ids_set_hash": "d89dadd0d382",
+  "direction_norm": "up"
+}
