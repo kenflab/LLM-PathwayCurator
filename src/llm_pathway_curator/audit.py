@@ -617,7 +617,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
         v = row.get("context_review_evaluated")
         if not _is_na_scalar(v):
             try:
-                ev = bool(v)
+                ev = _as_bool(v, default=False)
             except Exception:
                 ev = False
 
@@ -652,7 +652,7 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
         if _is_na_scalar(v):
             return (False, "", "context_evaluated=NA")
         try:
-            ev = bool(v)
+            ev = _as_bool(v, default=False)
         except Exception:
             return (False, "", "context_evaluated invalid")
 
@@ -959,7 +959,7 @@ def _apply_external_stress(
                 )
             return
 
-        ok = bool(v)
+        ok = _as_bool(v, default=False)
         out.at[i, "stress_ok"] = ok
 
         if ok:
@@ -1807,9 +1807,7 @@ def audit_claims(
                         gene_set_hash=str(gsh_norm or ""),
                     )
                     out.at[i, "context_score_proxy_u01"] = float(u01)
-                    out.at[i, "context_score_proxy_p_warn"] = float(
-                        _get_context_proxy_warn_p(card, default=0.2)
-                    )
+                    out.at[i, "context_score_proxy_p_warn"] = float(_get_context_proxy_warn_p(card))
                     out.at[i, "context_score_proxy_p_warn_eff"] = float(p_warn_eff)
                     out.at[i, "context_score_proxy_key_base"] = str(key_base)
 

@@ -338,7 +338,7 @@ def plot_panel_B(
     # Merge legends from both axes
     h1, l1 = ax1.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ax1.legend(h1 + h2, l1 + l2, loc="lower left", bbox_to_anchor=(0.45, 0.03), frameon=False)
+    ax1.legend(h1 + h2, l1 + l2, loc="upper left", bbox_to_anchor=(0.45, 0.9), frameon=False)
 
     fig.tight_layout(rect=[0.0, 0.0, 0.80, 1.0])
     out_path.parent.mkdir(parents=True, exist_ok=True)

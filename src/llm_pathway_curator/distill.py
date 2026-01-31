@@ -160,9 +160,10 @@ def _perturb_genes(
       - dropout: remove each gene with prob p_drop
       - add/jitter: add ~p_add * |genes| random genes from global pool
 
+    min_genes:
+      - always enforce a hard floor by adding back from originals when needed
     rescue:
-      - if True, enforce at least min_genes kept by adding back from originals
-      - if False, allow full dropout
+      - retained for backward compatibility; no longer controls the hard floor
     """
     if not genes:
         return set()
@@ -172,11 +173,13 @@ def _perturb_genes(
     keep_mask = rng.random(len(g_arr)) >= p_drop
     kept = g_arr[keep_mask].tolist()
 
-    if rescue and len(kept) < min_genes and len(g_arr) > 0:
+    # Enforce a hard floor when min_genes requests it.
+    # This makes min_keep_frac/min_evidence_genes actually work even if rescue=False.
+    if len(kept) < min_genes and len(g_arr) > 0:
         need = min_genes - len(kept)
         kept_set = set([str(g) for g in kept])
         remaining = [g for g in genes if str(g) not in kept_set]
-        if remaining:
+        if remaining and need > 0:
             add_back = rng.choice(
                 np.array(remaining, dtype=object),
                 size=min(need, len(remaining)),
@@ -314,9 +317,16 @@ def _loo_survival_from_replicates(
             if direction_match and (base_dir in {"up", "down"}) and (d_rep in {"up", "down"}):
                 if d_rep != base_dir:
                     continue
-
-            j, recall, prec = _compute_similarity_metrics(base_genes, g_rep)
-            if (j >= j_min) and (recall >= r_min) and (prec >= p_min):
+            j, recall, precision = _compute_similarity_metrics(base_genes, g_rep)
+            n0 = len(base_genes)
+            j_thr, r_thr, p_thr = (
+                (0.30, 0.60, 0.60)
+                if n0 <= 5
+                else (0.45, 0.70, 0.70)
+                if n0 <= 10
+                else (j_min, r_min, p_min)
+            )
+            if (j >= j_thr) and (recall >= r_thr) and (precision >= p_thr):
                 ok += 1
 
         surv = ok / float(total) if total > 0 else pd.NA
@@ -583,6 +593,15 @@ def distill_evidence(
             rs: list[float] = []
             ps: list[float] = []
 
+            n0 = len(orig)
+            j_thr, r_thr, p_thr = (
+                (0.30, 0.60, 0.60)
+                if n0 <= 5
+                else (0.45, 0.70, 0.70)
+                if n0 <= 10
+                else (j_min, r_min, p_min)
+            )
+
             for _ in range(n_reps):
                 pert = _perturb_genes(
                     xs,
@@ -599,11 +618,11 @@ def distill_evidence(
                     if pert_hash != base_hash:
                         drift_n += 1
 
-                j, recall, precision = _compute_similarity_metrics(orig, pert)
+                j, rec, prec = _compute_similarity_metrics(orig, pert)
                 js.append(j)
-                rs.append(recall)
-                ps.append(precision)
-                if (j >= j_min) and (recall >= r_min) and (precision >= p_min):
+                rs.append(rec)
+                ps.append(prec)
+                if (j >= j_thr) and (rec >= r_thr) and (prec >= p_thr):
                     ok += 1
 
             term_surv.append(ok / float(n_reps))
