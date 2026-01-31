@@ -3004,7 +3004,9 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             }
         )
 
-        distilled2 = attach_module_ids(distilled, mod_out.term_modules_df)
+        distilled2 = attach_module_ids(
+            distilled, mod_out.term_modules_df, modules_df=mod_out.modules_df
+        )
         dist2_path = outdir / "distilled.with_modules.tsv"
         _write_tsv(distilled2, dist2_path)
         meta["artifacts"]["distilled_with_modules_tsv"] = str(dist2_path)

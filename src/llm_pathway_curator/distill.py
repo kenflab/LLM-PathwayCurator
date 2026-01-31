@@ -512,7 +512,7 @@ def distill_evidence(
 
         # convenience fields (downstream expects these columns)
         out["gene_survival"] = out["term_survival"].astype("Float64")
-        out["module_survival"] = _ensure_float64_na_series(len(out))
+        # out["module_survival"] = _ensure_float64_na_series(len(out))
 
         out["distill_loo_is_proxy"] = True
         out["distill_loo_baseline_id"] = baseline_id
@@ -664,7 +664,7 @@ def distill_evidence(
 
         # convenience fields (downstream expects these columns)
         out["gene_survival"] = out["term_survival"].astype("Float64")
-        out["module_survival"] = _ensure_float64_na_series(len(out))
+        # out["module_survival"] = _ensure_float64_na_series(len(out))
 
     # Gates for downstream
     if "keep_term" not in out.columns:

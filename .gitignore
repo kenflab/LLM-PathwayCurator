@@ -51,3 +51,9 @@ paper/source_data/**/fig/* copy*.pdf
 
 # Fig2 throwaway copies
 paper/source_data/**/fig/* copy*.pdf
+# macOS / junk
+.Trash-*
+.DS_Store
+# macOS / junk
+.Trash-*
+.DS_Store

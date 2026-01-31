@@ -431,6 +431,11 @@ def factorize_modules_connected_components(
                 "module_terms_hash12",
                 "module_genes_hash12",
                 "module_content_hash12",
+                # optional survival (only filled when term_survival exists upstream)
+                "module_survival",
+                "module_survival_n_ok",
+                "module_survival_n_total",
+                "module_survival_source",
             ]
         )
         term_modules_df = pd.DataFrame(columns=["term_uid", "module_id"])
@@ -630,6 +635,60 @@ def factorize_modules_connected_components(
         .reset_index(drop=True)
     )
 
+    # -------------------------
+    # Optional: module_survival (computed from term_survival if available)
+    # -------------------------
+    if "term_survival" in evidence_df.columns and (term_id_col in evidence_df.columns):
+        try:
+            tmp = evidence_df[[term_id_col, "term_survival"]].copy()
+            tmp[term_id_col] = tmp[term_id_col].astype(str).str.strip()
+            tmp["term_survival"] = pd.to_numeric(tmp["term_survival"], errors="coerce")
+
+            # Join term -> module, then aggregate
+            j = tmp.merge(
+                term_modules_df[[term_id_col, "module_id"]],
+                on=term_id_col,
+                how="inner",
+                validate="m:1",
+            )
+            j["module_id"] = j["module_id"].astype(str).str.strip()
+
+            g = j.groupby("module_id")["term_survival"]
+            ms = g.min()
+            n_ok = g.apply(lambda s: int(pd.to_numeric(s, errors="coerce").notna().sum()))
+            n_total = g.size().astype(int)
+
+            # Attach to modules_df (left join; preserve module ordering)
+            modules_df = modules_df.merge(
+                ms.rename("module_survival").reset_index(),
+                on="module_id",
+                how="left",
+                validate="1:1",
+            )
+            modules_df = modules_df.merge(
+                n_ok.rename("module_survival_n_ok").reset_index(),
+                on="module_id",
+                how="left",
+                validate="1:1",
+            )
+            modules_df = modules_df.merge(
+                n_total.rename("module_survival_n_total").reset_index(),
+                on="module_id",
+                how="left",
+                validate="1:1",
+            )
+            modules_df["module_survival_source"] = "term_survival:min"
+        except Exception:
+            # Contract-safe: never break module factorization due to survival attach
+            if "module_survival" not in modules_df.columns:
+                modules_df["module_survival"] = pd.NA
+            if "module_survival_n_ok" not in modules_df.columns:
+                modules_df["module_survival_n_ok"] = pd.NA
+            if "module_survival_n_total" not in modules_df.columns:
+                modules_df["module_survival_n_total"] = pd.NA
+            if "module_survival_source" not in modules_df.columns:
+                modules_df["module_survival_source"] = ""
+
     return ModuleOutputs(modules_df=modules_df, term_modules_df=term_modules_df, edges_df=edges_f)
 
 
@@ -638,6 +697,7 @@ def attach_module_ids(
     term_modules_df: pd.DataFrame,
     *,
     term_id_col: str = "term_uid",
+    modules_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col} (hint: run distill first)")
@@ -651,6 +711,24 @@ def attach_module_ids(
         validate="m:1",
     )
     out["module_id_missing"] = out["module_id"].isna()
+
+    # Optional attach: module_survival (and related columns) onto each term row
+    if modules_df is not None and (not modules_df.empty) and ("module_id" in modules_df.columns):
+        cols = ["module_id"]
+        for c in [
+            "module_survival",
+            "module_survival_n_ok",
+            "module_survival_n_total",
+            "module_survival_source",
+        ]:
+            if c in modules_df.columns:
+                cols.append(c)
+
+        if len(cols) > 1:
+            md = modules_df[cols].copy()
+            md["module_id"] = md["module_id"].astype(str).str.strip()
+            out = out.merge(md, on="module_id", how="left", validate="m:1")
+
     return out
 
 

@@ -1,2 +1,0 @@
-benchmark_id	condition	method	variant	gate_mode	tau	coverage_pass	abstain_rate_total	fail_rate_total	fail_rate_answered	n_total	n_pass	n_abstain	n_fail	n_answered	risk_human_reject	risk_human_nonaccept	n_pass_labeled	risk_proxy	_src
-	HNSC	ours	ours	hard	0.8	0.55	0.2	0.25	0.3125	20.0	11.0	4.0	5.0	16.0			0.0	0.0	/work/paper/source_data/PANCAN_TP53_v1/out_llm/HNSC/ours/gate_hard/tau_0.80/audit_log.tsv
