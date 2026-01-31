@@ -25,19 +25,21 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def infer_variant_from_path(p: Path) -> str:
-    # expects .../out/BEATAML/<variant>/gate_hard/tau_0.90/audit_log.tsv
+    # .../out_llm/HNSC/ours/gate_hard/tau_0.80/audit_log.tsv
     parts = [x for x in p.parts]
-    if "BEATAML" in parts:
-        i = parts.index("BEATAML")
-        if i + 1 < len(parts):
-            return parts[i + 1]
-    return p.parent.parent.parent.name  # fallback
+    # variant is the segment after condition (HNSC)
+    # find ".../out*/<condition>/<variant>/gate_*/tau_*/audit_log.tsv"
+    for i in range(len(parts) - 1):
+        if parts[i] in ("out", "out_llm") and i + 2 < len(parts):
+            return parts[i + 2]  # variant
+    return p.parent.parent.parent.name
 
 
-def canon_variant(v: str) -> str:
+def canon_variant(v: str, *, is_llm: bool = False) -> str:
     v = (v or "").strip().lower()
+
     if v == "ours":
-        return "Proposed"
+        return "Proposed (LLM)" if is_llm else "Proposed"
     if v in ("context_swap", "shuffled_context", "shuffled-context"):
         return "Context swap"
     if v == "stress":
@@ -96,7 +98,9 @@ def main() -> None:
         if "status" not in df.columns or "abstain_reason" not in df.columns:
             raise ValueError(f"Missing required columns in {p}: need status + abstain_reason")
 
-        variant = canon_variant(infer_variant_from_path(p))
+        is_llm = "out_llm" in str(p)
+
+        variant = canon_variant(infer_variant_from_path(p), is_llm=is_llm)
         n_total = int(len(df))
         abd = df[df["status"] == "ABSTAIN"].copy()
         n_abstain = int(len(abd))
@@ -145,7 +149,8 @@ def main() -> None:
     piv = grp.pivot(index="variant", columns="reason2", values="count").fillna(0.0)
 
     # order variants (match your figure identity)
-    order = ["Proposed", "Context swap", "Evidence dropout"]
+    order = ["Proposed", "Context swap", "Evidence dropout", "Proposed (LLM)"]
+
     idx = [v for v in order if v in piv.index] + [v for v in piv.index if v not in set(order)]
     piv = piv.loc[idx]
 
@@ -157,7 +162,7 @@ def main() -> None:
     denom = meta["n_abstain"].replace(0, 1)
     prop = piv.div(denom, axis=0)
 
-    fig = plt.figure(figsize=(7.7, 5.1), dpi=300)
+    fig = plt.figure(figsize=(7.6, 5.5), dpi=300)
     ax = fig.add_subplot(111)
 
     bottom = None
@@ -171,7 +176,7 @@ def main() -> None:
             bottom = bottom + y
 
     ax.set_ylim(0, 1.0)
-    ax.set_ylabel("ABSTAIN reason composition\n(fraction among ABSTAIN)")
+    ax.set_ylabel("ABSTAIN reason composition\n (fraction among ABSTAIN)")
     ax.set_xlabel("")
     ax.grid(True, axis="y", linewidth=0.5, alpha=0.3)
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
