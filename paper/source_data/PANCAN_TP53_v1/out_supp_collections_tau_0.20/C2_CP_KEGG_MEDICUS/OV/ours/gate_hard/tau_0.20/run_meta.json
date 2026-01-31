@@ -1,0 +1,305 @@
+{
+  "tool": "llm-pathway-curator",
+  "cmd": "run",
+  "run_id": "1769813230_6d799ce686",
+  "status": "ok",
+  "started_epoch": 1769813230.5258052,
+  "config": {
+    "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/OV.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
+    "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/OV.hard.sample_card.json",
+    "outdir": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20",
+    "force": true,
+    "seed": 42,
+    "run_meta_name": "run_meta.json",
+    "tau": 0.2,
+    "k_claims": 50,
+    "stress_evidence_dropout_p": 0.0,
+    "stress_evidence_dropout_min_keep": 1,
+    "stress_contradictory_p": 0.0,
+    "stress_contradictory_max_extra": 0
+  },
+  "env": {
+    "python": "3.12.12 | packaged by conda-forge | (main, Oct 22 2025, 23:16:53) [GCC 14.3.0]",
+    "platform": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.39",
+    "pandas": "2.3.3",
+    "tool_version": "0.0.0"
+  },
+  "inputs": {
+    "evidence_table": {
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/OV.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
+      "size_bytes": 45013,
+      "mtime_epoch": 1769793403.0702367
+    },
+    "sample_card": {
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/OV.hard.sample_card.json",
+      "size_bytes": 468,
+      "mtime_epoch": 1769270066.5593154
+    },
+    "sample_card_sha256": "245b713d1f43124714db8a7f861090aadc9e15b7657a8a94e9d0e2a3ed73a71e",
+    "evidence_summary": {
+      "contract_version": "v1",
+      "n_terms": 184,
+      "n_sources": 1,
+      "sources": [
+        "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez"
+      ],
+      "direction_counts": {
+        "down": 115,
+        "up": 69
+      },
+      "genes_per_term_median": 6.0,
+      "genes_per_term_p90": 13.0,
+      "genes_per_term_p10": 4.0,
+      "n_terms_genes_le1": 1,
+      "read_mode": "tsv",
+      "qval_source_counts": {
+        "qval": 184
+      },
+      "health": {
+        "contract_version": "v1",
+        "n_terms": 184,
+        "n_terms_genes_le1": 1,
+        "genes_per_term_median": 6.0,
+        "qval_source_counts": {
+          "qval": 184
+        },
+        "n_invalid_total": 0,
+        "n_invalid_empty_evidence_genes": 0,
+        "invalid_sample": [],
+        "salvage_sample": [],
+        "drop_invalid": true,
+        "strict": false,
+        "bh_group_cols": [
+          "source",
+          "direction"
+        ],
+        "read_mode": "tsv",
+        "n_salvage_term_id_from_name": 0,
+        "n_salvage_term_name_from_id": 0,
+        "n_term_id_salvaged_kept": 0,
+        "n_term_name_salvaged_kept": 0
+      },
+      "aliasing": {
+        "raw_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ],
+        "normalized_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ],
+        "mapped_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ]
+      }
+    },
+    "evidence_normalized_sha256": "1cf9693c9607e741039a97d83492493dce3a7b564f6e02ccdc05373520e1d1d2",
+    "sample": {
+      "condition": "OV",
+      "tissue": "tumor",
+      "perturbation": "genotype",
+      "comparison": "TP53_mut_vs_TP53_wt",
+      "species": ""
+    },
+    "sample_card_raw_sha256": "8172115c289c60130a7e7d79da6bff38acef0bbf9ceb1d7cf07cd540986f0343",
+    "sample_card_normalized_sha256": "8172115c289c60130a7e7d79da6bff38acef0bbf9ceb1d7cf07cd540986f0343",
+    "audit": {
+      "tau_cfg": 0.2,
+      "tau_card": 0.8,
+      "tau_effective": 0.2,
+      "min_gene_overlap": 1
+    },
+    "modules": {
+      "requested_method": "term_jaccard_cc",
+      "effective_method": "term_jaccard_cc",
+      "min_shared_genes": 3,
+      "jaccard_min": 0.1,
+      "term_id_col": "term_uid",
+      "genes_col": "evidence_genes",
+      "n_terms": 184,
+      "n_pairs_est": 16836,
+      "max_terms_for_pairwise": 1200
+    },
+    "modules_stats": {
+      "n_modules": 51,
+      "n_terms_median": 1.0,
+      "n_genes_median": 7.0,
+      "n_terms_max": 27,
+      "n_genes_max": 45
+    },
+    "claims": {
+      "context_gate_review_compat_final": {
+        "gate_mode": "hard",
+        "review_mode": "proxy",
+        "changed": false,
+        "updates": {},
+        "reasons": [],
+        "inputs": {
+          "gate_mode": "hard",
+          "review_mode": "proxy",
+          "swap_active": false
+        }
+      },
+      "k_source": "cfg",
+      "k_cfg": 50,
+      "k_env": "",
+      "k_card": "",
+      "k_effective": 50,
+      "k_env_raw": "",
+      "context_gate_mode": "hard",
+      "context_review_mode": "proxy",
+      "context_ctx_id_original": "OV|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_ctx_id_effective": "OV|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_swap_from": "",
+      "context_swap_to": "",
+      "context_weight_learning": {
+        "evaluated": false,
+        "reason": "disabled"
+      },
+      "context_score_proxy": {
+        "evaluated": true,
+        "ctx_id": "OV|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "weight_col": "weight_log_odds",
+        "reason": "EMPTY_WEIGHTS"
+      },
+      "context_rerank": {
+        "enabled": false,
+        "lambda": 0.25,
+        "timing": "post_review_context_score",
+        "rank_key": "survival_score*(1+lambda*context_score)"
+      },
+      "context_score_source": "proxy_review_confidence",
+      "n_proposed_rows": 50,
+      "n_proposed_cols": 68,
+      "claim_payload_col": "claim_json",
+      "claim_json_present": true,
+      "context_review_runtime": {
+        "evaluated": true,
+        "mode": "proxy_context_v2",
+        "gate_mode": "hard",
+        "ctx_id": "OV|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "thresholds": {
+          "p_fail": 0.05,
+          "p_warn": 0.2
+        },
+        "anchor_used": true,
+        "anchor_info": {
+          "ok": true,
+          "reason": "OK",
+          "tokens": [
+            "genotype",
+            "tp53",
+            "mut"
+          ],
+          "module_col": "module_id",
+          "n_anchor_terms": 33,
+          "n_anchor_modules": 9,
+          "anchor_terms_preview": [
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_SNCA_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_INACTIVATED_UBQLN2_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_SOD1_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_INACTIVATED_VCP_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_ANTEROGRADE_AXONAL_TRANSPORT",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_MACHR_CA2_APOPTOTIC_PATHWAY",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_HTT_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_ELECTRON_TRANSFER_IN_COMPLEX_IV",
+            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_ELECTRON_TRANSFER_IN_COMPLEX_I"
+          ]
+        },
+        "n_eval": 50,
+        "n_pass": 8,
+        "n_fail": 2,
+        "n_abstain": 40,
+        "n_anchor_downgrade": 32
+      },
+      "context_gate_pre_audit": {
+        "evaluated": true,
+        "gate_mode": "hard",
+        "reason": "OK",
+        "n_rows": 50,
+        "n_blocked": 42,
+        "eligible_written": true,
+        "preselect_tau_gate_written": true
+      }
+    },
+    "llm": {
+      "claim": {
+        "enabled": false,
+        "claim_mode_env": "",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "review": {
+        "enabled": false,
+        "review_mode": "proxy",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "select_entrypoint": {
+        "backend_attached": false,
+        "backend_role": "none"
+      }
+    },
+    "stress": {
+      "evidence_dropout_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "contradictory_p": 0.0,
+      "contradictory_max_extra": 0,
+      "seed": 42
+    },
+    "stress_runtime": {
+      "dropout": {
+        "evaluated": true,
+        "enabled": false,
+        "p_drop": 0.0,
+        "min_keep": 1
+      },
+      "dropout_scoring": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "evidence_dropout_p==0"
+      },
+      "contradictory": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "contradictory_p==0",
+        "n_injected": 0
+      }
+    }
+  },
+  "artifacts": {
+    "evidence_normalized_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/evidence.normalized.tsv",
+    "sample_card_raw_json": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/sample_card.raw.json",
+    "sample_card_normalized_json": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/sample_card.normalized.json",
+    "distilled_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/distilled.tsv",
+    "modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/modules.tsv",
+    "term_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/term_modules.tsv",
+    "term_gene_edges_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/term_gene_edges.tsv",
+    "distilled_with_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/distilled.with_modules.tsv",
+    "claims_proposed_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/claims.proposed.tsv",
+    "audit_log_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/audit_log.tsv",
+    "report_dir": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20",
+    "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/report.jsonl"
+  },
+  "step": "report_jsonl",
+  "finished_epoch": 1769813231.258352
+}
