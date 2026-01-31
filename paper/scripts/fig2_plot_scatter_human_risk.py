@@ -38,6 +38,8 @@ def variant_label(variant: str, *, mode: str = "proposed") -> str:
         return "Context swap"
     if v == "stress":
         return "Evidence dropout"
+    if v == "ours_llm":
+        return "Proposed\n (LLM, τ-audit)"
     return str(variant)
 
 
@@ -50,6 +52,8 @@ def variant_style(variant: str) -> dict[str, object]:
         return {"linestyle": "None", "marker": "x"}
     if v == "stress":
         return {"linestyle": "None", "marker": "s"}
+    if v == "ours_llm":
+        return {"linestyle": "None", "marker": "D"}  # diamond
     return {"linestyle": "None", "marker": "o"}
 
 

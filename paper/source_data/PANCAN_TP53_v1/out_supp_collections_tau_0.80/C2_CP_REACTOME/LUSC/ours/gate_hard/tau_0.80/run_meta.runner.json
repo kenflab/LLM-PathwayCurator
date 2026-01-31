@@ -1,0 +1,13 @@
+{
+  "benchmark_id": "PANCAN_TP53_v1",
+  "collection": "Reactome",
+  "collection_suffix": "C2_CP_REACTOME",
+  "condition": "LUSC",
+  "gate_mode": "hard",
+  "k_claims": 50,
+  "runner": "paper/scripts/run_figSx_collections_pipeline.py",
+  "seed": 42,
+  "tau": 0.8,
+  "time_unix": 1769805937,
+  "variant": "ours"
+}

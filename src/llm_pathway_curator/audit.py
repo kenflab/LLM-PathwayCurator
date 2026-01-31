@@ -1399,15 +1399,16 @@ def audit_claims(
     else:
         term_surv = None
 
-    has_module = "module_id" in distilled.columns
-    module_surv = None
-    if has_survival and has_module:
-        tmpm = distilled.copy()
-        tmpm["module_id"] = tmpm["module_id"].astype(str).str.strip()
-        tmpm["term_survival"] = pd.to_numeric(tmpm["term_survival"], errors="coerce")
-        tmpm = tmpm[~tmpm["module_id"].str.lower().isin(_NA_TOKENS_L)]
-        if not tmpm.empty:
-            module_surv = tmpm.groupby("module_id")["term_survival"].min()
+    # NOTE (spec):
+    # Stability aggregation is defined strictly at the TERM level:
+    #   term_survival_agg = min(term_survival over evidence_ref.term_ids)
+    #
+    # We intentionally DO NOT use module-level survival here because:
+    #   - module_survival is often derived from the same term_survival minima,
+    #     making "module" vs "term" paths redundant and confusing.
+    #   - a single, deterministic definition is easier to audit and to describe in Methods.
+    #
+    # module_id remains useful for redundancy control / grouping elsewhere, but not for stability.
 
     tau_default = _get_tau_default(card)
     if tau is not None:
@@ -1680,42 +1681,20 @@ def audit_claims(
             _enforce_reason_vocab(out, i)
             continue
 
-        agg = float("nan")
-        scope = "term"
-
-        if module_surv is not None and module_id and module_id in module_surv.index:
+        # Stability aggregation (TERM-only; spec-level contract)
+        vals: list[float] = []
+        for t in term_ids:
+            v = term_surv.get(t, float("nan"))
             try:
-                agg = float(module_surv.get(module_id, float("nan")))
-                scope = "module"
+                vals.append(float(v))
             except Exception:
-                agg = float("nan")
-                scope = "term"
+                vals.append(float("nan"))
 
-        if pd.isna(agg):
-            vals: list[float] = []
-            for t in term_ids:
-                v = term_surv.get(t, float("nan"))
-                try:
-                    vals.append(float(v))
-                except Exception:
-                    vals.append(float("nan"))
-            agg = float(pd.Series(vals).min(skipna=True)) if vals else float("nan")
-            scope = "term"
+        agg = float(pd.Series(vals).min(skipna=True)) if vals else float("nan")
 
         out.at[i, "term_survival_agg"] = agg
-        out.at[i, "stability_scope"] = scope
-
-        if scope == "module":
-            out.at[i, "module_reason"] = f"module_survival_used(module_id={module_id})"
-        else:
-            if module_id and (
-                module_surv is None or module_id not in getattr(module_surv, "index", [])
-            ):
-                out.at[i, "module_reason"] = (
-                    f"term_survival_used(module_id_missing_or_unseen={module_id})"
-                )
-            else:
-                out.at[i, "module_reason"] = "term_survival_used"
+        out.at[i, "stability_scope"] = "term"
+        out.at[i, "module_reason"] = "term_survival_used"
 
         if pd.isna(agg):
             out.at[i, "status"] = "ABSTAIN"
@@ -1728,7 +1707,7 @@ def audit_claims(
             continue
 
         if agg < float(tau_row):
-            msg = f"survival[{scope}]={agg:.3f} < tau={float(tau_row):.2f}"
+            msg = f"survival[term]={agg:.3f} < tau={float(tau_row):.2f}"
 
             if stability_gate_mode == "off":
                 out.at[i, "stability_ok"] = True
