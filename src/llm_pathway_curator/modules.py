@@ -245,8 +245,128 @@ def _connected_components_from_bipartite_edges(edges: pd.DataFrame) -> pd.DataFr
 
 
 # -------------------------
-# Term-term graph by shared genes (paper-friendly)
+# Term-term graph by shared genes
 # -------------------------
+def _estimate_pair_stats(
+    term_to_genes: dict[str, set[str]],
+    *,
+    pair_sample_max: int = 200000,
+    seed: int = 0,
+) -> dict[str, object]:
+    """
+    Estimate pairwise connectivity stats for term-term graph construction.
+
+    Returns:
+      - n_terms
+      - n_pairs_total
+      - n_pairs_sampled
+      - shared_pos_rate: P(shared>0)
+      - shared_p50/p75/p90/p95/p99 over sampled pairs (shared genes count)
+      - jaccard_p50/p75/p90/p95/p99 over sampled pairs (jaccard)
+    """
+    import random
+
+    terms = sorted(term_to_genes.keys())
+    n_terms = len(terms)
+    n_pairs_total = n_terms * (n_terms - 1) // 2
+
+    if n_terms < 2 or n_pairs_total == 0:
+        return {
+            "n_terms": int(n_terms),
+            "n_pairs_total": int(n_pairs_total),
+            "n_pairs_sampled": 0,
+            "shared_pos_rate": 0.0,
+        }
+
+    rng = random.Random(int(seed))
+    max_s = int(pair_sample_max) if pair_sample_max is not None else 0
+    n_pairs_sampled = min(int(n_pairs_total), max_s) if max_s > 0 else int(n_pairs_total)
+
+    shared_vals: list[int] = []
+    jac_vals: list[float] = []
+    shared_pos = 0
+
+    # If sampling all pairs is feasible, do it deterministically.
+    do_all = n_pairs_sampled == int(n_pairs_total)
+
+    if do_all:
+        for i, a in enumerate(terms):
+            ga = term_to_genes.get(a, set())
+            for b in terms[i + 1 :]:
+                gb = term_to_genes.get(b, set())
+
+                if not ga or not gb:
+                    inter = 0
+                    union = len(ga | gb) if (ga or gb) else 0
+                else:
+                    inter = len(ga & gb)
+                    union = len(ga | gb)
+
+                if inter > 0:
+                    shared_pos += 1
+                jac = float(inter / union) if union else 0.0
+
+                shared_vals.append(int(inter))
+                jac_vals.append(float(jac))
+    else:
+        seen: set[tuple[int, int]] = set()
+        while len(seen) < n_pairs_sampled:
+            i = rng.randrange(0, n_terms - 1)
+            j = rng.randrange(i + 1, n_terms)
+            seen.add((i, j))
+
+        for i, j in seen:
+            a = terms[i]
+            b = terms[j]
+            ga = term_to_genes.get(a, set())
+            gb = term_to_genes.get(b, set())
+            if not ga or not gb:
+                inter = 0
+                union = len(ga | gb) if (ga or gb) else 0
+            else:
+                inter = len(ga & gb)
+                union = len(ga | gb)
+            if inter > 0:
+                shared_pos += 1
+            jac = float(inter / union) if union else 0.0
+            shared_vals.append(int(inter))
+            jac_vals.append(float(jac))
+
+    def _pct(xs: list[float], p: float) -> float:
+        if not xs:
+            return 0.0
+        ys = sorted(xs)
+        if len(ys) == 1:
+            return float(ys[0])
+        k = (len(ys) - 1) * (p / 100.0)
+        f = int(k)
+        c = min(f + 1, len(ys) - 1)
+        if f == c:
+            return float(ys[f])
+        d0 = ys[f] * (c - k)
+        d1 = ys[c] * (k - f)
+        return float(d0 + d1)
+
+    shared_pos_rate = float(shared_pos / len(shared_vals)) if shared_vals else 0.0
+
+    return {
+        "n_terms": int(n_terms),
+        "n_pairs_total": int(n_pairs_total),
+        "n_pairs_sampled": int(len(shared_vals)),
+        "shared_pos_rate": float(shared_pos_rate),
+        "shared_p50": float(_pct([float(x) for x in shared_vals], 50)),
+        "shared_p75": float(_pct([float(x) for x in shared_vals], 75)),
+        "shared_p90": float(_pct([float(x) for x in shared_vals], 90)),
+        "shared_p95": float(_pct([float(x) for x in shared_vals], 95)),
+        "shared_p99": float(_pct([float(x) for x in shared_vals], 99)),
+        "jaccard_p50": float(_pct(jac_vals, 50)),
+        "jaccard_p75": float(_pct(jac_vals, 75)),
+        "jaccard_p90": float(_pct(jac_vals, 90)),
+        "jaccard_p95": float(_pct(jac_vals, 95)),
+        "jaccard_p99": float(_pct(jac_vals, 99)),
+    }
+
+
 def _build_term_gene_sets(edges: pd.DataFrame) -> dict[str, set[str]]:
     term_to_genes: dict[str, set[str]] = {}
     if edges.empty:
@@ -353,12 +473,19 @@ def factorize_modules_connected_components(
     *,
     method: ModuleMethod = "term_jaccard_cc",
     module_prefix: str = "M",
-    max_gene_term_degree: int | None = 200,
+    max_gene_term_degree: int | None = None,
     max_term_degree: int | None = None,  # deprecated alias
+    hub_degree_quantile: float | None = 0.995,
     min_shared_genes: int = 3,
     jaccard_min: float = 0.10,
     term_id_col: str = "term_uid",
     genes_col: str = "evidence_genes",
+    sparsity_mode: Literal["auto", "off"] = "auto",
+    shared_pos_target: float = 0.10,
+    sparse_relax_min_shared_genes: int = 2,
+    sparse_relax_jaccard_min: float = 0.02,
+    pair_sample_max: int = 200000,
+    seed: int = 42,
 ) -> ModuleOutputs:
     """
     Build modules from evidence.
@@ -382,6 +509,30 @@ def factorize_modules_connected_components(
     requested_method: str = str(method)
 
     edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
+
+    # --- Pairwise sparsity stats (RAW; pre hub-filter) ---
+    # Rationale:
+    #   - We must not change HALLMARK/GO behavior due to hub filtering.
+    #   - Use raw edges to decide whether sparsity tuning should trigger.
+    term_to_genes_raw = _build_term_gene_sets(edges)
+    pair_stats_raw = _estimate_pair_stats(
+        term_to_genes_raw, pair_sample_max=pair_sample_max, seed=seed
+    )
+
+    # Data-driven hub threshold
+    # Only used when caller explicitly sets max_gene_term_degree=None and provides
+    # hub_degree_quantile.
+    if hub_degree_quantile is not None and max_gene_term_degree is None and max_term_degree is None:
+        try:
+            deg0 = edges.groupby("gene_id")["term_uid"].nunique()
+            q = float(hub_degree_quantile)
+            q = min(max(q, 0.0), 1.0)
+            thr = int(deg0.quantile(q))
+            thr = max(1, thr)
+            max_gene_term_degree = thr
+        except Exception:
+            # Contract-safe fallback
+            max_gene_term_degree = 200
 
     edges_f = filter_hub_genes(
         edges, max_gene_term_degree=max_gene_term_degree, max_term_degree=max_term_degree
@@ -446,6 +597,43 @@ def factorize_modules_connected_components(
 
     term_to_genes = _build_term_gene_sets(edges_f)
 
+    # Pairwise sparsity stats:
+    #   - raw (pre hub-filter): used for tuning decision (protects HALLMARK/GO)
+    #   - filtered (post hub-filter): recorded for audit/debug only
+    pair_stats_filtered = _estimate_pair_stats(
+        term_to_genes, pair_sample_max=pair_sample_max, seed=seed
+    )
+    edges_f.attrs["modules"].update(
+        {
+            "pair_stats_raw": pair_stats_raw,
+            "pair_stats_filtered": pair_stats_filtered,
+            "pair_stats_for_tuning": "raw_pre_hub_filter",
+        }
+    )
+
+    tuned_min_shared = int(min_shared_genes)
+    tuned_jaccard = float(jaccard_min)
+    did_tune = False
+
+    if sparsity_mode == "auto" and method == "term_jaccard_cc":
+        spr = float(pair_stats_raw.get("shared_pos_rate", 0.0) or 0.0)
+        edges_f.attrs["modules"]["shared_pos_rate_for_tuning"] = float(spr)
+
+        if spr < float(shared_pos_target):
+            tuned_min_shared = int(sparse_relax_min_shared_genes)
+            tuned_jaccard = float(sparse_relax_jaccard_min)
+            did_tune = True
+            edges_f.attrs["modules"].update(
+                {
+                    "sparsity_detected": True,
+                    "tuned_min_shared_genes": tuned_min_shared,
+                    "tuned_jaccard_min": tuned_jaccard,
+                    "tune_reason": f"shared_pos_rate<{shared_pos_target}",
+                }
+            )
+        else:
+            edges_f.attrs["modules"]["sparsity_detected"] = False
+
     # record pairwise safety info (even if we don't use it)
     n_terms = int(len(term_to_genes))
     n_pairs_est = int(n_terms * (n_terms - 1) / 2)
@@ -477,14 +665,14 @@ def factorize_modules_connected_components(
         effective_method = "bipartite_cc"
 
     elif method == "term_jaccard_cc":
-        max_terms_for_pairwise = 1200
+        max_terms_for_pairwise = 3500
         try:
             # Best-effort (attrs can be lost across merges/copies); default is explicit.
             max_terms_for_pairwise = int(
-                getattr(evidence_df, "attrs", {}).get("max_terms_for_pairwise", 1200)
+                getattr(evidence_df, "attrs", {}).get("max_terms_for_pairwise", 3500)
             )
         except Exception:
-            max_terms_for_pairwise = 1200
+            max_terms_for_pairwise = 3500
 
         edges_f.attrs["modules"]["max_terms_for_pairwise"] = int(max_terms_for_pairwise)
 
@@ -521,21 +709,127 @@ def factorize_modules_connected_components(
         else:
             comp_map = _term_term_components_shared_genes(
                 term_to_genes,
-                min_shared_genes=min_shared_genes,
-                jaccard_min=jaccard_min,
+                min_shared_genes=tuned_min_shared,
+                jaccard_min=tuned_jaccard,
             )
-            comp_ids = sorted(set(comp_map.values()))
 
+            # Decide whether to fallback BEFORE constructing jaccard buckets.
+            # ---- Fragmentation diagnostics (once) ----
+            if sparsity_mode == "auto":
+                comp_sizes: dict[int, int] = {}
+                for _, cid in comp_map.items():
+                    comp_sizes[int(cid)] = comp_sizes.get(int(cid), 0) + 1
+
+                n_comps = len(comp_sizes)
+                n_single = sum(1 for s in comp_sizes.values() if s == 1)
+                singleton_frac = (n_single / n_comps) if n_comps > 0 else 1.0
+
+                edges_f.attrs["modules"].update(
+                    {
+                        "singleton_frac": float(singleton_frac),
+                        "did_tune": bool(did_tune),
+                        "effective_min_shared_genes": int(tuned_min_shared),
+                        "effective_jaccard_min": float(tuned_jaccard),
+                    }
+                )
+
+            # ---- Giant-component diagnostics & tighten (auto; prevents anchor collapse) ----
+            def _comp_sizes_from_map(cm: dict[str, int]) -> dict[int, int]:
+                sizes: dict[int, int] = {}
+                for _, cid in cm.items():
+                    sizes[int(cid)] = sizes.get(int(cid), 0) + 1
+                return sizes
+
+            def _largest_frac(sizes: dict[int, int], n_total: int) -> float:
+                if n_total <= 0 or not sizes:
+                    return 0.0
+                return float(max(sizes.values()) / n_total)
+
+            giant_frac_threshold = 0.60
+            tighten_max_iter = 2
+
+            if sparsity_mode == "auto":
+                comp_sizes0 = _comp_sizes_from_map(comp_map)
+                giant_frac0 = _largest_frac(comp_sizes0, n_terms)
+                edges_f.attrs["modules"].update(
+                    {
+                        "largest_component_frac": float(giant_frac0),
+                        "giant_frac_threshold": float(giant_frac_threshold),
+                    }
+                )
+
+                # If giant component dominates, tighten thresholds (opposite of relax)
+                if giant_frac0 >= giant_frac_threshold:
+                    tight_min_shared = int(tuned_min_shared)
+                    tight_jaccard = float(tuned_jaccard)
+                    did_tighten = False
+
+                    for it in range(1, tighten_max_iter + 1):
+                        # tighten schedule: raise shared first, then jaccard
+                        tight_min_shared = max(tight_min_shared, 2) + 1
+                        tight_jaccard = min(0.30, tight_jaccard + 0.02)
+
+                        cm2 = _term_term_components_shared_genes(
+                            term_to_genes,
+                            min_shared_genes=tight_min_shared,
+                            jaccard_min=tight_jaccard,
+                        )
+                        sizes2 = _comp_sizes_from_map(cm2)
+                        giant_frac2 = _largest_frac(sizes2, n_terms)
+
+                        edges_f.attrs["modules"].update(
+                            {
+                                f"tighten_iter_{it}": {
+                                    "min_shared_genes": int(tight_min_shared),
+                                    "jaccard_min": float(tight_jaccard),
+                                    "largest_component_frac": float(giant_frac2),
+                                    "n_components": int(len(sizes2)),
+                                }
+                            }
+                        )
+
+                        if giant_frac2 < giant_frac_threshold:
+                            comp_map = cm2
+                            did_tighten = True
+                            edges_f.attrs["modules"].update(
+                                {
+                                    "giant_detected": True,
+                                    "giant_tighten_applied": True,
+                                    "effective_min_shared_genes": int(tight_min_shared),
+                                    "effective_jaccard_min": float(tight_jaccard),
+                                }
+                            )
+                            break
+
+                    if not did_tighten:
+                        edges_f.attrs["modules"].update(
+                            {
+                                "giant_detected": True,
+                                "giant_tighten_applied": False,
+                                "giant_tighten_reason": (
+                                    f"still giant after {tighten_max_iter} iterations"
+                                ),
+                            }
+                        )
+
+            # ---- Build buckets from comp_map (term -> component id) ----
+            comp_to_terms: dict[int, list[str]] = {}
+            for t, cid in comp_map.items():
+                comp_to_terms.setdefault(int(cid), []).append(str(t))
+
+            comp_ids = sorted(comp_to_terms.keys())
+            buckets = []
             for cid in comp_ids:
-                terms = sorted([t for t, c in comp_map.items() if c == cid])
-                genes_union: set[str] = set()
+                terms = sorted([x for x in comp_to_terms[cid] if str(x).strip()])
+                genes_set: set[str] = set()
                 for t in terms:
-                    genes_union |= set(term_to_genes.get(t, set()))
-                genes = sorted([g for g in genes_union if str(g).strip()])
-                buckets.append((cid, terms, genes))
+                    genes_set |= term_to_genes.get(t, set())
+                genes = sorted([_norm_gene_id(g) for g in genes_set if str(g).strip()])
+                genes = [g for g in genes if g]
+                buckets.append((int(cid), terms, genes))
 
             effective_method = "term_jaccard_cc"
-            edges_f.attrs["modules"]["effective_method"] = "term_jaccard_cc"
+            edges_f.attrs["modules"].update({"effective_method": "term_jaccard_cc"})
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -603,8 +897,14 @@ def factorize_modules_connected_components(
                 "module_effective_method": str(
                     edges_f.attrs["modules"].get("effective_method", effective_method)
                 ),
-                "module_min_shared_genes": int(min_shared_genes),
-                "module_jaccard_min": float(jaccard_min),
+                "module_min_shared_genes": int(
+                    edges_f.attrs.get("modules", {}).get(
+                        "effective_min_shared_genes", min_shared_genes
+                    )
+                ),
+                "module_jaccard_min": float(
+                    edges_f.attrs.get("modules", {}).get("effective_jaccard_min", jaccard_min)
+                ),
                 "hub_filter_max_gene_term_degree": int(hub_max) if hub_max is not None else pd.NA,
                 "hub_filter_n_hubs": int(hub_n),
                 "module_terms_hash12": terms_hash,
@@ -645,12 +945,18 @@ def factorize_modules_connected_components(
             tmp["term_survival"] = pd.to_numeric(tmp["term_survival"], errors="coerce")
 
             # Join term -> module, then aggregate
+            # term_modules_df is contractually keyed by "term_uid" regardless of term_id_col
             j = tmp.merge(
-                term_modules_df[[term_id_col, "module_id"]],
-                on=term_id_col,
+                term_modules_df[["term_uid", "module_id"]],
+                left_on=term_id_col,
+                right_on="term_uid",
                 how="inner",
                 validate="m:1",
             )
+            # Drop helper join key to avoid confusion downstream
+            if "term_uid" in j.columns:
+                j = j.drop(columns=["term_uid"])
+
             j["module_id"] = j["module_id"].astype(str).str.strip()
 
             g = j.groupby("module_id")["term_survival"]

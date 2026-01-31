@@ -1566,10 +1566,12 @@ def _attach_context_score_proxy(
       - Do NOT overwrite it later with another proxy.
     """
     out = proposed.copy()
+    reason = "OK"
     meta = {"evaluated": True, "ctx_id": str(ctx_id), "weight_col": str(weight_col)}
 
     if out is None or out.empty:
-        return out, {**meta, "reason": "EMPTY_PROPOSED"}
+        reason = "EMPTY_PROPOSED"
+        return out, {**meta, "reason": reason}
 
     claim_mod_col = None
     for c in ["module_id_effective", "module_id"]:
@@ -1580,26 +1582,37 @@ def _attach_context_score_proxy(
     out["context_ctx_id"] = str(ctx_id)
 
     if claim_mod_col is None:
+        reason = "MISSING_MODULE_ID_IN_PROPOSED"
+        out["context_proxy_method"] = "module_weight"
+        out["context_ctx_id"] = str(ctx_id)
         out["context_score_proxy"] = 0.0
         out["context_score_proxy_norm"] = 0.0
         out["module_context_weight"] = 0.0
-        out["context_proxy_method"] = "module_weight"
-        return out, {**meta, "reason": "MISSING_MODULE_ID_IN_PROPOSED"}
+        out["context_score_proxy_reason"] = reason
+        out["context_score_proxy_n_nonzero"] = 0
+        return out, {**meta, "reason": reason}
 
     out["context_proxy_method"] = "module_weight"
+    out["context_ctx_id"] = str(ctx_id)
 
     if weights is None or weights.empty:
+        reason = "EMPTY_WEIGHTS"
         out["context_score_proxy"] = 0.0
         out["context_score_proxy_norm"] = 0.0
         out["module_context_weight"] = 0.0
-        return out, {**meta, "reason": "EMPTY_WEIGHTS"}
+        out["context_score_proxy_reason"] = reason
+        out["context_score_proxy_n_nonzero"] = 0
+        return out, {**meta, "reason": reason}
 
     w = weights.loc[weights["ctx_id"].astype(str) == str(ctx_id)].copy()
     if w.empty:
+        reason = "CTX_ID_NOT_IN_WEIGHTS"
         out["context_score_proxy"] = 0.0
         out["context_score_proxy_norm"] = 0.0
         out["module_context_weight"] = 0.0
-        return out, {**meta, "reason": "CTX_ID_NOT_IN_WEIGHTS"}
+        out["context_score_proxy_reason"] = reason
+        out["context_score_proxy_n_nonzero"] = 0
+        return out, {**meta, "reason": reason}
 
     if weight_col not in w.columns:
         if "weight_log_odds" in w.columns:
@@ -1637,10 +1650,12 @@ def _attach_context_score_proxy(
         return 1.0 / (1.0 + math.exp(-x))
 
     out["context_score_proxy_norm"] = out["context_score_proxy"].map(_sigmoid)
+    out["context_score_proxy_reason"] = reason
+    out["context_score_proxy_n_nonzero"] = int((out["context_score_proxy"] != 0.0).sum())
 
     meta.update(
         {
-            "reason": "OK",
+            "reason": reason,
             "claim_mod_col": claim_mod_col,
             "n_scored": int(out.shape[0]),
             "n_nonzero": int((out["context_score_proxy"] != 0.0).sum()),
@@ -2337,8 +2352,31 @@ def _proxy_context_review(
     anchor_modules_raw = (
         set(anchor_info.get("anchor_modules", []) or []) if anchor_info.get("ok", False) else set()
     )
-    # IMPORTANT: anchor-based downgrade is HARD-gate only (soft must remain advisory).
-    anchor_modules = anchor_modules_raw if gm == "hard" else set()
+
+    proxy_reason = ""
+    if "context_score_proxy_reason" in out.columns and len(out):
+        proxy_reason = str(out["context_score_proxy_reason"].iloc[0] or "").strip()
+
+    proxy_nonzero = 0
+    if "context_score_proxy" in out.columns:
+        try:
+            proxy_nonzero = int(
+                (
+                    pd.to_numeric(out["context_score_proxy"], errors="coerce").fillna(0.0) != 0.0
+                ).sum()
+            )
+        except Exception:
+            proxy_nonzero = 0
+
+    allow_anchor = (
+        gm == "hard"
+        and proxy_reason == "OK"
+        and proxy_nonzero > 0
+        and bool(anchor_info.get("ok", False))
+        and int(anchor_info.get("n_anchor_terms", 0) or 0) > 0
+    )
+
+    anchor_modules = anchor_modules_raw if allow_anchor else set()
 
     claim_mod_col = None
     for c in ["module_id_effective", "module_id"]:
