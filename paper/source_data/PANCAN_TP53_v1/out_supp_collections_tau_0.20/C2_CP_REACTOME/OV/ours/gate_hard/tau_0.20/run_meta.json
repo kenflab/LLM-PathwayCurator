@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769813206_d6bf3e5f64",
+  "run_id": "1769897419_d6bf3e5f64",
   "status": "ok",
-  "started_epoch": 1769813206.1232004,
+  "started_epoch": 1769897419.625876,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/OV.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/OV.hard.sample_card.json",
@@ -28,7 +28,7 @@
     "evidence_table": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/OV.C2_CP_REACTOME.evidence_table.tsv",
       "size_bytes": 239386,
-      "mtime_epoch": 1769793385.2536428
+      "mtime_epoch": 1769827872.6925414
     },
     "sample_card": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/OV.hard.sample_card.json",
@@ -132,16 +132,57 @@
       "jaccard_min": 0.1,
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
-      "n_terms": 978,
-      "n_pairs_est": 477753,
-      "max_terms_for_pairwise": 1200
+      "pair_stats_raw": {
+        "n_terms": 978,
+        "n_pairs_total": 477753,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.1129,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 1.0,
+        "shared_p95": 2.0,
+        "shared_p99": 10.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.01802344513187918,
+        "jaccard_p95": 0.0625,
+        "jaccard_p99": 0.36363636363636365
+      },
+      "pair_stats_filtered": {
+        "n_terms": 975,
+        "n_pairs_total": 474825,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.074405,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 1.0,
+        "shared_p99": 7.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
+        "jaccard_p95": 0.037037037037037035,
+        "jaccard_p99": 0.25
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.1129,
+      "sparsity_detected": false,
+      "n_terms": 975,
+      "n_pairs_est": 474825,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.8843537414965986,
+      "did_tune": false,
+      "effective_min_shared_genes": 3,
+      "effective_jaccard_min": 0.1,
+      "largest_component_frac": 0.598974358974359,
+      "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 126,
+      "n_modules": 147,
       "n_terms_median": 1.0,
-      "n_genes_median": 5.0,
-      "n_terms_max": 608,
-      "n_genes_max": 1576
+      "n_genes_median": 4.0,
+      "n_terms_max": 584,
+      "n_genes_max": 1570
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -186,7 +227,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 68,
+      "n_proposed_cols": 70,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -198,7 +239,7 @@
           "p_fail": 0.05,
           "p_warn": 0.2
         },
-        "anchor_used": true,
+        "anchor_used": false,
         "anchor_info": {
           "ok": true,
           "reason": "OK",
@@ -224,17 +265,17 @@
           ]
         },
         "n_eval": 50,
-        "n_pass": 2,
+        "n_pass": 40,
         "n_fail": 3,
-        "n_abstain": 45,
-        "n_anchor_downgrade": 40
+        "n_abstain": 7,
+        "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
         "evaluated": true,
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 48,
+        "n_blocked": 10,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -301,5 +342,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/OV/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769813214.5414116
+  "finished_epoch": 1769897430.7584925
 }

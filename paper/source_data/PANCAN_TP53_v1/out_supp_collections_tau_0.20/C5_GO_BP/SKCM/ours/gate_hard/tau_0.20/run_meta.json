@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769813147_dd6ca41474",
+  "run_id": "1769897321_dd6ca41474",
   "status": "ok",
-  "started_epoch": 1769813147.9545562,
+  "started_epoch": 1769897321.8101616,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.C5_GO_BP.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
@@ -28,7 +28,7 @@
     "evidence_table": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.C5_GO_BP.evidence_table.tsv",
       "size_bytes": 778593,
-      "mtime_epoch": 1769792505.987448
+      "mtime_epoch": 1769827872.699089
     },
     "sample_card": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
@@ -127,23 +127,70 @@
     },
     "modules": {
       "requested_method": "term_jaccard_cc",
-      "effective_method": "bipartite_cc",
+      "effective_method": "term_jaccard_cc",
       "min_shared_genes": 3,
       "jaccard_min": 0.1,
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
-      "n_terms": 3385,
-      "n_pairs_est": 5727420,
-      "max_terms_for_pairwise": 1200,
-      "fallback_from": "term_jaccard_cc",
-      "fallback_reason": "n_terms>1200"
+      "pair_stats_raw": {
+        "n_terms": 3386,
+        "n_pairs_total": 5730805,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.145435,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 1.0,
+        "shared_p95": 2.0,
+        "shared_p99": 5.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.02127659574468085,
+        "jaccard_p95": 0.04,
+        "jaccard_p99": 0.09090909090909091
+      },
+      "pair_stats_filtered": {
+        "n_terms": 3384,
+        "n_pairs_total": 5724036,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.117375,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 1.0,
+        "shared_p95": 1.0,
+        "shared_p99": 4.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.014285714285714285,
+        "jaccard_p95": 0.03333333333333333,
+        "jaccard_p99": 0.08333333333333333
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.145435,
+      "sparsity_detected": false,
+      "n_terms": 3384,
+      "n_pairs_est": 5724036,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.8461538461538461,
+      "did_tune": false,
+      "effective_min_shared_genes": 4,
+      "effective_jaccard_min": 0.12000000000000001,
+      "largest_component_frac": 0.6548463356973995,
+      "giant_frac_threshold": 0.6,
+      "tighten_iter_1": {
+        "min_shared_genes": 4,
+        "jaccard_min": 0.12000000000000001,
+        "largest_component_frac": 0.5978132387706856,
+        "n_components": 601
+      },
+      "giant_detected": true,
+      "giant_tighten_applied": true
     },
     "modules_stats": {
-      "n_modules": 1,
-      "n_terms_median": 3385.0,
-      "n_genes_median": 3963.0,
-      "n_terms_max": 3385,
-      "n_genes_max": 3963
+      "n_modules": 601,
+      "n_terms_median": 1.0,
+      "n_genes_median": 4.0,
+      "n_terms_max": 2023,
+      "n_genes_max": 2382
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -188,7 +235,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 68,
+      "n_proposed_cols": 70,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -213,9 +260,9 @@
           "n_anchor_terms": 0
         },
         "n_eval": 50,
-        "n_pass": 36,
-        "n_fail": 3,
-        "n_abstain": 11,
+        "n_pass": 44,
+        "n_fail": 1,
+        "n_abstain": 5,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -223,7 +270,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 14,
+        "n_blocked": 6,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -290,5 +337,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769813178.083359
+  "finished_epoch": 1769897374.4865034
 }

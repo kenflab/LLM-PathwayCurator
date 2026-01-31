@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769813214_95b125ee98",
+  "run_id": "1769897430_95b125ee98",
   "status": "ok",
-  "started_epoch": 1769813214.5483923,
+  "started_epoch": 1769897430.7640498,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/UCEC.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/UCEC.hard.sample_card.json",
@@ -28,7 +28,7 @@
     "evidence_table": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/UCEC.C2_CP_REACTOME.evidence_table.tsv",
       "size_bytes": 240101,
-      "mtime_epoch": 1769793421.5490632
+      "mtime_epoch": 1769827872.7017632
     },
     "sample_card": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/UCEC.hard.sample_card.json",
@@ -132,16 +132,68 @@
       "jaccard_min": 0.1,
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
-      "n_terms": 984,
-      "n_pairs_est": 483636,
-      "max_terms_for_pairwise": 1200
+      "pair_stats_raw": {
+        "n_terms": 984,
+        "n_pairs_total": 483636,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.095395,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 2.0,
+        "shared_p99": 11.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
+        "jaccard_p95": 0.06521739130434782,
+        "jaccard_p99": 0.3103448275862069
+      },
+      "pair_stats_filtered": {
+        "n_terms": 982,
+        "n_pairs_total": 481671,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.06746,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 1.0,
+        "shared_p99": 6.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
+        "jaccard_p95": 0.03125,
+        "jaccard_p99": 0.2
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.095395,
+      "sparsity_detected": true,
+      "tuned_min_shared_genes": 2,
+      "tuned_jaccard_min": 0.02,
+      "tune_reason": "shared_pos_rate<0.1",
+      "n_terms": 982,
+      "n_pairs_est": 481671,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.918918918918919,
+      "did_tune": true,
+      "effective_min_shared_genes": 3,
+      "effective_jaccard_min": 0.04,
+      "largest_component_frac": 0.9613034623217923,
+      "giant_frac_threshold": 0.6,
+      "tighten_iter_1": {
+        "min_shared_genes": 3,
+        "jaccard_min": 0.04,
+        "largest_component_frac": 0.48574338085539714,
+        "n_components": 91
+      },
+      "giant_detected": true,
+      "giant_tighten_applied": true
     },
     "modules_stats": {
-      "n_modules": 110,
+      "n_modules": 91,
       "n_terms_median": 1.0,
-      "n_genes_median": 6.0,
-      "n_terms_max": 469,
-      "n_genes_max": 1221
+      "n_genes_median": 5.0,
+      "n_terms_max": 477,
+      "n_genes_max": 1283
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -186,7 +238,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 68,
+      "n_proposed_cols": 70,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -198,7 +250,7 @@
           "p_fail": 0.05,
           "p_warn": 0.2
         },
-        "anchor_used": true,
+        "anchor_used": false,
         "anchor_info": {
           "ok": true,
           "reason": "OK",
@@ -210,7 +262,7 @@
           ],
           "module_col": "module_id",
           "n_anchor_terms": 18,
-          "n_anchor_modules": 4,
+          "n_anchor_modules": 3,
           "anchor_terms_preview": [
             "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_TP53_REGULATES_TRANSCRIPTION_OF_GENES_INVOLVED_IN_G2_CELL_CYCLE_ARREST",
             "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_FGFR2_MUTANT_RECEPTOR_ACTIVATION",
@@ -225,17 +277,17 @@
           ]
         },
         "n_eval": 50,
-        "n_pass": 2,
-        "n_fail": 3,
-        "n_abstain": 45,
-        "n_anchor_downgrade": 38
+        "n_pass": 39,
+        "n_fail": 2,
+        "n_abstain": 9,
+        "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
         "evaluated": true,
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 48,
+        "n_blocked": 11,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -302,5 +354,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/UCEC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769813221.3980103
+  "finished_epoch": 1769897442.089583
 }

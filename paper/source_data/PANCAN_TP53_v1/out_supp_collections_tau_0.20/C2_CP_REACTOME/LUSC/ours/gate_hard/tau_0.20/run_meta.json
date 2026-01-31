@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769813190_7df141ffc6",
+  "run_id": "1769897396_7df141ffc6",
   "status": "ok",
-  "started_epoch": 1769813190.9913168,
+  "started_epoch": 1769897396.8759134,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
@@ -28,7 +28,7 @@
     "evidence_table": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.C2_CP_REACTOME.evidence_table.tsv",
       "size_bytes": 240299,
-      "mtime_epoch": 1769793311.8937368
+      "mtime_epoch": 1769827872.6875026
     },
     "sample_card": {
       "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
@@ -132,16 +132,75 @@
       "jaccard_min": 0.1,
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
-      "n_terms": 984,
-      "n_pairs_est": 483636,
-      "max_terms_for_pairwise": 1200
+      "pair_stats_raw": {
+        "n_terms": 984,
+        "n_pairs_total": 483636,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.09805,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 2.0,
+        "shared_p99": 7.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
+        "jaccard_p95": 0.05263157894736842,
+        "jaccard_p99": 0.2653197278911692
+      },
+      "pair_stats_filtered": {
+        "n_terms": 977,
+        "n_pairs_total": 476776,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.06905,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 1.0,
+        "shared_p99": 5.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
+        "jaccard_p95": 0.03125,
+        "jaccard_p99": 0.1870548561151121
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.09805,
+      "sparsity_detected": true,
+      "tuned_min_shared_genes": 2,
+      "tuned_jaccard_min": 0.02,
+      "tune_reason": "shared_pos_rate<0.1",
+      "n_terms": 977,
+      "n_pairs_est": 476776,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.875,
+      "did_tune": true,
+      "effective_min_shared_genes": 2,
+      "effective_jaccard_min": 0.02,
+      "largest_component_frac": 0.9559877175025588,
+      "giant_frac_threshold": 0.6,
+      "tighten_iter_1": {
+        "min_shared_genes": 3,
+        "jaccard_min": 0.04,
+        "largest_component_frac": 0.8792221084953941,
+        "n_components": 102
+      },
+      "tighten_iter_2": {
+        "min_shared_genes": 4,
+        "jaccard_min": 0.06,
+        "largest_component_frac": 0.8014329580348004,
+        "n_components": 166
+      },
+      "giant_detected": true,
+      "giant_tighten_applied": false,
+      "giant_tighten_reason": "still giant after 2 iterations"
     },
     "modules_stats": {
-      "n_modules": 100,
+      "n_modules": 40,
       "n_terms_median": 1.0,
-      "n_genes_median": 7.0,
-      "n_terms_max": 860,
-      "n_genes_max": 2508
+      "n_genes_median": 4.0,
+      "n_terms_max": 934,
+      "n_genes_max": 2765
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -186,7 +245,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 68,
+      "n_proposed_cols": 70,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -198,7 +257,7 @@
           "p_fail": 0.05,
           "p_warn": 0.2
         },
-        "anchor_used": true,
+        "anchor_used": false,
         "anchor_info": {
           "ok": true,
           "reason": "OK",
@@ -210,7 +269,7 @@
           ],
           "module_col": "module_id",
           "n_anchor_terms": 18,
-          "n_anchor_modules": 2,
+          "n_anchor_modules": 1,
           "anchor_terms_preview": [
             "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_TP53_REGULATES_TRANSCRIPTION_OF_GENES_INVOLVED_IN_G2_CELL_CYCLE_ARREST",
             "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_SIGNALING_BY_CYTOSOLIC_FGFR1_FUSION_MUTANTS",
@@ -225,17 +284,17 @@
           ]
         },
         "n_eval": 50,
-        "n_pass": 0,
+        "n_pass": 42,
         "n_fail": 1,
-        "n_abstain": 49,
-        "n_anchor_downgrade": 40
+        "n_abstain": 7,
+        "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
         "evaluated": true,
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 50,
+        "n_blocked": 8,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -302,5 +361,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/LUSC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769813197.8699405
+  "finished_epoch": 1769897408.1912985
 }
