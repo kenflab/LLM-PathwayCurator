@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769917194_93b2a2d9b5",
+  "run_id": "1769978752_93b2a2d9b5",
   "status": "ok",
-  "started_epoch": 1769917194.4277227,
+  "started_epoch": 1769978752.7062364,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUAD.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUAD.hard.sample_card.json",
@@ -117,8 +117,8 @@
       "comparison": "TP53_mut_vs_TP53_wt",
       "species": ""
     },
-    "sample_card_raw_sha256": "db83765f37a694ddfc795425f3a5984af5b67bae8076aab0e0db471704789773",
-    "sample_card_normalized_sha256": "db83765f37a694ddfc795425f3a5984af5b67bae8076aab0e0db471704789773",
+    "sample_card_raw_sha256": "e42b5af2b41a60ab79e260c8fdbce7b3ba074e7bf2de639df85d3fc7b1b0b457",
+    "sample_card_normalized_sha256": "e42b5af2b41a60ab79e260c8fdbce7b3ba074e7bf2de639df85d3fc7b1b0b457",
     "audit": {
       "tau_cfg": 0.2,
       "tau_card": 0.8,
@@ -133,10 +133,10 @@
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
       "pair_stats_raw": {
-        "n_terms": 981,
-        "n_pairs_total": 480690,
+        "n_terms": 984,
+        "n_pairs_total": 483636,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.08691,
+        "shared_pos_rate": 0.08788,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -145,47 +145,47 @@
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.05555555555555555,
-        "jaccard_p99": 0.36363636363636365
+        "jaccard_p95": 0.05263157894736842,
+        "jaccard_p99": 0.34615384615384615
       },
       "pair_stats_filtered": {
-        "n_terms": 980,
-        "n_pairs_total": 479710,
+        "n_terms": 976,
+        "n_pairs_total": 475800,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.062005,
+        "shared_pos_rate": 0.0597,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
         "shared_p95": 1.0,
-        "shared_p99": 4.0,
+        "shared_p99": 5.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.02857142857142857,
-        "jaccard_p99": 0.2
+        "jaccard_p95": 0.023255813953488372,
+        "jaccard_p99": 0.18604651162790697
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.08691,
+      "shared_pos_rate_for_tuning": 0.08788,
       "sparsity_detected": true,
       "tuned_min_shared_genes": 2,
       "tuned_jaccard_min": 0.02,
       "tune_reason": "shared_pos_rate<0.1",
-      "n_terms": 980,
-      "n_pairs_est": 479710,
+      "n_terms": 976,
+      "n_pairs_est": 475800,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.85,
+      "singleton_frac": 0.8461538461538461,
       "did_tune": true,
       "effective_min_shared_genes": 2,
       "effective_jaccard_min": 0.02,
-      "largest_component_frac": 0.4959183673469388,
+      "largest_component_frac": 0.48770491803278687,
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 40,
+      "n_modules": 39,
       "n_terms_median": 1.0,
       "n_genes_median": 2.0,
-      "n_terms_max": 486,
-      "n_genes_max": 1342
+      "n_terms_max": 476,
+      "n_genes_max": 1418
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -208,6 +208,7 @@
       "k_env_raw": "",
       "context_gate_mode": "hard",
       "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
       "context_ctx_id_original": "LUAD|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_ctx_id_effective": "LUAD|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_swap_from": "",
@@ -230,7 +231,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 70,
+      "n_proposed_cols": 72,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -245,32 +246,44 @@
         "anchor_used": false,
         "anchor_info": {
           "ok": true,
-          "reason": "OK",
+          "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
           "tokens": [
             "luad",
+            "tumor",
             "genotype",
             "tp53",
             "mut"
           ],
+          "tokens_signature": "3dac5cbe5d25",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "luad",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "3dac5cbe5d25",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
           "module_col": "module_id",
-          "n_anchor_terms": 18,
-          "n_anchor_modules": 3,
-          "anchor_terms_preview": [
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_FGFR2_MUTANT_RECEPTOR_ACTIVATION",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_HH_MUTANTS_ABROGATE_LIGAND_SECRETION",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_REGULATION_OF_TP53_ACTIVITY",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_TRANSCRIPTIONAL_REGULATION_BY_TP53",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_TP53_REGULATES_TRANSCRIPTION_OF_GENES_INVOLVED_IN_G2_CELL_CYCLE_ARREST",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_TP53_REGULATES_METABOLIC_GENES",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_REGULATION_OF_TP53_ACTIVITY_THROUGH_ACETYLATION",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_SIGNALING_BY_FLT3_ITD_AND_TKD_MUTANTS",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_SIGNALING_BY_ERBB2_ECD_MUTANTS",
-            "fgsea_msigdb_C2_CP_REACTOME_entrez:REACTOME_REGULATION_OF_TP53_ACTIVITY_THROUGH_PHOSPHORYLATION"
-          ]
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
         },
         "n_eval": 50,
-        "n_pass": 43,
-        "n_fail": 0,
+        "n_pass": 42,
+        "n_fail": 1,
         "n_abstain": 7,
         "n_anchor_downgrade": 0
       },
@@ -279,7 +292,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 7,
+        "n_blocked": 8,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -288,6 +301,7 @@
       "claim": {
         "enabled": false,
         "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
@@ -295,13 +309,16 @@
       "review": {
         "enabled": false,
         "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
       },
       "select_entrypoint": {
         "backend_attached": false,
-        "backend_role": "none"
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
       }
     },
     "stress": {
@@ -346,5 +363,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/LUAD/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769917206.7578344
+  "finished_epoch": 1769978761.9471862
 }

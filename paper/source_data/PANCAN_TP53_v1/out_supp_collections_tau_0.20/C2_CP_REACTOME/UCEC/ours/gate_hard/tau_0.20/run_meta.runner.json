@@ -8,6 +8,6 @@
   "runner": "paper/scripts/run_figSx_collections_pipeline.py",
   "seed": 42,
   "tau": 0.2,
-  "time_unix": 1769917259,
+  "time_unix": 1769978801,
   "variant": "ours"
 }

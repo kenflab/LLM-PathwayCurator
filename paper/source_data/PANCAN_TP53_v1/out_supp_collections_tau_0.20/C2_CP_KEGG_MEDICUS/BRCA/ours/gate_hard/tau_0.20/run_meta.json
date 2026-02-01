@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769917277_94d71ee487",
+  "run_id": "1769978814_94d71ee487",
   "status": "ok",
-  "started_epoch": 1769917277.4520953,
+  "started_epoch": 1769978814.038617,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/BRCA.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/BRCA.hard.sample_card.json",
@@ -117,8 +117,8 @@
       "comparison": "TP53_mut_vs_TP53_wt",
       "species": ""
     },
-    "sample_card_raw_sha256": "307b768f2b96053694dc34b81bfdf3a3fae78f589fac73ffc3c31c33dadb0d69",
-    "sample_card_normalized_sha256": "307b768f2b96053694dc34b81bfdf3a3fae78f589fac73ffc3c31c33dadb0d69",
+    "sample_card_raw_sha256": "7264026a6c5cfba4800606c98d4a5781c17c0d3ebaa270deedf0b7413603df02",
+    "sample_card_normalized_sha256": "7264026a6c5cfba4800606c98d4a5781c17c0d3ebaa270deedf0b7413603df02",
     "audit": {
       "tau_cfg": 0.2,
       "tau_card": 0.8,
@@ -136,7 +136,7 @@
         "n_terms": 186,
         "n_pairs_total": 17205,
         "n_pairs_sampled": 17205,
-        "shared_pos_rate": 0.06166811973263586,
+        "shared_pos_rate": 0.062191223481546064,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -145,27 +145,27 @@
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.10526315789473684,
+        "jaccard_p95": 0.11031746031745743,
         "jaccard_p99": 0.6666666666666666
       },
       "pair_stats_filtered": {
         "n_terms": 182,
         "n_pairs_total": 16471,
         "n_pairs_sampled": 16471,
-        "shared_pos_rate": 0.050998725031874206,
+        "shared_pos_rate": 0.051545139942929995,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
         "shared_p95": 1.0,
-        "shared_p99": 5.0,
+        "shared_p99": 5.299999999999272,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.038461538461538464,
+        "jaccard_p95": 0.04,
         "jaccard_p99": 0.6666666666666666
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.06166811973263586,
+      "shared_pos_rate_for_tuning": 0.062191223481546064,
       "sparsity_detected": true,
       "tuned_min_shared_genes": 2,
       "tuned_jaccard_min": 0.02,
@@ -183,9 +183,9 @@
     "modules_stats": {
       "n_modules": 35,
       "n_terms_median": 2.0,
-      "n_genes_median": 7.0,
+      "n_genes_median": 8.0,
       "n_terms_max": 64,
-      "n_genes_max": 138
+      "n_genes_max": 139
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -208,6 +208,7 @@
       "k_env_raw": "",
       "context_gate_mode": "hard",
       "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
       "context_ctx_id_original": "BRCA|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_ctx_id_effective": "BRCA|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_swap_from": "",
@@ -230,7 +231,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 70,
+      "n_proposed_cols": 72,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -245,33 +246,45 @@
         "anchor_used": false,
         "anchor_info": {
           "ok": true,
-          "reason": "OK",
+          "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
           "tokens": [
             "brca",
+            "tumor",
             "genotype",
             "tp53",
             "mut"
           ],
+          "tokens_signature": "74716cbc429e",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "brca",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "74716cbc429e",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
           "module_col": "module_id",
-          "n_anchor_terms": 33,
-          "n_anchor_modules": 9,
-          "anchor_terms_preview": [
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_ANTEROGRADE_AXONAL_TRANSPORT",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_ELECTRON_TRANSFER_IN_COMPLEX_IV",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_SNCA_TO_ELECTRON_TRANSFER_IN_COMPLEX_I",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_ABETA_TO_MACHR_CA2_APOPTOTIC_PATHWAY",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_TDP43_TO_ELECTRON_TRANSFER_IN_COMPLEX_I",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_INACTIVATED_PINK1_TO_ELECTRON_TRANSFER_IN_COMPLEX_I",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_HTT_TO_RETROGRADE_AXONAL_TRANSPORT",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_ACTIVATED_SMO_TO_HEDGEHOG_SIGNALING_PATHWAY",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_INACTIVATED_PTCH1_TO_HEDGEHOG_SIGNALING_PATHWAY",
-            "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_CAUSED_ABERRANT_HTT_TO_26S_PROTEASOME_MEDIATED_PROTEIN_DEGRADATION"
-          ]
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
         },
         "n_eval": 50,
-        "n_pass": 40,
+        "n_pass": 41,
         "n_fail": 3,
-        "n_abstain": 7,
+        "n_abstain": 6,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -279,7 +292,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 10,
+        "n_blocked": 9,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -288,6 +301,7 @@
       "claim": {
         "enabled": false,
         "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
@@ -295,13 +309,16 @@
       "review": {
         "enabled": false,
         "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
       },
       "select_entrypoint": {
         "backend_attached": false,
-        "backend_role": "none"
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
       }
     },
     "stress": {
@@ -346,5 +363,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/BRCA/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769917279.2499075
+  "finished_epoch": 1769978815.28456
 }

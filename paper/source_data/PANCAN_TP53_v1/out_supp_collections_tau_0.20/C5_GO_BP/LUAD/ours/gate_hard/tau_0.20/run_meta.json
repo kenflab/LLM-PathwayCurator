@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769916836_7ea00f32e7",
+  "run_id": "1769978511_7ea00f32e7",
   "status": "ok",
-  "started_epoch": 1769916836.754282,
+  "started_epoch": 1769978511.514665,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUAD.C5_GO_BP.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUAD.hard.sample_card.json",
@@ -117,8 +117,8 @@
       "comparison": "TP53_mut_vs_TP53_wt",
       "species": ""
     },
-    "sample_card_raw_sha256": "db83765f37a694ddfc795425f3a5984af5b67bae8076aab0e0db471704789773",
-    "sample_card_normalized_sha256": "db83765f37a694ddfc795425f3a5984af5b67bae8076aab0e0db471704789773",
+    "sample_card_raw_sha256": "e42b5af2b41a60ab79e260c8fdbce7b3ba074e7bf2de639df85d3fc7b1b0b457",
+    "sample_card_normalized_sha256": "e42b5af2b41a60ab79e260c8fdbce7b3ba074e7bf2de639df85d3fc7b1b0b457",
     "audit": {
       "tau_cfg": 0.2,
       "tau_card": 0.8,
@@ -133,10 +133,10 @@
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
       "pair_stats_raw": {
-        "n_terms": 3384,
-        "n_pairs_total": 5724036,
+        "n_terms": 3386,
+        "n_pairs_total": 5730805,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.10869,
+        "shared_pos_rate": 0.108905,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -144,15 +144,15 @@
         "shared_p99": 4.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.011904761904761904,
-        "jaccard_p95": 0.03333333333333333,
-        "jaccard_p99": 0.08571428571428572
+        "jaccard_p90": 0.011494252873563218,
+        "jaccard_p95": 0.03225806451612903,
+        "jaccard_p99": 0.08450942945810679
       },
       "pair_stats_filtered": {
-        "n_terms": 3378,
-        "n_pairs_total": 5703753,
+        "n_terms": 3380,
+        "n_pairs_total": 5710510,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.092325,
+        "shared_pos_rate": 0.09312,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -162,27 +162,27 @@
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
         "jaccard_p95": 0.027777777777777776,
-        "jaccard_p99": 0.08196721311475409
+        "jaccard_p99": 0.08
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.10869,
+      "shared_pos_rate_for_tuning": 0.108905,
       "sparsity_detected": false,
-      "n_terms": 3378,
-      "n_pairs_est": 5703753,
+      "n_terms": 3380,
+      "n_pairs_est": 5710510,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.8625,
+      "singleton_frac": 0.8571428571428571,
       "did_tune": false,
       "effective_min_shared_genes": 3,
       "effective_jaccard_min": 0.1,
-      "largest_component_frac": 0.458259325044405,
+      "largest_component_frac": 0.4603550295857988,
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 320,
+      "n_modules": 301,
       "n_terms_median": 1.0,
-      "n_genes_median": 3.0,
-      "n_terms_max": 1548,
-      "n_genes_max": 2118
+      "n_genes_median": 4.0,
+      "n_terms_max": 1556,
+      "n_genes_max": 2193
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -205,6 +205,7 @@
       "k_env_raw": "",
       "context_gate_mode": "hard",
       "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
       "context_ctx_id_original": "LUAD|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_ctx_id_effective": "LUAD|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_swap_from": "",
@@ -227,7 +228,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 70,
+      "n_proposed_cols": 72,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -241,20 +242,46 @@
         },
         "anchor_used": false,
         "anchor_info": {
-          "ok": false,
+          "ok": true,
           "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
           "tokens": [
             "luad",
+            "tumor",
             "genotype",
             "tp53",
             "mut"
           ],
-          "n_anchor_terms": 0
+          "tokens_signature": "3dac5cbe5d25",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "luad",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "3dac5cbe5d25",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
+          "module_col": "module_id",
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
         },
         "n_eval": 50,
-        "n_pass": 43,
+        "n_pass": 44,
         "n_fail": 3,
-        "n_abstain": 4,
+        "n_abstain": 3,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -262,7 +289,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 7,
+        "n_blocked": 6,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -271,6 +298,7 @@
       "claim": {
         "enabled": false,
         "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
@@ -278,13 +306,16 @@
       "review": {
         "enabled": false,
         "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
       },
       "select_entrypoint": {
         "backend_attached": false,
-        "backend_role": "none"
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
       }
     },
     "stress": {
@@ -329,5 +360,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/LUAD/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769916893.2250485
+  "finished_epoch": 1769978547.892582
 }

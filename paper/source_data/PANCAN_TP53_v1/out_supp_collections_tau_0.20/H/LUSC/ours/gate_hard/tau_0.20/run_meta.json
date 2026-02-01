@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769916762_2bd2a4b466",
+  "run_id": "1769978461_2bd2a4b466",
   "status": "ok",
-  "started_epoch": 1769916762.1090813,
+  "started_epoch": 1769978461.217834,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.H.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
@@ -117,8 +117,8 @@
       "comparison": "TP53_mut_vs_TP53_wt",
       "species": ""
     },
-    "sample_card_raw_sha256": "08a1c9e4585e9e02696485a6e94a4925aa03f19bf6ab5915447377ff6b940d6f",
-    "sample_card_normalized_sha256": "08a1c9e4585e9e02696485a6e94a4925aa03f19bf6ab5915447377ff6b940d6f",
+    "sample_card_raw_sha256": "0f339b13cab925f242909b5367e17834aec2f9805e6dda1d8fd3169575ae38a8",
+    "sample_card_normalized_sha256": "0f339b13cab925f242909b5367e17834aec2f9805e6dda1d8fd3169575ae38a8",
     "audit": {
       "tau_cfg": 0.2,
       "tau_card": 0.8,
@@ -136,53 +136,53 @@
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.23020408163265307,
+        "shared_pos_rate": 0.23673469387755103,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 2.0,
         "shared_p95": 3.0,
-        "shared_p99": 6.0,
+        "shared_p99": 6.759999999999991,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.03076923076923077,
-        "jaccard_p95": 0.04983606557377046,
-        "jaccard_p99": 0.10526315789473684
+        "jaccard_p90": 0.029940298507462708,
+        "jaccard_p95": 0.048548199767711915,
+        "jaccard_p99": 0.10586921850079745
       },
       "pair_stats_filtered": {
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.21714285714285714,
+        "shared_pos_rate": 0.2236734693877551,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
-        "shared_p90": 1.0,
+        "shared_p90": 2.0,
         "shared_p95": 2.0,
-        "shared_p99": 5.759999999999991,
+        "shared_p99": 6.759999999999991,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.027249166975194423,
-        "jaccard_p95": 0.045872518286311365,
-        "jaccard_p99": 0.10817224880382773
+        "jaccard_p90": 0.027777777777777776,
+        "jaccard_p95": 0.04644007155635061,
+        "jaccard_p99": 0.1083881578947368
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.23020408163265307,
+      "shared_pos_rate_for_tuning": 0.23673469387755103,
       "sparsity_detected": false,
       "n_terms": 50,
       "n_pairs_est": 1225,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.8157894736842105,
+      "singleton_frac": 0.8378378378378378,
       "did_tune": false,
       "effective_min_shared_genes": 3,
       "effective_jaccard_min": 0.1,
-      "largest_component_frac": 0.14,
+      "largest_component_frac": 0.16,
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 38,
+      "n_modules": 37,
       "n_terms_median": 1.0,
-      "n_genes_median": 29.5,
-      "n_terms_max": 7,
-      "n_genes_max": 155
+      "n_genes_median": 29.0,
+      "n_terms_max": 8,
+      "n_genes_max": 183
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -205,6 +205,7 @@
       "k_env_raw": "",
       "context_gate_mode": "hard",
       "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
       "context_ctx_id_original": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_ctx_id_effective": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
       "context_swap_from": "",
@@ -227,7 +228,7 @@
       },
       "context_score_source": "proxy_review_confidence",
       "n_proposed_rows": 50,
-      "n_proposed_cols": 70,
+      "n_proposed_cols": 72,
       "claim_payload_col": "claim_json",
       "claim_json_present": true,
       "context_review_runtime": {
@@ -241,15 +242,41 @@
         },
         "anchor_used": false,
         "anchor_info": {
-          "ok": false,
+          "ok": true,
           "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
           "tokens": [
             "lusc",
+            "tumor",
             "genotype",
             "tp53",
             "mut"
           ],
-          "n_anchor_terms": 0
+          "tokens_signature": "6717489acb32",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "lusc",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "6717489acb32",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
+          "module_col": "module_id",
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
         },
         "n_eval": 50,
         "n_pass": 41,
@@ -271,6 +298,7 @@
       "claim": {
         "enabled": false,
         "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
@@ -278,13 +306,16 @@
       "review": {
         "enabled": false,
         "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
         "backend_env": "ollama",
         "backend_enabled": false,
         "backend_notes": ""
       },
       "select_entrypoint": {
         "backend_attached": false,
-        "backend_role": "none"
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
       }
     },
     "stress": {
@@ -329,5 +360,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/H/LUSC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769916763.8643777
+  "finished_epoch": 1769978462.432219
 }
