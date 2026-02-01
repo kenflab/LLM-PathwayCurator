@@ -25,7 +25,6 @@ from .report import write_report, write_report_jsonl
 from .sample_card import SampleCard
 from .schema import EvidenceTable
 from .select import select_claims
-from .utils import build_id_to_symbol_from_distilled, load_id_map_tsv, map_ids_to_symbols
 
 
 @dataclass(frozen=True)
@@ -52,18 +51,17 @@ class RunResult:
     meta_path: str
 
 
+def _norm_gate_mode(x: Any, *, default: str = "note") -> str:
+    # Spec-level single source of truth
+    # NOTE: default should be canonical ("off"|"note"|"hard");
+    # synonyms like "note" are accepted only as input.
+    return _shared.normalize_gate_mode(x, default=default)
+
+
 # -------------------------
 # Mode normalization (pipeline-owned; single source of truth)
 # -------------------------
-_ALLOWED_GATE_MODES = {"soft", "hard"}
 _ALLOWED_REVIEW_MODES = {"off", "proxy", "llm"}
-
-
-def _norm_gate_mode(x: Any, *, default: str = "soft") -> str:
-    s = ("" if x is None else str(x)).strip().lower()
-    if s in _ALLOWED_GATE_MODES:
-        return s
-    return str(default).strip().lower()
 
 
 def _norm_review_mode(x: Any, *, default: str = "proxy") -> str:
@@ -438,7 +436,7 @@ def _card_condition(card: SampleCard) -> str:
 # -------------------------
 # Gate/review mode resolution (pipeline-owned; normalized)
 # -------------------------
-def _resolve_context_gate_mode(card: SampleCard, *, default: str = "soft") -> str:
+def _resolve_context_gate_mode(card: SampleCard, *, default: str = "note") -> str:
     env_v = _env_str("LLMPATH_CONTEXT_GATE_MODE", "").strip().lower()
     if env_v:
         return _norm_gate_mode(env_v, default=default)
@@ -464,7 +462,7 @@ def _enforce_gate_review_compat_effective(card, gate_mode: str, review_mode: str
       - If gate_mode is "hard", we MUST have a deterministic review signal
         unless the user explicitly accepts that everything becomes UNEVALUATED.
       - Therefore, (gate=hard, review=off) is disallowed and we force review=proxy.
-      - We NEVER silently relax hard->soft, because that breaks user intent and Fig2 comparability.
+      - We NEVER silently relax hard->note, because that breaks user intent and Fig2 comparability.
     """
     gate_mode_in = gate_mode
     review_mode_in = review_mode
@@ -487,7 +485,7 @@ def _enforce_gate_review_compat_effective(card, gate_mode: str, review_mode: str
             )
 
     if review_mode == "llm":
-        reasons.append("review=llm: compatible with gate soft/hard")
+        reasons.append("review=llm: compatible with gate note/hard")
 
     return {
         "gate_mode": gate_mode,
@@ -894,7 +892,8 @@ def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], 
         sources = (
             dist["source"].astype(str).str.strip().tolist() if "source" in dist.columns else None
         )
-
+        # NOTE: strict=False defensively: if columns ever misalign, keep a partial map;
+        # stress resolution can then ABSTAIN on unknown/ambiguous IDs instead of hard-failing.
         for tu, tid in zip(term_uids, term_ids, strict=False):
             if not tu or tu.lower() in _NA_TOKENS_L:
                 continue
@@ -1017,7 +1016,11 @@ def _score_dropout_stress_on_claims(
     if genes_col in dist.columns:
         term_uids = dist["term_uid"].astype(str).str.strip().tolist()
         genes_vals = dist[genes_col].tolist()
-        for tk, xs in zip(term_uids, genes_vals, strict=True):
+
+        # NOTE: Defensive choice (strict=False).
+        # Even if distilled columns are unexpectedly misaligned,
+        # stress evaluation must degrade to ABSTAIN rather than raising.
+        for tk, xs in zip(term_uids, genes_vals, strict=False):
             if not tk or tk.lower() in _NA_TOKENS_L:
                 continue
             if _is_na_scalar(xs):
@@ -1216,7 +1219,11 @@ def _norm_ctx_piece(x: Any) -> str:
     s = s.strip()
     if not s or s.lower() in _NA_TOKENS_L:
         return "NA"
-    return re.sub(r"\s+", " ", s)
+
+    # ctx_id delimiter safety: do not allow "|" to leak into pieces
+    s = s.replace("|", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s if s else "NA"
 
 
 def _context_swap_info(card: SampleCard) -> dict[str, str]:
@@ -1824,7 +1831,7 @@ def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
     extracted = out["claim_json"].apply(_extract_context_fields_from_claim_json)
-    extracted_df = pd.DataFrame(list(extracted))
+    extracted_df = pd.DataFrame(list(extracted), index=out.index)
 
     for col in extracted_df.columns:
         if col not in out.columns:
@@ -1845,7 +1852,7 @@ def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
 
 def _ensure_context_review_fields(proposed: pd.DataFrame, *, gate_mode: str) -> pd.DataFrame:
     out = proposed.copy()
-    gate_mode = _norm_gate_mode(gate_mode, default="soft")
+    gate_mode = _norm_gate_mode(gate_mode, default="note")
 
     if "context_evaluated" not in out.columns:
         out["context_evaluated"] = False
@@ -1985,6 +1992,53 @@ def _tokenize_context_text(s: str) -> list[str]:
     return out
 
 
+def _build_context_tokens(
+    *,
+    condition: str,
+    tissue: str,
+    perturbation: str,
+    comparison: str,
+) -> list[str]:
+    """
+    Context Tokens
+    - Source fields: condition, tissue, perturbation, comparison
+    - Tokenization: _tokenize_context_text (deterministic)
+    - Tokens are key-prefixed to preserve provenance, e.g. "tissue:oral"
+    - Global uniqueness is enforced while preserving first-seen order.
+    """
+    fields = {
+        "condition": str(condition or "").strip(),
+        "tissue": str(tissue or "").strip(),
+        "perturbation": str(perturbation or "").strip(),
+        "comparison": str(comparison or "").strip(),
+    }
+
+    order = ["condition", "tissue", "perturbation", "comparison"]
+    toks: list[str] = []
+    for k in order:
+        for t in _tokenize_context_text(fields.get(k, "")):
+            toks.append(f"{k}:{t}")
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in toks:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _context_signature_b12(*, ctx_id: str, ctx_tokens: list[str]) -> str:
+    """
+    Deterministic short signature (12 hex) for tokens.
+    Signature is derived from (ctx_id + tokens), so audits can be reproduced
+    as long as the B方式 token spec is stable.
+    """
+    ctx_id = str(ctx_id or "").strip()
+    payload = (ctx_id + "|" + ";".join([str(t) for t in (ctx_tokens or [])])).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:12]
+
+
 def _proxy_context_v2_u01(*, ctx_id: str, context_keys: list[str], term_uid: str) -> float:
     """
     Deterministic proxy context score u in [0,1).
@@ -2008,6 +2062,10 @@ def _ensure_proxy_context_score_columns(
     """
     Ensure proxy context scores are materialized deterministically.
 
+    Context Tokens:
+      - Write context_tokens (string) and context_tokens_n
+      - Write context_signature (12 hex) derived from ctx_id + ctx_tokens
+
     IMPORTANT:
       - If module×context weights already produced context_score_proxy, keep it.
       - Always add hash-u01 proxy into separate columns:
@@ -2019,7 +2077,6 @@ def _ensure_proxy_context_score_columns(
     out = proposed.copy()
 
     def _split_ctx_id(ctx_id: str) -> tuple[str, str, str, str]:
-        # ctx_id is "condition|tissue|perturbation|comparison" but be tolerant.
         parts = [p.strip() for p in str(ctx_id or "").split("|")]
         while len(parts) < 4:
             parts.append("")
@@ -2030,7 +2087,7 @@ def _ensure_proxy_context_score_columns(
         ctx_id = str(ctx_id_override).strip()
         condition, tissue, perturb, comp = _split_ctx_id(ctx_id)
     else:
-        condition = _card_condition(card)
+        condition = str(_card_condition(card) or "").strip()
         tissue = str(getattr(card, "tissue", "") or "").strip()
         perturb = str(getattr(card, "perturbation", "") or "").strip()
         comp = str(getattr(card, "comparison", "") or "").strip()
@@ -2054,17 +2111,29 @@ def _ensure_proxy_context_score_columns(
             lambda x: ctx_id if _is_na_scalar(x) or (not str(x).strip()) else str(x)
         )
 
-    # deterministic signature + token count
-    toks: list[str] = []
-    try:
-        for s in (condition, tissue, perturb, comp):
-            toks.extend(_tokenize_context_text(s))
-    except Exception:
-        toks = []
+    # -------------------------
+    # Context Tokens
+    # -------------------------
+    ctx_tokens = card.context_tokens()
+    tok_n = int(len(ctx_tokens))
+    sig12 = _context_signature_b12(ctx_id=ctx_id, ctx_tokens=ctx_tokens)
 
-    tok_n = int(len(toks))
-    sig_payload = (ctx_id + "|" + ",".join(toks)).encode("utf-8")
-    sig12 = hashlib.sha256(sig_payload).hexdigest()[:12]
+    # Store tokens as a single TSV-safe string
+    tokens_str = ";".join(ctx_tokens)
+
+    if "context_tokens_method" not in out.columns:
+        out["context_tokens_method"] = "v2"
+    else:
+        out["context_tokens_method"] = out["context_tokens_method"].map(
+            lambda x: "v2" if _is_na_scalar(x) or (not str(x).strip()) else str(x)
+        )
+
+    if "context_tokens" not in out.columns:
+        out["context_tokens"] = tokens_str
+    else:
+        out["context_tokens"] = out["context_tokens"].map(
+            lambda x: tokens_str if _is_na_scalar(x) or (not str(x).strip()) else str(x)
+        )
 
     if "context_tokens_n" not in out.columns:
         out["context_tokens_n"] = tok_n
@@ -2080,7 +2149,9 @@ def _ensure_proxy_context_score_columns(
             lambda x: sig12 if _is_na_scalar(x) or (not str(x).strip()) else str(x)
         )
 
+    # -------------------------
     # term_uid for u01
+    # -------------------------
     if "term_uid" not in out.columns:
         if {"source", "term_id"}.issubset(set(out.columns)):
             out["term_uid"] = (
@@ -2163,79 +2234,100 @@ def _ensure_context_score_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _build_anchor_modules_from_distilled(
     distilled: pd.DataFrame, card: SampleCard
 ) -> dict[str, Any]:
+    # 0) Input guard
+    if distilled is None or not isinstance(distilled, pd.DataFrame) or distilled.empty:
+        return {
+            "ok": False,
+            "reason": "EMPTY_DISTILLED",
+            "has_anchors": False,
+            "tokens": [],
+            "tokens_signature": "",
+            "n_anchor_terms": 0,
+            "n_anchor_modules": 0,
+            "anchor_modules": [],
+            "anchor_terms_preview": [],
+        }
+
     dist = distilled.copy()
-    if dist is None or dist.empty:
-        return {"ok": False, "reason": "EMPTY_DISTILLED", "tokens": [], "n_anchor_terms": 0}
 
-    ctx_fields = [
-        _card_condition(card),
-        str(getattr(card, "condition", "") or ""),
-        str(getattr(card, "tissue", "") or ""),
-        str(getattr(card, "perturbation", "") or ""),
-        str(getattr(card, "comparison", "") or ""),
-    ]
-    tokens: list[str] = []
-    for s in ctx_fields:
-        tokens.extend(_tokenize_context_text(s))
+    # 1) SSOT: deterministic tokens from SampleCard
+    tokens = card.context_tokens()
+    tok_sig = card.context_tokens_signature()
+    tok_meta = card.context_tokens_effective()
 
-    tok_seen: set[str] = set()
-    tok_uniq: list[str] = []
-    for t in tokens:
-        if t not in tok_seen:
-            tok_seen.add(t)
-            tok_uniq.append(t)
-    tokens = tok_uniq
+    if not tokens:
+        return {
+            "ok": False,
+            "reason": "EMPTY_CONTEXT_TOKENS",
+            "has_anchors": False,
+            "tokens": [],
+            "tokens_signature": tok_sig,
+            "tokens_meta": tok_meta,
+            "n_anchor_terms": 0,
+            "n_anchor_modules": 0,
+            "anchor_modules": [],
+            "anchor_terms_preview": [],
+        }
 
+    # 2) module id column
     mod_col = None
-    for c in ["module_id_effective", "module_id"]:
+    for c in ("module_id_effective", "module_id"):
         if c in dist.columns:
             mod_col = c
             break
-
     if mod_col is None:
         return {
             "ok": False,
             "reason": "MISSING_MODULE_ID_IN_DISTILLED",
+            "has_anchors": False,
             "tokens": tokens,
+            "tokens_signature": tok_sig,
+            "tokens_meta": tok_meta,
             "n_anchor_terms": 0,
+            "n_anchor_modules": 0,
+            "anchor_modules": [],
+            "anchor_terms_preview": [],
         }
 
-    cols = []
-    for c in ["term_name", "term_id", "term_uid", "source"]:
-        if c in dist.columns:
-            cols.append(c)
-
+    # 3) term text columns (tolerant)
+    cols = [
+        c
+        for c in ("term_name", "term_name_salvaged", "term_id", "term_uid", "source")
+        if c in dist.columns
+    ]
     if not cols:
         return {
             "ok": False,
             "reason": "MISSING_TERM_TEXT_COLS",
+            "has_anchors": False,
             "tokens": tokens,
+            "tokens_signature": tok_sig,
+            "tokens_meta": tok_meta,
             "n_anchor_terms": 0,
+            "n_anchor_modules": 0,
+            "anchor_modules": [],
+            "anchor_terms_preview": [],
         }
 
     term_text = dist[cols].astype(str).agg(" ".join, axis=1).str.lower()
 
-    if not tokens:
-        return {"ok": False, "reason": "EMPTY_CONTEXT_TOKENS", "tokens": [], "n_anchor_terms": 0}
-
+    # 4) anchor match (word-boundary regex to reduce false positives)
     anchor_mask = pd.Series(False, index=dist.index)
     for t in tokens:
+        tt = str(t or "").strip().lower()
+        if not tt:
+            continue
+        pat = rf"\b{re.escape(tt)}\b"
         try:
-            anchor_mask = anchor_mask | term_text.str.contains(re.escape(t), na=False)
+            anchor_mask |= term_text.str.contains(pat, regex=True, na=False)
         except Exception:
+            # fail-open: just skip broken token
             continue
 
     anchor_rows = dist.loc[anchor_mask].copy()
     n_anchor_terms = int(anchor_rows.shape[0])
 
-    if n_anchor_terms == 0:
-        return {
-            "ok": False,
-            "reason": "NO_ANCHOR_TERMS_FOUND",
-            "tokens": tokens,
-            "n_anchor_terms": 0,
-        }
-
+    # 5) Extract anchor modules
     anchor_modules = (
         anchor_rows[mod_col]
         .map(lambda x: "" if _is_na_scalar(x) else str(x).strip())
@@ -2246,6 +2338,7 @@ def _build_anchor_modules_from_distilled(
     )
     anchor_modules = [m for m in anchor_modules if str(m).strip()]
 
+    # 6) preview
     preview_terms: list[str] = []
     if "term_uid" in anchor_rows.columns:
         preview_terms = (
@@ -2258,10 +2351,18 @@ def _build_anchor_modules_from_distilled(
             .tolist()
         )
 
+    has_anchors = bool(anchor_modules) and (n_anchor_terms > 0)
+
+    # IMPORTANT: no anchors is a *soft* outcome (ok=True, has_anchors=False)
+    reason = "OK" if has_anchors else "NO_ANCHOR_TERMS_FOUND"
+
     return {
         "ok": True,
-        "reason": "OK",
+        "reason": reason,
+        "has_anchors": bool(has_anchors),
         "tokens": tokens,
+        "tokens_signature": tok_sig,
+        "tokens_meta": tok_meta,
         "module_col": mod_col,
         "n_anchor_terms": int(n_anchor_terms),
         "n_anchor_modules": int(len(anchor_modules)),
@@ -2292,7 +2393,7 @@ def _proxy_context_review(
         (Interpretation: u < p_fail => FAIL; p_fail <= u < p_warn => ABSTAIN; u >= p_warn => PASS)
     """
     out = proposed.copy()
-    gm = _norm_gate_mode(gate_mode, default="soft")
+    gm = _norm_gate_mode(gate_mode, default="note")
     rm = _norm_review_mode(review_mode, default="proxy")
 
     card_ctx = {
@@ -2510,7 +2611,7 @@ def _apply_context_review(
       - Otherwise: proxy fallback (never leave unevaluated).
     """
     rm = _norm_review_mode(review_mode, default="proxy")
-    gm = _norm_gate_mode(gate_mode, default="soft")
+    gm = _norm_gate_mode(gate_mode, default="note")
 
     # --- OFF: explicit no review ---
     if rm == "off":
@@ -2538,27 +2639,39 @@ def _apply_context_review(
     def _has_any_evaluated(df: pd.DataFrame) -> bool:
         if df is None or df.empty:
             return False
+
         if "context_evaluated" in df.columns:
             try:
                 s = df["context_evaluated"].map(
                     lambda x: bool(x) if not _is_na_scalar(x) else False
                 )
-                return bool(s.any())
+                if bool(s.any()):
+                    return True
             except Exception:
                 pass
+
+        if "context_status" in df.columns:
+            st = df["context_status"].astype(str).str.strip().str.upper()
+            if bool(st.isin({"PASS", "FAIL", "ABSTAIN", "WARN"}).any()):
+                return True
+
         if "claim_json" in df.columns:
             try:
                 ex = df["claim_json"].apply(_extract_context_fields_from_claim_json)
                 ex_df = pd.DataFrame(list(ex))
                 if "context_evaluated" in ex_df.columns:
-                    v = (
-                        ex_df["context_evaluated"]
-                        .map(lambda x: bool(x) if isinstance(x, bool) else False)
-                        .fillna(False)
+                    v = ex_df["context_evaluated"].map(
+                        lambda x: bool(x) if isinstance(x, bool) else False
                     )
-                    return bool(v.any())
+                    if bool(v.any()):
+                        return True
+                if "context_status" in ex_df.columns:
+                    st2 = ex_df["context_status"].astype(str).str.strip().str.upper()
+                    if bool(st2.isin({"PASS", "FAIL", "ABSTAIN", "WARN"}).any()):
+                        return True
             except Exception:
                 return False
+
         return False
 
     already = _has_any_evaluated(proposed)
@@ -2590,9 +2703,14 @@ def _apply_context_review(
             # IMPORTANT: pipeline.py does not execute prompts here.
             # If LLM-evaluated fields already exist (likely from select.py),
             # we must not mislabel this step as having run the LLM itself.
-            out = _ensure_context_review_fields(proposed, gate_mode=gm)
+            out = _sync_context_columns_from_claim_json(proposed)
+            out = _ensure_context_review_fields(out, gate_mode=gm)
             out["context_review_mode"] = "llm"
-            out["context_method"] = "llm_from_select"
+            if "context_method" not in out.columns:
+                out["context_method"] = "llm_from_select"
+            else:
+                m = out["context_method"].astype(str).str.strip()
+                out.loc[m.eq(""), "context_method"] = "llm_from_select"
             out = _write_context_review_into_claim_json(out)
             return out, {
                 "evaluated": True,
@@ -2666,6 +2784,8 @@ def _restore_context_scores_into_audit_log(
         "context_swap_to",
         "context_signature",
         "context_tokens_n",
+        "context_tokens",
+        "context_tokens_method",
         "context_score_proxy",
         "context_score_proxy_norm",
         "context_score_proxy_u01",
@@ -2673,6 +2793,7 @@ def _restore_context_scores_into_audit_log(
         "module_context_weight",
         "context_proxy_method",
     ]
+
     take = [c for c in keep_cols if c in proposed.columns]
     if not take:
         return out
@@ -2713,7 +2834,7 @@ def _apply_context_gate_to_proposed(
     Returns:
       (updated_df, meta)
     """
-    gm = _norm_gate_mode(gate_mode, default="soft")
+    gm = _norm_gate_mode(gate_mode, default="note")
     meta: dict[str, Any] = {
         "evaluated": True,
         "gate_mode": gm,
@@ -2789,7 +2910,7 @@ def _apply_context_gate_to_audited(
     *,
     gate_mode: str,
 ) -> pd.DataFrame:
-    gm = _norm_gate_mode(gate_mode, default="soft")
+    gm = _norm_gate_mode(gate_mode, default="note")
     if gm != "hard":
         return audited
 
@@ -3053,7 +3174,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         # Resolve gate/review modes (env > card.extra), then enforce compatibility centrally.
         context_gate_mode = _norm_gate_mode(
-            _resolve_context_gate_mode(card, default="soft"), default="soft"
+            _resolve_context_gate_mode(card, default="note"), default="note"
         )
         context_review_mode = _norm_review_mode(
             _resolve_context_review_mode(card, default="proxy"), default="proxy"
@@ -3065,7 +3186,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
 
         # Apply possibly-updated modes returned by the compat guard.
         context_gate_mode = _norm_gate_mode(
-            compat_final.get("gate_mode", context_gate_mode), default="soft"
+            compat_final.get("gate_mode", context_gate_mode), default="note"
         )
         context_review_mode = _norm_review_mode(
             compat_final.get("review_mode", context_review_mode), default="proxy"
@@ -3076,19 +3197,36 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         _write_json(meta_path, meta)
 
         claim_mode_env = _env_str("LLMPATH_CLAIM_MODE", "").strip().lower()
-        mode_arg = "llm" if claim_mode_env == "llm" else "deterministic"
+        # NOTE: mode_arg is "effective" (what we actually pass to select_claims)
 
         shared_backend: BaseLLMBackend | None = None
         shared_notes = ""
-        if _need_llm_backend(claim_mode=claim_mode_env, context_review_mode=context_review_mode):
+        requested_claim_llm = claim_mode_env == "llm"
+        requested_review_llm = context_review_mode == "llm"
+        requested_any_llm = requested_claim_llm or requested_review_llm
+
+        if requested_any_llm:
             try:
                 shared_backend = get_backend_from_env(seed=int(seed0))
             except Exception as e:
                 shared_backend = None
                 shared_notes = f"backend_init_error:{type(e).__name__}"
 
-        claim_backend = shared_backend if claim_mode_env == "llm" else None
-        review_backend = shared_backend if context_review_mode == "llm" else None
+        backend_ok = shared_backend is not None
+
+        # --- CRITICAL: never call select_claims in LLM mode with backend=None ---
+        effective_claim_mode = "llm" if (requested_claim_llm and backend_ok) else "deterministic"
+        # For select_claims only:
+        # if review=llm was requested but backend is missing, degrade to proxy
+        context_review_mode_for_select = (
+            "llm"
+            if (requested_review_llm and backend_ok)
+            else ("proxy" if requested_review_llm and (not backend_ok) else context_review_mode)
+        )
+        mode_arg = effective_claim_mode
+
+        claim_backend = shared_backend if effective_claim_mode == "llm" else None
+        review_backend = shared_backend if context_review_mode_for_select == "llm" else None
 
         backend_for_select: BaseLLMBackend | None = claim_backend or review_backend
         backend_for_select_role = (
@@ -3099,6 +3237,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "claim": {
                 "enabled": (claim_mode_env == "llm"),
                 "claim_mode_env": claim_mode_env,
+                "claim_mode_effective_for_select": mode_arg,
                 "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
                 "backend_enabled": bool(claim_backend is not None),
                 "backend_notes": shared_notes if (claim_mode_env == "llm") else "",
@@ -3106,6 +3245,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "review": {
                 "enabled": (context_review_mode == "llm"),
                 "review_mode": context_review_mode,
+                "review_mode_effective_for_select": context_review_mode_for_select,
                 "backend_env": _env_str("LLMPATH_BACKEND", "").lower(),
                 "backend_enabled": bool(review_backend is not None),
                 "backend_notes": shared_notes if (context_review_mode == "llm") else "",
@@ -3113,6 +3253,8 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "select_entrypoint": {
                 "backend_attached": bool(backend_for_select is not None),
                 "backend_role": backend_for_select_role,
+                "backend_ok": bool(backend_ok),
+                "requested_any_llm": bool(requested_any_llm),
             },
         }
 
@@ -3125,6 +3267,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 "k_env_raw": os.environ.get("LLMPATH_K_CLAIMS", ""),
                 "context_gate_mode": context_gate_mode,
                 "context_review_mode": context_review_mode,
+                "context_review_mode_effective_for_select": context_review_mode_for_select,
             }
         )
         _write_json(meta_path, meta)
@@ -3139,7 +3282,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             claim_backend=claim_backend,
             review_backend=review_backend,
             context_gate_mode=context_gate_mode,
-            context_review_mode=context_review_mode,
+            context_review_mode=context_review_mode_for_select,
             seed=int(seed0),
             outdir=str(outdir),
         )
@@ -3151,11 +3294,11 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
                 card=card,
                 k=int(k_eff),
                 mode="deterministic",
-                backend=review_backend if context_review_mode == "llm" else None,
+                backend=review_backend if context_review_mode_for_select == "llm" else None,
                 claim_backend=None,
                 review_backend=review_backend,
                 context_gate_mode=context_gate_mode,
-                context_review_mode=context_review_mode,
+                context_review_mode=context_review_mode_for_select,
                 seed=int(seed0),
                 outdir=str(outdir),
             )
@@ -3281,7 +3424,7 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             except Exception:
                 meth = ""
 
-            if meth == "llm":
+            if meth.startswith("llm"):
                 src = "llm_review_confidence"
             elif meth.startswith("proxy"):
                 src = "proxy_review_confidence"
@@ -3435,28 +3578,29 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         elif "term_ids_str" in proposed.columns:
             proposed["term_ids_excel"] = proposed["term_ids_str"].map(_excel_safe_ids)
 
-        id2sym: dict[str, str] = {}
-        try:
-            id2sym = build_id_to_symbol_from_distilled(distilled2)
-        except Exception:
-            id2sym = {}
-
-        try:
-            map_path = _env_str("LLMPATH_GENE_ID_MAP_TSV", "")
-            if map_path:
-                extra_map = load_id_map_tsv(map_path)
-                if isinstance(extra_map, dict) and extra_map:
-                    id2sym = {**id2sym, **extra_map}
-        except Exception:
-            pass
-
-        if ("gene_ids" in proposed.columns) and id2sym:
-            raw = proposed["gene_ids"].map(lambda x: "" if _is_na_scalar(x) else str(x))
-            syms = raw.map(lambda x: map_ids_to_symbols(x, id2sym))
-            proposed["gene_symbols"] = syms
-            proposed["gene_symbols_str"] = syms.map(
-                lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
-            )
+        #       gene symbol mapping is display-only; handled in report.py
+        #        id2sym: dict[str, str] = {}
+        #        try:
+        #            id2sym = build_id_to_symbol_from_distilled(distilled2)
+        #        except Exception:
+        #            id2sym = {}
+        #
+        #        try:
+        #            map_path = _env_str("LLMPATH_GENE_ID_MAP_TSV", "")
+        #            if map_path:
+        #                extra_map = load_id_map_tsv(map_path)
+        #                if isinstance(extra_map, dict) and extra_map:
+        #                    id2sym = {**id2sym, **extra_map}
+        #        except Exception:
+        #            pass
+        #
+        #        if ("gene_ids" in proposed.columns) and id2sym:
+        #            raw = proposed["gene_ids"].map(lambda x: "" if _is_na_scalar(x) else str(x))
+        #            syms = raw.map(lambda x: map_ids_to_symbols(x, id2sym))
+        #            proposed["gene_symbols"] = syms
+        #            proposed["gene_symbols_str"] = syms.map(
+        #                lambda xs: ";".join(map(str, xs)) if isinstance(xs, list) else ""
+        #            )
 
         proposed = _sync_context_columns_from_claim_json(proposed)
         proposed = _normalize_context_confidence_for_gating(proposed)

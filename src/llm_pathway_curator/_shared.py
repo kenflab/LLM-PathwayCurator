@@ -160,6 +160,42 @@ def validate_status_values(s_norm: pd.Series) -> None:
         raise ValueError(f"invalid status values: {bad} (allowed={sorted(ALLOWED_STATUSES)})")
 
 
+# -----------------------------------------------------------------------------
+# Gate mode vocabulary (spec-level)
+# -----------------------------------------------------------------------------
+# Canonical gate modes used across pipeline/select/audit/sample_card.
+# NOTE: We ACCEPT many legacy/synonym inputs, but we EMIT only canonical values.
+ALLOWED_GATE_MODES = {"off", "note", "hard"}
+
+
+def normalize_gate_mode(x: object, *, default: str = "note") -> str:
+    """
+    Normalize gate mode to canonical vocabulary: off|note|hard.
+
+    Accepted (synonyms / legacy):
+      - off: off, none, disable, disabled
+      - note: note, warn, warning, soft
+      - hard: hard, strict, abstain, on, enable, enabled
+
+    Unknown values fall back to normalized default; if default is invalid -> "note".
+    """
+    s = ("" if x is None else str(x)).strip().lower()
+    if not s:
+        s = str(default).strip().lower()
+
+    if s in {"off", "none", "disable", "disabled"}:
+        return "off"
+    if s in {"note", "warn", "warning", "soft"}:
+        return "note"
+    if s in {"hard", "strict", "abstain", "on", "enable", "enabled"}:
+        return "hard"
+
+    d = str(default).strip().lower()
+    if d in ALLOWED_GATE_MODES:
+        return d
+    return "note"
+
+
 # Conservative gene-like token heuristic (used for whitespace-separated fallback).
 GENE_TOKEN_RE_STR = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 GENE_TOKEN_RE = re.compile(GENE_TOKEN_RE_STR)
@@ -726,6 +762,8 @@ __all__ = [
     "normalize_status_series",
     "validate_status_values",
     "normalize_direction",
+    "ALLOWED_GATE_MODES",
+    "normalize_gate_mode",
     # -------------------------
     # Tags (spec)
     # -------------------------

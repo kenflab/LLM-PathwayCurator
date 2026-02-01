@@ -115,19 +115,12 @@ def _get_distill_pre_gate_mode(card: SampleCard, default: str = "off") -> str:
       - "off" (default): do not change keep_term based on tau
       - "note": keep_term stays True, but keep_reason annotates low survival
       - "hard": keep_term=False when term_survival_agg < tau
+
+    Normalization is spec-owned by _shared.normalize_gate_mode().
     """
     v = _get_distill_knob(card, "pre_gate_mode", None)
-    if v is None:
-        return str(default).strip().lower()
-
-    s = str(v).strip().lower()
-    if s in {"off", "disable", "disabled", "none"}:
-        return "off"
-    if s in {"note", "warn", "warning"}:
-        return "note"
-    if s in {"hard", "abstain"}:
-        return "hard"
-    return str(default).strip().lower()
+    # Spec-level single source of truth (accepts legacy/synonyms; emits off|note|hard)
+    return _shared.normalize_gate_mode(v, default=default)
 
 
 def _compute_similarity_metrics(orig: set[str], pert: set[str]) -> tuple[float, float, float]:

@@ -288,65 +288,43 @@ def _get_context_proxy_key_fields(
 def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
     Tool contract (user-facing):
-      - "off": ignore context gate
-      - "note": annotate context issues, do not change status
-      - "hard": evaluated-only gating (safe-side): unevaluated => ABSTAIN
-    Backward compat:
-      - "abstain" => "hard"
+      - off: ignore context gate
+      - note: annotate only
+      - hard: evaluated-only gating (safe-side): unevaluated => ABSTAIN
+
+    Normalization is spec-owned by _shared.normalize_gate_mode().
     """
-    if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
-        try:
-            s = str(card.context_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
-        except Exception:
-            s = ""
-    else:
-        ex = _get_extra(card)
-        s = str(ex.get("context_gate_mode", default)).strip().lower()
+    try:
+        if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
+            v = card.context_gate_mode(default=default)  # type: ignore[attr-defined]
+        else:
+            ex = _get_extra(card)
+            v = ex.get("context_gate_mode", default)
+    except Exception:
+        v = default
 
-    if s in {"off", "disable", "disabled", "none"}:
-        return "off"
-    if s in {"note", "warn", "warning"}:
-        return "note"
-    if s in {"abstain", "hard"}:
-        return "hard"
-
-    d = str(default).strip().lower()
-    if d in {"off", "note", "hard"}:
-        return d
-    return "note"
+    return _shared.normalize_gate_mode(v, default=default)
 
 
 def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
     """
     Tool contract (user-facing):
-      - "off" (default): ignore missing stress entirely
-      - "note": annotate stress results, do not change status
-      - "hard": safe-side robustness gating:
-          * missing stress => ABSTAIN_INCONCLUSIVE_STRESS
-          * stress ABSTAIN/WARN/FAIL => ABSTAIN_INCONCLUSIVE_STRESS (do NOT FAIL)
-    Backward compat:
-      - "abstain" => "hard"
+      - off (default): ignore missing stress entirely
+      - note: annotate stress results, do not change status
+      - hard: safe-side robustness gating (missing/failed stress => ABSTAIN)
+
+    Normalization is spec-owned by _shared.normalize_gate_mode().
     """
-    if hasattr(card, "stress_gate_mode") and callable(card.stress_gate_mode):
-        try:
-            s = str(card.stress_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
-        except Exception:
-            s = ""
-    else:
-        ex = _get_extra(card)
-        s = str(ex.get("stress_gate_mode", default)).strip().lower()
+    try:
+        if hasattr(card, "stress_gate_mode") and callable(card.stress_gate_mode):
+            v = card.stress_gate_mode(default=default)  # type: ignore[attr-defined]
+        else:
+            ex = _get_extra(card)
+            v = ex.get("stress_gate_mode", default)
+    except Exception:
+        v = default
 
-    if s in {"off", "none", "disable", "disabled"}:
-        return "off"
-    if s in {"note", "warn", "warning"}:
-        return "note"
-    if s in {"hard", "abstain"}:
-        return "hard"
-
-    d = str(default).strip().lower()
-    if d in {"off", "note", "hard"}:
-        return d
-    return "off"
+    return _shared.normalize_gate_mode(v, default=default)
 
 
 def _get_audit_mode(card: SampleCard, default: str = "decision") -> str:
@@ -458,32 +436,22 @@ def _row_original_context_id(row: pd.Series) -> str:
 def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
     """
     Tool contract (user-facing):
-      - "off": do not gate on stability (research only)
-      - "note": do not change status; annotate instability
-      - "hard": agg < tau => ABSTAIN_UNSTABLE
-    Backward compat:
-      - "abstain" => "hard"
+      - off: do not gate on stability
+      - note: annotate only
+      - hard: agg < tau => ABSTAIN_UNSTABLE
+
+    Normalization is spec-owned by _shared.normalize_gate_mode().
     """
-    if hasattr(card, "stability_gate_mode") and callable(card.stability_gate_mode):
-        try:
-            s = str(card.stability_gate_mode(default=default)).strip().lower()  # type: ignore[attr-defined]
-        except Exception:
-            s = ""
-    else:
-        ex = _get_extra(card)
-        s = str(ex.get("stability_gate_mode", default)).strip().lower()
+    try:
+        if hasattr(card, "stability_gate_mode") and callable(card.stability_gate_mode):
+            v = card.stability_gate_mode(default=default)  # type: ignore[attr-defined]
+        else:
+            ex = _get_extra(card)
+            v = ex.get("stability_gate_mode", default)
+    except Exception:
+        v = default
 
-    if s in {"off", "disable", "disabled", "none"}:
-        return "off"
-    if s in {"note", "warn", "warning"}:
-        return "note"
-    if s in {"abstain", "hard"}:
-        return "hard"
-
-    d = str(default).strip().lower()
-    if d in {"off", "note", "hard"}:
-        return d
-    return "hard"
+    return _shared.normalize_gate_mode(v, default=default)
 
 
 def _get_strict_evidence_check(card: SampleCard, default: bool = False) -> bool:
