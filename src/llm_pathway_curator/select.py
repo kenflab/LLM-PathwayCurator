@@ -33,20 +33,77 @@ _DEFAULT_MAX_GENE_IDS_IN_CLAIM = 512
 # Small utilities
 # -------------------------
 def _is_na_scalar(x: Any) -> bool:
-    """Single source of truth: _shared.is_na_scalar."""
+    """
+    Check NA-like scalars using the single source of truth.
+
+    Parameters
+    ----------
+    x : Any
+        Value to test.
+
+    Returns
+    -------
+    bool
+        True if ``x`` should be treated as NA.
+
+    See Also
+    --------
+    llm_pathway_curator._shared.is_na_scalar
+    """
     return _shared.is_na_scalar(x)
 
 
 def _dedup_preserve_order(items: list[str]) -> list[str]:
+    """
+    Deduplicate strings while preserving the first-seen order.
+
+    Parameters
+    ----------
+    items : list[str]
+        Input items.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list with stable order.
+    """
     return _shared.dedup_preserve_order([str(x).strip() for x in items])
 
 
 def _get_extra(card: SampleCard) -> dict[str, Any]:
+    """
+    Get ``card.extra`` as a dict safely.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    dict[str, Any]
+        Extra dict, or an empty dict if missing/invalid.
+    """
     ex = getattr(card, "extra", {}) or {}
     return ex if isinstance(ex, dict) else {}
 
 
 def _as_bool(x: Any, default: bool) -> bool:
+    """
+    Parse a boolean-like value with a default fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse (bool, int, str, etc.).
+    default : bool
+        Default value if parsing fails.
+
+    Returns
+    -------
+    bool
+        Parsed boolean value.
+    """
     if x is None:
         return bool(default)
     if isinstance(x, bool):
@@ -60,6 +117,21 @@ def _as_bool(x: Any, default: bool) -> bool:
 
 
 def _as_int(x: Any, default: int) -> int:
+    """
+    Parse an int-like value with a default fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse.
+    default : int
+        Default value if parsing fails.
+
+    Returns
+    -------
+    int
+        Parsed integer value.
+    """
     try:
         if x is None:
             return int(default)
@@ -69,6 +141,21 @@ def _as_int(x: Any, default: int) -> int:
 
 
 def _as_float(x: Any, default: float) -> float:
+    """
+    Parse a float-like value with a default fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse.
+    default : float
+        Default value if parsing fails.
+
+    Returns
+    -------
+    float
+        Parsed float value.
+    """
     try:
         if x is None:
             return float(default)
@@ -78,6 +165,24 @@ def _as_float(x: Any, default: float) -> float:
 
 
 def _validate_k(k: Any) -> int:
+    """
+    Validate and normalize ``k`` for claim selection.
+
+    Parameters
+    ----------
+    k : Any
+        Candidate k.
+
+    Returns
+    -------
+    int
+        Validated integer k (>= 1).
+
+    Raises
+    ------
+    ValueError
+        If k is not an integer >= 1.
+    """
     try:
         kk = int(k)
     except Exception as e:
@@ -88,65 +193,163 @@ def _validate_k(k: Any) -> int:
 
 
 def _clean_gene_token(g: Any) -> str:
+    """
+    Clean a gene token using the shared spec.
+
+    Parameters
+    ----------
+    g : Any
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Cleaned gene token.
+    """
     return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: Any) -> str:
     """
-    Canonical gene id normalization.
+    Normalize a gene identifier for selection-time contracts.
 
-    CONTRACT (must match schema.py / modules.py / audit.py):
-      - trim quotes/whitespace/punctuation
-      - DO NOT force uppercase (species/ID-system dependent)
+    Parameters
+    ----------
+    g : Any
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Canonical gene token (trim-only; no forced uppercasing).
+
+    Notes
+    -----
+    This must match normalization used by schema/modules/audit.
     """
     return _clean_gene_token(g)
 
 
 def _norm_direction(x: Any) -> str:
-    """Single source of truth: _shared.normalize_direction()."""
+    """
+    Normalize direction tokens (single source of truth).
+
+    Parameters
+    ----------
+    x : Any
+        Direction-like value.
+
+    Returns
+    -------
+    str
+        One of ``{"up","down","na"}``.
+    """
     return _shared.normalize_direction(x)
 
 
 def _as_gene_list(x: Any) -> list[str]:
     """
-    Single source of truth: delegate to _shared.parse_genes().
-    - conservative split
-    - no uppercasing
-    - dedup preserve order
+    Parse an evidence gene field into a conservative gene list.
+
+    Parameters
+    ----------
+    x : Any
+        Evidence genes field (list-like or scalar string).
+
+    Returns
+    -------
+    list[str]
+        Parsed gene list (conservative split; no uppercasing).
+
+    See Also
+    --------
+    llm_pathway_curator._shared.parse_genes
     """
     return _shared.parse_genes(x)
 
 
 def _hash_gene_set_claim(genes: list[str]) -> str:
     """
-    Spec-level: must match Claim/EvidenceRef semantics.
-    IMPORTANT: genes must be the SAME list embedded into claim_json.
+    Compute a claim gene-set hash from the embedded gene list.
+
+    Parameters
+    ----------
+    genes : list[str]
+        Gene list that will be embedded into ``claim_json``.
+
+    Returns
+    -------
+    str
+        12-hex hash for the gene set.
+
+    Notes
+    -----
+    ``genes`` must be the exact list stored in claim_json, otherwise
+    downstream validation and stress scoring may diverge.
     """
     return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _hash_term_set_fallback(term_uids: list[str]) -> str:
     """
-    Fallback when evidence genes are missing/empty.
-    Deterministic and set-stable.
+    Hash term_uids as a fallback when genes are missing.
+
+    Parameters
+    ----------
+    term_uids : list[str]
+        Term UIDs referenced by a claim.
+
+    Returns
+    -------
+    str
+        12-hex set-stable hash.
     """
     return _shared.hash_set_12hex(list(term_uids or []))
 
 
 def _debug_enabled() -> bool:
+    """
+    Check whether debug logging is enabled.
+
+    Returns
+    -------
+    bool
+        True if ``LLMPATH_DEBUG`` is a truthy token.
+    """
     s = str(os.environ.get("LLMPATH_DEBUG", "")).strip().lower()
     return s in {"1", "true", "t", "yes", "y", "on"}
 
 
 def _dlog(msg: str) -> None:
+    """
+    Print a debug log message to stderr when enabled.
+
+    Parameters
+    ----------
+    msg : str
+        Message to print.
+    """
     if _debug_enabled():
         print(msg, file=sys.stderr)
 
 
 def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> str:
     """
-    Backward-compatible SampleCard field access.
-    Example: primary="condition", fallback="disease".
+    Read a SampleCard text field with backward-compatible fallback.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    primary : str
+        Primary attribute name.
+    fallback : str or None, optional
+        Fallback attribute name if primary is empty.
+
+    Returns
+    -------
+    str
+        Stripped text (empty string if missing).
     """
     v = getattr(card, primary, None)
     if (v is None or (str(v).strip() == "")) and fallback:
@@ -157,8 +360,21 @@ def _card_text(card: SampleCard, primary: str, fallback: str | None = None) -> s
 
 def _max_gene_ids_in_claim(card: SampleCard) -> int:
     """
-    Bound the number of evidence genes embedded in claim_json.
-    Must remain >=1 to keep EvidenceRef meaningful.
+    Determine max number of gene IDs to embed into claim_json.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card. Uses ``card.extra`` and env overrides.
+
+    Returns
+    -------
+    int
+        Bound in [1, 5000].
+
+    Notes
+    -----
+    Env override: ``LLMPATH_MAX_GENE_IDS_IN_CLAIM``.
     """
     ex = _get_extra(card)
     env = str(os.environ.get("LLMPATH_MAX_GENE_IDS_IN_CLAIM", "")).strip()
@@ -177,7 +393,17 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 # -------------------------
 def _is_context_swap(card: SampleCard) -> bool:
     """
-    Detect paper ablation cards (context_swap/shuffled_context).
+    Detect context swap (paper ablation) from SampleCard.extra.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    bool
+        True if swap/shuffled context markers are present.
     """
     ex = _get_extra(card)
     for k in ["context_swap_to", "context_swap_from", "context_swap_to_cancer"]:
@@ -196,11 +422,24 @@ def _is_context_swap(card: SampleCard) -> bool:
 
 def _effective_context_value(card: SampleCard, field: str) -> str:
     """
-    Single source of truth for selection-time context proxy inputs.
+    Get swap-aware "effective" context values for selection-time logic.
 
-    Key idea:
-      - If context_swap is active, card.extra may carry the swapped condition/cancer.
-      - Many cards may have disease=None; relying on card.condition/disease alone collapses proxy.
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    field : str
+        Context field name (e.g., condition, tissue, perturbation).
+
+    Returns
+    -------
+    str
+        Effective value for the requested field.
+
+    Notes
+    -----
+    When context swap is active, swapped-to values in ``card.extra`` are
+    preferred so that proxy/review signals change under swap.
     """
     ex = _get_extra(card)
 
@@ -248,9 +487,21 @@ def _effective_context_value(card: SampleCard, field: str) -> str:
 
 def _context_signature(card: SampleCard) -> str:
     """
-    Compact signature of the context used for deterministic proxy.
+    Build a compact signature of selection-time context.
 
-    MUST change when swap_to/from changes.
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    str
+        12-hex signature that changes when swap targets change.
+
+    Notes
+    -----
+    This signature is used as part of deterministic tie-breaks and caches.
     """
     ex = _get_extra(card)
 
@@ -278,10 +529,21 @@ def _context_signature(card: SampleCard) -> str:
 # -------------------------
 def _context_tokens(card: SampleCard) -> list[str]:
     """
-    Deterministic tokenization for selection-time proxy.
+    Tokenize effective context into deterministic proxy tokens.
 
-    CRITICAL:
-      - Must use swap-aware effective context, otherwise swap has no effect.
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated tokens (lowercased; length >= 3).
+
+    Notes
+    -----
+    Uses swap-aware effective context so swap affects proxy behavior.
     """
     toks: list[str] = []
     for v in [
@@ -301,14 +563,38 @@ def _context_tokens(card: SampleCard) -> list[str]:
 
 
 def _context_score(term_name: str, toks: list[str]) -> int:
+    """
+    Compute a simple proxy score based on token substring matches.
+
+    Parameters
+    ----------
+    term_name : str
+        Term name to score.
+    toks : list[str]
+        Context tokens.
+
+    Returns
+    -------
+    int
+        Count of tokens present in the term name.
+    """
     name = str(term_name).lower()
     return sum(1 for t in toks if t and t in name)
 
 
 def _context_keys(card: SampleCard) -> list[str]:
     """
-    Tool-facing context keys (stable vocabulary).
-    Backward compat: if disease exists but condition missing, still emit "condition".
+    Emit tool-facing context keys with a stable vocabulary.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    list[str]
+        Context keys used by Claim objects.
     """
     keys: list[str] = []
     cond = _effective_context_value(card, "condition").strip().lower()
@@ -341,17 +627,21 @@ _LEGACY_CONTEXT_GATE_ENV = "LLMPATH_CONTEXT_GATE_MODE"
 
 def _context_review_mode_card(card: SampleCard) -> str:
     """
-    Pipeline/sample_card controlled context review mode.
+    Read context review mode from SampleCard.extra.
 
-    Values (paper-facing):
-      - off
-      - proxy
-      - llm
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
 
-    We map these to selection-time context usage:
-      - llm   -> review   (use pipeline-produced context_status/context_evaluated)
-      - proxy -> proxy
-      - off   -> off
+    Returns
+    -------
+    str
+        One of ``{"off","proxy","llm",""}``.
+
+    Notes
+    -----
+    This is a paper-facing knob that is mapped to selection-time behavior.
     """
     ex = _get_extra(card)
     v = str(ex.get("context_review_mode", "")).strip().lower()
@@ -366,20 +656,26 @@ def _context_review_mode_card(card: SampleCard) -> str:
 
 def _select_context_mode(card: SampleCard) -> str:
     """
-    Selection-time context usage.
+    Resolve selection-time context usage mode.
 
-    Values:
-      - off: do not use context in C1 ranking/gate
-      - proxy: compute deterministic proxy (swap-aware)
-      - review: use pipeline-produced context_status/context_evaluated if present;
-               fallback to proxy if missing
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
 
+    Returns
+    -------
+    str
+        One of ``{"off","proxy","review"}``.
+
+    Notes
+    -----
     Priority:
-      1) env (LLMPATH_SELECT_CONTEXT_MODE)
-      2) auto(context_swap)
-      3) card.extra.select_context_mode
-      4) card.extra.context_review_mode  (NEW: llm/proxy/off -> review/proxy/off)
-      5) legacy SampleCard getter
+    1) env ``LLMPATH_SELECT_CONTEXT_MODE``
+    2) auto-enable proxy for context swap cards
+    3) ``card.extra.select_context_mode``
+    4) ``card.extra.context_review_mode`` (llm/proxy/off)
+    5) legacy SampleCard getter
     """
     env = str(os.environ.get(_SELECT_CONTEXT_ENV, "")).strip().lower()
     if env:
@@ -420,20 +716,24 @@ def _select_context_mode(card: SampleCard) -> str:
 
 def _context_gate_mode(card: SampleCard, override: str | None = None) -> str:
     """
-    Selection-time gating based on context signal.
+    Resolve selection-time context gate mode.
 
-    Canonical values (emitted):
-      - off | note | hard
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    override : str or None, optional
+        Explicit override for this call.
 
-    Accepted inputs include legacy/synonyms like soft/warn/abstain/on.
-    Normalization is spec-owned by _shared.normalize_gate_mode().
+    Returns
+    -------
+    str
+        Canonical gate mode: ``"off"``, ``"note"``, or ``"hard"``.
 
-    Priority:
-      0) explicit override (this call only)
-      1) new env
-      2) card.extra
-      3) legacy env
-      4) default off
+    Notes
+    -----
+    Normalization is owned by ``_shared.normalize_gate_mode`` and accepts
+    legacy synonyms (soft/warn/abstain/on/strict).
     """
     if override is not None:
         return _shared.normalize_gate_mode(override, default="off")
@@ -462,9 +762,21 @@ def _context_gate_mode(card: SampleCard, override: str | None = None) -> str:
 
 def _context_tiebreak_int(card: SampleCard, term_uid: str, ctx_sig: str) -> int:
     """
-    Deterministic tie-breaker that MUST change when context changes (including swap).
+    Compute a deterministic tie-break integer for stable sorting.
 
-    Use ctx_sig explicitly so disease=None doesn't collapse.
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card (not directly used; kept for API symmetry).
+    term_uid : str
+        Term UID.
+    ctx_sig : str
+        Context signature. Must change when swap changes.
+
+    Returns
+    -------
+    int
+        Stable integer in [0, 2**31-2].
     """
     tu = str(term_uid).strip()
     payload = {"ctx_sig": str(ctx_sig), "term_uid": tu}
@@ -475,11 +787,17 @@ def _context_tiebreak_int(card: SampleCard, term_uid: str, ctx_sig: str) -> int:
 
 def _context_status_score(row: pd.Series) -> int:
     """
-    Convert pipeline context review outputs to an ordering score.
+    Convert pipeline context review outputs into an ordering score.
 
-    Expected columns (if present):
-      - context_evaluated: bool
-      - context_status: PASS|WARN|FAIL|...
+    Parameters
+    ----------
+    row : pandas.Series
+        Row that may contain context review fields.
+
+    Returns
+    -------
+    int
+        Score for sorting: PASS > WARN > unknown evaluated > missing > FAIL.
     """
     ev = False
     if "context_evaluated" in row.index and (not _is_na_scalar(row.get("context_evaluated"))):
@@ -514,7 +832,25 @@ def _context_status_score(row: pd.Series) -> int:
 # Mode resolution
 # -------------------------
 def _resolve_mode(card: SampleCard, mode: str | None) -> str:
-    # Priority: explicit arg > env > SampleCard getter > default
+    """
+    Resolve claim selection mode.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    mode : str or None
+        Explicit mode ("deterministic" or "llm").
+
+    Returns
+    -------
+    str
+        Effective mode ("deterministic" or "llm").
+
+    Notes
+    -----
+    Priority: explicit arg > env ``LLMPATH_CLAIM_MODE`` > SampleCard getter.
+    """
     if mode is not None:
         s = str(mode).strip().lower()
         return s if s in {"deterministic", "llm"} else "deterministic"
@@ -536,6 +872,19 @@ def _resolve_mode(card: SampleCard, mode: str | None) -> str:
 # This remains opt-in and should stay OFF by default.
 # ===========================
 def _stress_enabled(card: SampleCard) -> bool:
+    """
+    Determine whether the optional stress suite is enabled.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    bool
+        True if enabled via env or ``card.extra``.
+    """
     env = str(os.environ.get("LLMPATH_STRESS_GENERATE", "")).strip().lower()
     if env:
         return env in {"1", "true", "t", "yes", "y", "on"}
@@ -544,6 +893,21 @@ def _stress_enabled(card: SampleCard) -> bool:
 
 
 def _seed_for_claim(seed: int | None, claim_id: str) -> int:
+    """
+    Derive a deterministic RNG seed for a claim.
+
+    Parameters
+    ----------
+    seed : int or None
+        Global seed.
+    claim_id : str
+        Claim identifier.
+
+    Returns
+    -------
+    int
+        Deterministic seed for numpy RNG.
+    """
     base = 0 if seed is None else int(seed)
     payload = {"seed": base, "claim_id": str(claim_id)}
     # Keep wide range; numpy RNG accepts large ints
@@ -551,6 +915,21 @@ def _seed_for_claim(seed: int | None, claim_id: str) -> int:
 
 
 def _similarity(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
+    """
+    Compute Jaccard, recall, and precision between two sets.
+
+    Parameters
+    ----------
+    orig : set[str]
+        Original set.
+    pert : set[str]
+        Perturbed set.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (jaccard, recall, precision).
+    """
     if not orig and not pert:
         return (1.0, 1.0, 1.0)
     if not orig:
@@ -572,6 +951,27 @@ def _perturb_gene_set(
     p_drop: float,
     p_add: float,
 ) -> set[str]:
+    """
+    Perturb a gene list by dropout and jitter-addition.
+
+    Parameters
+    ----------
+    genes : list[str]
+        Baseline genes.
+    gene_pool : numpy.ndarray
+        Pool for adding genes (should contain normalized IDs).
+    rng : numpy.random.Generator
+        RNG instance.
+    p_drop : float
+        Dropout probability per baseline gene.
+    p_add : float
+        Fraction of baseline length to add from pool.
+
+    Returns
+    -------
+    set[str]
+        Perturbed gene set.
+    """
     if not genes:
         return set()
 
@@ -595,6 +995,19 @@ def _perturb_gene_set(
 
 
 def _build_term_gene_map(distilled: pd.DataFrame) -> dict[str, set[str]]:
+    """
+    Build a term_uid -> gene_id set mapping from distilled evidence.
+
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table.
+
+    Returns
+    -------
+    dict[str, set[str]]
+        Mapping from term_uid to gene set. Terms with empty genes are skipped.
+    """
     m: dict[str, set[str]] = {}
     if "term_uid" not in distilled.columns:
         return m
@@ -621,12 +1034,45 @@ def _evaluate_stress_for_claim(
     *,
     claim_id: str,
     term_uids: list[str],
+    gene_ids_in_claim: list[str] | None,
     gene_set_hash: str,
     term_to_genes: dict[str, set[str]],
     gene_pool: np.ndarray,
     seed: int | None,
     card: SampleCard,
 ) -> dict[str, Any]:
+    """
+    Evaluate identity stability under gene-set perturbations (dev-only).
+
+    Parameters
+    ----------
+    claim_id : str
+        Claim identifier.
+    term_uids : list[str]
+        Term UIDs referenced by the claim.
+    gene_ids_in_claim : list[str] or None
+        Gene IDs embedded in claim_json. This is the stress baseline.
+    gene_set_hash : str
+        Hash embedded in the claim (must match ``gene_ids_in_claim``).
+    term_to_genes : dict[str, set[str]]
+        Term-to-genes mapping (used for pool construction / diagnostics).
+    gene_pool : numpy.ndarray
+        Candidate pool for jitter-addition.
+    seed : int or None
+        Global seed.
+    card : SampleCard
+        Sample card (reads stress knobs from ``card.extra``).
+
+    Returns
+    -------
+    dict[str, Any]
+        Stress evaluation fields (status, ok flag, notes, reason).
+
+    Notes
+    -----
+    Baseline genes are taken from ``gene_ids_in_claim`` to keep hash semantics
+    consistent with the decision object stored in claim_json.
+    """
     ex = _get_extra(card)
 
     n = max(8, min(256, _as_int(ex.get("stress_n", None), 64)))
@@ -639,16 +1085,18 @@ def _evaluate_stress_for_claim(
 
     surv_thr = min(max(_as_float(ex.get("stress_survival_thr", None), 0.80), 0.0), 1.0)
 
-    base_genes: set[str] = set()
-    for t in term_uids:
-        base_genes |= set(term_to_genes.get(str(t).strip(), set()))
+    # Base genes must match claim_json gene_ids to keep hash semantics consistent.
+    genes0 = gene_ids_in_claim or []
+    genes0 = [_norm_gene_id(g) for g in genes0 if str(g).strip()]
+    genes0 = _dedup_preserve_order([g for g in genes0 if g])
+    base_genes: set[str] = set(genes0)
 
     if not base_genes:
         return {
             "stress_status": "ABSTAIN",
             "stress_ok": False,
             "stress_reason": "stress_missing_baseline_genes",
-            "stress_notes": "no baseline evidence genes for referenced term_uids",
+            "stress_notes": "claim has no gene_ids for stress baseline",
         }
 
     base_hash_claim = str(gene_set_hash).strip()
@@ -661,7 +1109,7 @@ def _evaluate_stress_for_claim(
         }
 
     # IMPORTANT: baseline hash must match the embedded claim hash
-    base_hash_calc = _hash_gene_set_claim(sorted(list(base_genes)))
+    base_hash_calc = _hash_gene_set_claim(list(genes0))
     if base_hash_calc != base_hash_claim:
         return {
             "stress_status": "WARN",
@@ -677,7 +1125,7 @@ def _evaluate_stress_for_claim(
     rs: list[float] = []
     ps: list[float] = []
 
-    base_list = sorted(list(base_genes))
+    base_list = list(genes0)
     for _ in range(int(n)):
         pert = _perturb_gene_set(
             base_list, gene_pool=gene_pool, rng=rng, p_drop=p_drop, p_add=p_add
@@ -722,14 +1170,43 @@ def _evaluate_stress_for_claim(
 # Context review (LLM) - minimal, shortlist-only
 # ===========================
 def _env_wants_llm_context_review() -> bool:
+    """
+    Check env flag for LLM context review.
+
+    Returns
+    -------
+    bool
+        True if ``LLMPATH_CONTEXT_REVIEW_MODE`` requests LLM review.
+    """
     s = str(os.environ.get("LLMPATH_CONTEXT_REVIEW_MODE", "")).strip().lower()
     return s in {"llm", "on", "true", "yes", "y", "1"}
 
 
 def _backend_invoke_text(backend: BaseLLMBackend, prompt: str) -> str:
     """
-    Best-effort backend invocation without assuming a single interface.
-    Tries common method names used across backends.
+    Invoke a backend with best-effort method discovery.
+
+    Parameters
+    ----------
+    backend : BaseLLMBackend
+        Backend instance.
+    prompt : str
+        Prompt text.
+
+    Returns
+    -------
+    str
+        Raw backend output as text.
+
+    Raises
+    ------
+    RuntimeError
+        If no compatible callable method is found.
+
+    Notes
+    -----
+    Tries JSON-capable methods first (chat_json/complete_json/...),
+    then falls back to text methods (chat/complete/...).
     """
     # Prefer JSON-capable methods if they exist.
     for meth in ["chat_json", "complete_json", "generate_json", "json"]:
@@ -762,8 +1239,17 @@ def _backend_invoke_text(backend: BaseLLMBackend, prompt: str) -> str:
 
 def _parse_first_json_obj(text: str) -> dict[str, Any]:
     """
-    Robust-ish JSON extraction from LLM output.
-    Accepts either a raw JSON object or a text containing one.
+    Extract the first JSON object from LLM output.
+
+    Parameters
+    ----------
+    text : str
+        LLM output text.
+
+    Returns
+    -------
+    dict[str, Any]
+        Parsed JSON object, or empty dict on failure.
     """
     s = str(text).strip()
     if not s:
@@ -796,6 +1282,27 @@ def _llm_context_review_prompt(
     source: str,
     evidence_genes: list[str],
 ) -> str:
+    """
+    Build a minimal prompt for LLM context review.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    term_uid : str
+        Term UID.
+    term_name : str
+        Term name.
+    source : str
+        Term source.
+    evidence_genes : list[str]
+        Evidence genes (should be normalized and deduplicated).
+
+    Returns
+    -------
+    str
+        Prompt string instructing the model to return JSON only.
+    """
     ctx = {
         "condition": _effective_context_value(card, "condition"),
         "tissue": _effective_context_value(card, "tissue"),
@@ -834,16 +1341,35 @@ def _maybe_apply_llm_context_review(
     context_review_mode: str,
 ) -> pd.DataFrame:
     """
-    Fill pipeline-owned context review columns in distilled *only when missing*:
-      - context_evaluated (bool)
-      - context_status (PASS|WARN|FAIL)
-      - context_method (llm)
-      - context_confidence (float)
-      - context_reason (str)
+    Populate pipeline-owned context review fields using an LLM (shortlist-only).
 
-    Strategy:
-      - shortlist-only to avoid O(N_terms) LLM calls
-      - do NOT overwrite rows already evaluated by pipeline
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table.
+    card : SampleCard
+        Sample card.
+    review_backend : BaseLLMBackend or None
+        Backend used for LLM context review.
+    k : int
+        Number of claims requested; used to size the shortlist.
+    seed : int or None
+        Seed for deterministic behavior (currently minimal usage).
+    outdir : str or None
+        Output directory used for a small JSON cache file.
+    context_review_mode : str
+        Review mode ("off" or "llm").
+
+    Returns
+    -------
+    pandas.DataFrame
+        Updated dataframe. Existing LLM-reviewed rows are not overwritten.
+
+    Notes
+    -----
+    This function fills these columns when appropriate:
+    context_evaluated, context_status, context_method, context_confidence,
+    context_reason.
     """
     want_llm = (
         str(context_review_mode or "").strip().lower() == "llm" or _env_wants_llm_context_review()
@@ -1075,15 +1601,26 @@ def _maybe_apply_llm_context_review(
 
 def _maybe_inject_context_snapshot(claim: Claim, r: pd.Series) -> Claim:
     """
-    Snapshot pipeline-owned context review fields into the Claim object.
+    Inject context review snapshot from a row into a Claim.
 
-    Policy:
-      - Inject only when row indicates a real evaluation:
-          context_evaluated == True AND context_status in {PASS, WARN, FAIL}
-      - Never invent PASS; if missing/invalid, leave claim unchanged.
-      - Do NOT mutate the Claim instance; return a new Claim for validator safety.
+    Parameters
+    ----------
+    claim : Claim
+        Claim object to update.
+    r : pandas.Series
+        Row containing context review fields.
+
+    Returns
+    -------
+    Claim
+        New Claim instance with injected fields when eligible.
+
+    Notes
+    -----
+    Injection happens only when:
+    - context_evaluated is True, and
+    - context_status is PASS/WARN/FAIL.
     """
-    # evaluated?
     try:
         ev = bool(r.get("context_evaluated", False))
     except Exception:
@@ -1121,16 +1658,24 @@ def _inject_context_snapshot_into_claim_json(
     distilled_ctx: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Post-hoc inject pipeline-owned context review fields into claim_json for LLM-mode outputs.
+    Post-hoc inject context review snapshot into claim_json.
 
-    Safety policy (do not break working runs):
-      - Only inject when distilled_ctx has a real evaluation
-        (context_evaluated True and status in PASS/WARN/FAIL).
-      - Do NOT overwrite claim_json if it already has context_evaluated=True
-        (assume it's authoritative).
-      - Match rows by term_uid (stable key).
-      - Best-effort: failures do not crash selection; they just skip injection.
+    Parameters
+    ----------
+    out_df : pandas.DataFrame
+        Proposed claims table containing claim_json and term_uid.
+    distilled_ctx : pandas.DataFrame
+        Distilled table containing context review columns.
 
+    Returns
+    -------
+    pandas.DataFrame
+        Updated output table.
+
+    Notes
+    -----
+    - Does not overwrite claim_json that already has context_evaluated=True.
+    - Best-effort; malformed JSON is skipped without crashing selection.
     """
     if not isinstance(out_df, pd.DataFrame) or out_df.empty:
         return out_df
@@ -1199,6 +1744,39 @@ def _select_claims_deterministic(
     seed: int | None = None,
     context_gate_mode_override: str | None = None,
 ) -> pd.DataFrame:
+    """
+    Deterministically select k claims from distilled evidence.
+
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table (requires term_id, term_name, source, stat,
+        evidence_genes; optional module_id, term_survival, context review cols).
+    card : SampleCard
+        Sample card.
+    k : int, optional
+        Number of claims to select.
+    seed : int or None, optional
+        Seed used for deterministic tie-break and stress suite.
+    context_gate_mode_override : str or None, optional
+        Override for selection-time context gate (off/note/hard).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Proposed claims table with claim_json and diagnostic columns.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing or stat is non-numeric.
+
+    Notes
+    -----
+    Ranking prioritizes:
+    eligible -> stability -> review/proxy context signals -> tie-break -> stat.
+    Module diversity is enforced via max_per_module with a relaxation pass.
+    """
     required = {"term_id", "term_name", "source", "stat", "evidence_genes"}
     missing = sorted(required - set(distilled.columns))
     if missing:
@@ -1605,6 +2183,7 @@ def _select_claims_deterministic(
             st = _evaluate_stress_for_claim(
                 claim_id=claim.claim_id,
                 term_uids=[term_uid],
+                gene_ids_in_claim=genes_claim,
                 gene_set_hash=claim.evidence_ref.gene_set_hash,
                 term_to_genes=term_to_genes,
                 gene_pool=gene_pool,
@@ -1623,8 +2202,23 @@ def _select_claims_deterministic(
 # ===========================
 def _call_compat(fn: Any, **kwargs: Any) -> Any:
     """
-    Call fn(**kwargs) but drop kwargs not accepted by fn signature.
-    Keeps pipeline resilient across incremental refactors.
+    Call a function with only the kwargs it accepts.
+
+    Parameters
+    ----------
+    fn : Any
+        Callable target.
+    **kwargs : Any
+        Candidate keyword arguments.
+
+    Returns
+    -------
+    Any
+        Return value from ``fn``.
+
+    Notes
+    -----
+    This keeps the pipeline resilient to signature refactors.
     """
     try:
         sig = inspect.signature(fn)
@@ -1655,22 +2249,51 @@ def select_claims(
     **kwargs: Any,
 ) -> pd.DataFrame:
     """
-    C1: Claim proposal (schema-locked). The mechanical decider is audit_claims().
+    C1: Propose schema-locked pathway claims from distilled evidence.
 
-    - mode="deterministic": stable ranking + module diversity gate, emits Claim JSON.
-    - mode="llm": LLM selects from candidates but MUST emit schema-valid claims;
-      otherwise we fall back to deterministic output.
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table (optionally with module_id and context fields).
+    card : SampleCard
+        Sample card providing context and selection knobs.
+    k : int, optional
+        Number of claims to propose.
+    mode : str or None, optional
+        "deterministic" or "llm". If None, resolved from env/card.
+    backend : BaseLLMBackend or None, optional
+        Backend used for LLM claim proposal when mode="llm".
+    claim_backend : BaseLLMBackend or None, optional
+        Reserved for role-based backends (currently not required here).
+    review_backend : BaseLLMBackend or None, optional
+        Backend used for LLM context review (shortlist-only).
+    context_gate_mode : str, optional
+        Public API legacy default is "soft". Canonical gate modes are
+        off/note/hard; "soft" is ignored to preserve old behavior.
+    context_review_mode : str, optional
+        "off" or "llm". When "llm", fills pipeline-owned context fields
+        before ranking / proposal.
+    seed : int or None, optional
+        Seed for deterministic tie-breaks and optional stress probes.
+    outdir : str or None, optional
+        Output directory for small caches and artifacts.
+    **kwargs : Any
+        Forward-compatible extra arguments (ignored here).
 
-    IMPORTANT:
-      - claim_json embeds evidence_ref.gene_ids and gene_set_hash; they MUST be consistent.
-      - user-facing columns may show a compact gene snippet (gene_ids_suggest) for readability.
+    Returns
+    -------
+    pandas.DataFrame
+        Proposed claims table. Includes decision-grade ``claim_json`` that
+        embeds ``EvidenceRef`` with gene_ids and gene_set_hash.
 
-    NOTE (C1 contract):
-      - selection-time context usage is controlled by:
-          * LLMPATH_SELECT_CONTEXT_MODE = off|proxy|review
-          * LLMPATH_SELECT_CONTEXT_GATE_MODE = off|note|hard
-      - pipeline-owned review results (context_status/context_evaluated) may be used in
-        review mode for ranking/gating, but are never overwritten here.
+    Notes
+    -----
+    Selection-time context knobs (env):
+    - LLMPATH_SELECT_CONTEXT_MODE = off|proxy|review
+    - LLMPATH_SELECT_CONTEXT_GATE_MODE = off|note|hard
+
+    Pipeline-owned context review columns (if present) are never overwritten
+    except when LLM review is requested and the existing method is not "llm".
     """
     mode_eff = _resolve_mode(card, mode)
     k_eff = _validate_k(k)
@@ -1701,7 +2324,7 @@ def select_claims(
         )
 
         if backend is None:
-            out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
+            out_det = _select_claims_deterministic(distilled2, card, k=int(k_eff), seed=seed)
             out_det["claim_mode"] = "deterministic"
             out_det["llm_notes"] = "llm requested but backend=None; deterministic used"
             return out_det
@@ -1758,7 +2381,7 @@ def select_claims(
             out_llm = _inject_context_snapshot_into_claim_json(out_llm, distilled2)
             return out_llm
 
-        out_det = _select_claims_deterministic(distilled, card, k=int(k_eff), seed=seed)
+        out_det = _select_claims_deterministic(distilled2, card, k=int(k_eff), seed=seed)
         out_det["claim_mode"] = "deterministic_fallback"
         out_det["llm_notes"] = notes or "llm returned fallback/empty; deterministic used"
         return out_det
