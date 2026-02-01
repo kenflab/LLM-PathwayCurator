@@ -422,44 +422,40 @@ def _context_gate_mode(card: SampleCard, override: str | None = None) -> str:
     """
     Selection-time gating based on context signal.
 
-    Values:
-      - off: no gate
-      - note: annotate only
-      - hard:
-          * in proxy mode: treat select_context_score==0 as ineligible
-          * in review mode: treat context_status!=PASS as ineligible
-            (unless missing, then fallback proxy)
+    Canonical values (emitted):
+      - off | note | hard
+
+    Accepted inputs include legacy/synonyms like soft/warn/abstain/on.
+    Normalization is spec-owned by _shared.normalize_gate_mode().
 
     Priority:
-      0) explicit override (this call only; strict vocab off|note|hard)
+      0) explicit override (this call only)
       1) new env
       2) card.extra
-      3) legacy env (limited)
+      3) legacy env
       4) default off
     """
     if override is not None:
-        s0 = str(override).strip().lower()
-        if s0 in {"off", "note", "hard"}:
-            return s0
+        return _shared.normalize_gate_mode(override, default="off")
 
-    env = str(os.environ.get(_SELECT_CONTEXT_GATE_ENV, "")).strip().lower()
+    env = str(os.environ.get(_SELECT_CONTEXT_GATE_ENV, "")).strip()
     if env:
-        return env if env in {"off", "note", "hard"} else "off"
+        return _shared.normalize_gate_mode(env, default="off")
 
     ex = _get_extra(card)
-    v = str(ex.get("select_context_gate_mode", "")).strip().lower()
-    if v in {"off", "note", "hard"}:
-        return v
 
-    # Backward compat: allow context_gate_mode in extra if it matches this vocabulary.
-    v2 = str(ex.get("context_gate_mode", "")).strip().lower()
-    if v2 in {"off", "note", "hard"}:
-        return v2
+    v = ex.get("select_context_gate_mode", None)
+    if v is not None:
+        return _shared.normalize_gate_mode(v, default="off")
 
-    # Legacy env fallback only if it matches off|note|hard (ignore "soft" etc.)
-    env2 = str(os.environ.get(_LEGACY_CONTEXT_GATE_ENV, "")).strip().lower()
-    if env2 in {"off", "note", "hard"}:
-        return env2
+    # Backward compat: allow context_gate_mode in extra (including soft/warn)
+    v2 = ex.get("context_gate_mode", None)
+    if v2 is not None:
+        return _shared.normalize_gate_mode(v2, default="off")
+
+    env2 = str(os.environ.get(_LEGACY_CONTEXT_GATE_ENV, "")).strip()
+    if env2:
+        return _shared.normalize_gate_mode(env2, default="off")
 
     return "off"
 
@@ -1797,11 +1793,37 @@ def select_claims(
     gate_override = None
     try:
         s = str(context_gate_mode or "").strip().lower()
-        # Only accept this file's vocab; ignore "soft" to avoid semantic collision.
-        if s in {"off", "note", "hard"}:
-            gate_override = s
-        elif s and s != "soft":
-            _dlog(f"[select][WARN] context_gate_mode arg ignored: {s!r} (allowed: off|note|hard)")
+
+        # IMPORTANT:
+        # - The public API default is "soft" for historical reasons.
+        # - We MUST NOT change default behavior by turning it into "note" implicitly.
+        # - Therefore: ignore "soft" here unless the caller explicitly uses canonical values.
+        #
+        # However, if user passes other synonyms (warn/abstain/on/strict), accept them
+        # via spec normalizer.
+        if s and s != "soft":
+            recognized = s in {
+                "off",
+                "none",
+                "disable",
+                "disabled",
+                "note",
+                "warn",
+                "warning",
+                "hard",
+                "strict",
+                "abstain",
+                "on",
+                "enable",
+                "enabled",
+            }
+            if recognized:
+                gate_override = _shared.normalize_gate_mode(s, default="off")
+            else:
+                _dlog(
+                    f"[select][WARN] context_gate_mode arg ignored: {s!r} "
+                    "(allowed: off|note|hard or legacy synonyms; 'soft' default is ignored)"
+                )
     except Exception:
         gate_override = None
 

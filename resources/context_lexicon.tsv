@@ -1,0 +1,36 @@
+# resources/context_lexicon.tsv
+# One mapping per line:
+#   head<TAB>syn1,syn2,...
+#
+# Notes for contributors:
+# - Everything is normalized to lowercase and non-alnum becomes spaces.
+# - Tokenization operates on single tokens, so keep synonyms single-token (no spaces).
+# - Avoid overly generic synonyms (e.g., "cancer") to prevent over-anchoring.
+# - This file is OPTIONAL: only used when context_tokens_policy.lexicon_expand=true.
+
+hnsc	head,neck,squamous,carcinoma
+luad	lung,adenocarcinoma
+lusc	lung,squamous,carcinoma
+brca	breast,mammary,carcinoma
+ov	ovary,ovarian,carcinoma
+ucec	uterus,uterine,endometrial,carcinoma
+skcm	skin,cutaneous,melanoma
+
+pancan	pancancer,tcga
+tcga	atlas
+
+beataml	aml
+aml	myeloid,leukemia
+
+tp53	p53
+p53	tp53
+
+mut	mutant,mutation,mutated
+wt	wildtype,wild
+
+wes	exome,wholeexome
+
+blood	hematologic,hematopoietic
+genotype	mutation,status,variant
+
+tumor	tumour

@@ -1,7 +1,11 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/sample_card.py
 from __future__ import annotations
 
+import csv
 import json
+import re
+import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +15,223 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import _shared
 
 NA_TOKEN = "NA"
+
+# -----------------------------------------------------------------------------
+# Context tokens (deterministic)
+# -----------------------------------------------------------------------------
+CTX_TOKENS_VERSION_V1 = "ctx_tokens_v1"
+
+CTX_STOPWORDS_DEFAULT_V1: set[str] = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "vs",
+    "versus",
+    "with",
+}
+
+_CTX_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _norm_optional_text(x: Any) -> str | None:
+    """
+    Optional text normalizer:
+      - None/NA/empty -> None
+      - otherwise -> stripped string
+    IMPORTANT: This differs from _norm_str which returns NA_TOKEN.
+    """
+    if x is None:
+        return None
+    try:
+        if not isinstance(x, (list, tuple, set, dict)) and bool(pd.isna(x)):
+            return None
+    except Exception:
+        pass
+
+    s = str(x).strip().lstrip("\ufeff")
+    if not s:
+        return None
+    if s.lower() in _shared.NA_TOKENS_L:
+        return None
+    return s
+
+
+def _ctx_nfkc_lower(text: str) -> str:
+    t = unicodedata.normalize("NFKC", str(text or ""))
+    t = t.lower()
+    # Replace any non [a-z0-9] with space, then collapse.
+    t = _CTX_NON_ALNUM_RE.sub(" ", t)
+    t = " ".join(t.split()).strip()
+    return t
+
+
+def _ctx_is_numeric_only(tok: str) -> bool:
+    return bool(tok) and all(ch.isdigit() for ch in tok)
+
+
+@lru_cache(maxsize=1)
+def _load_context_lexicon_tsv() -> dict[str, list[str]]:
+    """
+    Load fixed synonym lexicon.
+    Expected path: llm_pathway_curator/resources/context_lexicon.tsv
+
+    Format (tolerant):
+      head<TAB>syn1,syn2,...   OR head<TAB>syn1<TAB>syn2...
+    Lines starting with '#' are ignored.
+
+    Output:
+      dict[head_token] -> sorted unique synonyms (lowercase), head excluded.
+    """
+    path = Path(__file__).resolve().parent / "resources" / "context_lexicon.tsv"
+    if not path.exists():
+        return {}
+
+    lex: dict[str, set[str]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter="\t")
+            for row in reader:
+                if not row:
+                    continue
+                head_raw = str(row[0] or "").strip()
+                if not head_raw or head_raw.startswith("#"):
+                    continue
+                head = _ctx_nfkc_lower(head_raw)
+                if not head:
+                    continue
+
+                syns: set[str] = set()
+                for cell in row[1:]:
+                    if not cell:
+                        continue
+                    # Split cell by comma/semicolon/space (tolerant)
+                    parts = re.split(r"[,; ]+", str(cell))
+                    for p in parts:
+                        pp = _ctx_nfkc_lower(p)
+                        if not pp or pp == head:
+                            continue
+                        syns.add(pp)
+
+                if syns:
+                    lex.setdefault(head, set()).update(syns)
+    except Exception:
+        # Fail-closed: no lexicon expansion if parsing fails
+        return {}
+
+    out: dict[str, list[str]] = {}
+    for k, v in lex.items():
+        xs = sorted({s for s in v if s and s != k})
+        if xs:
+            out[k] = xs
+    return out
+
+
+def _ctx_tokens_policy_effective(policy: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Merge defaults with user policy (shallow).
+    Unknown keys are tolerated; this is *not* a validator.
+    """
+    p = dict(policy or {})
+    v_raw = str(p.get("version") or CTX_TOKENS_VERSION_V1).strip() or CTX_TOKENS_VERSION_V1
+    v = CTX_TOKENS_VERSION_V1 if v_raw != CTX_TOKENS_VERSION_V1 else v_raw
+
+    # NOTE: Avoid `or` here so that 0 is respected (e.g., max_tokens=0 => "no cap").
+    min_len_raw = p.get("min_len", 3)
+    max_tokens_raw = p.get("max_tokens", 12)
+
+    # Guard: bool is an int subclass in Python (True->1, False->0). Treat as default.
+    min_len = _as_int(min_len_raw, 3) if not isinstance(min_len_raw, bool) else 3
+    max_tokens = _as_int(max_tokens_raw, 12) if not isinstance(max_tokens_raw, bool) else 12
+
+    allow_numeric = _as_bool(p.get("allow_numeric", True), True)
+    lexicon_expand = _as_bool(p.get("lexicon_expand", False), False)
+    stopwords_set = str(p.get("stopwords_set") or "default_v1").strip() or "default_v1"
+
+    # Clamp to sane ranges (fail-safe)
+    min_len = max(1, int(min_len))
+    # max_tokens: 0 means "no cap" in downstream (max_tokens > 0)
+    max_tokens = max(0, int(max_tokens))
+
+    return {
+        "version": v,
+        "min_len": min_len,
+        "max_tokens": max_tokens,
+        "allow_numeric": bool(allow_numeric),
+        "lexicon_expand": bool(lexicon_expand),
+        "stopwords_set": stopwords_set,
+    }
+
+
+def _tokenize_context_text_v1(text: str, *, policy: dict[str, Any]) -> list[str]:
+    """
+    Deterministic tokenizer (ctx_tokens_v1).
+    """
+    txt = _ctx_nfkc_lower(text)
+    if not txt:
+        return []
+
+    toks0 = [t for t in txt.split(" ") if t]
+    min_len = int(policy.get("min_len", 3))
+    allow_numeric = bool(policy.get("allow_numeric", True))
+    max_tokens = int(policy.get("max_tokens", 12))  # 0 is respected
+
+    stop_set_name = str(policy.get("stopwords_set") or "default_v1").strip().lower()
+    stopwords = (
+        CTX_STOPWORDS_DEFAULT_V1 if stop_set_name == "default_v1" else CTX_STOPWORDS_DEFAULT_V1
+    )
+
+    # Filter + preserve order
+    toks: list[str] = []
+    for t in toks0:
+        if not t:
+            continue
+        if t in stopwords:
+            continue
+        if len(t) < min_len:
+            continue
+        if (not allow_numeric) and _ctx_is_numeric_only(t):
+            continue
+        toks.append(t)
+
+    toks = _shared.dedup_preserve_order(toks)
+
+    # Optional lexicon expansion (one hop; deterministic order: dict provides sorted synonyms)
+    if bool(policy.get("lexicon_expand", False)) and toks:
+        lex = _load_context_lexicon_tsv()
+        expanded: list[str] = list(toks)
+        for t in toks:
+            syns = lex.get(t, [])
+            # syns are already sorted & unique
+            expanded.extend(syns)
+        toks = _shared.dedup_preserve_order(expanded)
+
+    if max_tokens > 0 and len(toks) > max_tokens:
+        toks = toks[:max_tokens]
+
+    return toks
+
+
+def _ctx_signature_v1(tokens: list[str], *, version: str) -> str:
+    payload = str(version or CTX_TOKENS_VERSION_V1) + "|" + " ".join(tokens or [])
+    return _shared.sha256_12hex(payload)
+
 
 # Tool-facing core context keys:
 # - Use neutral "condition" (not disease/cancer) for generality.
@@ -34,7 +255,7 @@ AUDIT_KNOBS = {
     "stress_gate_mode",
 }
 
-# v1.1 minimal tool knobs understood by the TOOL (not paper scripts).
+# Minimal tool knobs understood by the TOOL (not paper scripts).
 # Keep this list minimal and stable.
 TOOL_KNOBS = {
     # audit knobs
@@ -174,7 +395,7 @@ def _find_in_nested_extra(
 
 def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
     """
-    v1.1 contract:
+    Contract:
       - Flatten nested extra wrappers (inner overrides outer).
       - Apply backward-compat aliases.
       - Hoist official TOOL_KNOBS if still buried (defensive).
@@ -238,32 +459,8 @@ def _as_float(x: Any, default: float) -> float:
 
 
 def _normalize_gate_mode(x: Any, default: str) -> str:
-    """
-    Gate mode contract (tool-facing; align with audit.py):
-      - "off": ignore the gate
-      - "note": do not change status, but annotate
-      - "hard": gate failure/missing -> ABSTAIN/FAIL downstream (policy decided by audit)
-
-    Backward compat:
-      - "abstain" (and "on"/"enable") => "hard"
-    """
-    s = "" if x is None else str(x).strip().lower()
-    if not s:
-        s = str(default).strip().lower()
-
-    if s in {"off", "none", "disable", "disabled"}:
-        return "off"
-    if s in {"note", "warn", "warning", "soft"}:
-        return "note"
-    if s in {"hard", "strict"}:
-        return "hard"
-    if s in {"abstain", "on", "enable", "enabled"}:
-        return "hard"
-
-    d = str(default).strip().lower()
-    if d in {"off", "note", "hard"}:
-        return d
-    return "hard"
+    # Spec-level single source of truth (off|note|hard; accepts legacy like soft/abstain/on)
+    return _shared.normalize_gate_mode(x, default=default)
 
 
 def _hoist_context_aliases(obj: dict[str, Any]) -> dict[str, Any]:
@@ -301,6 +498,11 @@ class SampleCard(BaseModel):
 
     notes: str | None = None
 
+    # --- Context tokens (optional; deterministic) ---
+    context_tokens_text: str | None = None
+    context_tokens_policy: dict[str, Any] = Field(default_factory=dict)
+    context_tokens_meta: dict[str, Any] = Field(default_factory=dict)
+
     # IMPORTANT: keep JSON key "k_claims" but avoid clashing with method name k_claims()
     k_claims_value: int = Field(default=3, alias="k_claims")
 
@@ -323,6 +525,21 @@ class SampleCard(BaseModel):
         if not _is_dict(v):
             v = {}
         return _canonicalize_audit_knobs(dict(v))
+
+    @field_validator("context_tokens_text", mode="before")
+    @classmethod
+    def _normalize_context_tokens_text(cls, v: Any) -> str | None:
+        return _norm_optional_text(v)
+
+    @field_validator("context_tokens_policy", mode="before")
+    @classmethod
+    def _normalize_context_tokens_policy(cls, v: Any) -> dict[str, Any]:
+        return dict(v) if isinstance(v, dict) else {}
+
+    @field_validator("context_tokens_meta", mode="before")
+    @classmethod
+    def _normalize_context_tokens_meta(cls, v: Any) -> dict[str, Any]:
+        return dict(v) if isinstance(v, dict) else {}
 
     def context_key(self) -> str:
         return "|".join([self.condition, self.tissue, self.perturbation, self.comparison])
@@ -385,7 +602,19 @@ class SampleCard(BaseModel):
 
         obj = _hoist_context_aliases(obj)
 
-        core_keys = ["condition", "tissue", "perturbation", "comparison", "notes", "k_claims"]
+        core_keys = [
+            "condition",
+            "tissue",
+            "perturbation",
+            "comparison",
+            "notes",
+            "k_claims",
+            # context tokens (optional)
+            "context_tokens_text",
+            "context_tokens_policy",
+            "context_tokens_meta",
+        ]
+
         known = {k: obj.get(k) for k in core_keys}
 
         extra: dict[str, Any] = {}
@@ -415,6 +644,12 @@ class SampleCard(BaseModel):
         for a in ALIASES.get("k_claims", set()):
             extra.pop(a, None)
 
+        # Defensive: if older cards placed these under extra, hoist them to top-level.
+        for k in ("context_tokens_text", "context_tokens_policy", "context_tokens_meta"):
+            if known.get(k) is None and k in extra and extra.get(k) is not None:
+                known[k] = extra.get(k)
+            extra.pop(k, None)
+
         known["extra"] = extra
         return cls(**known)
 
@@ -428,7 +663,17 @@ class SampleCard(BaseModel):
     def apply_patch(self, patch: dict[str, Any]) -> SampleCard:
         base = self.model_dump(by_alias=True)
         for k, v in patch.items():
-            if k in {"condition", "tissue", "perturbation", "comparison", "notes", "k_claims"}:
+            if k in {
+                "condition",
+                "tissue",
+                "perturbation",
+                "comparison",
+                "notes",
+                "k_claims",
+                "context_tokens_text",
+                "context_tokens_policy",
+                "context_tokens_meta",
+            }:
                 base[k] = v
             # Back-compat: allow patch using "disease" too
             elif k in {"disease", "cancer", "tumor"} and base.get("condition") in {None, NA_TOKEN}:
@@ -447,7 +692,7 @@ class SampleCard(BaseModel):
 
         return SampleCard(**base)
 
-    # ---- select / tool knobs (v1.1 minimal) ----
+    # ---- select / tool knobs (minimal) ----
     def claim_mode(self, default: str = "deterministic") -> str:
         v = (self.extra or {}).get("claim_mode", None)
         s = str(v).strip().lower() if v is not None else ""
@@ -477,3 +722,57 @@ class SampleCard(BaseModel):
     def stress_gate_mode(self, default: str = "off") -> str:
         v = (self.extra or {}).get("stress_gate_mode", None)
         return _normalize_gate_mode(v, default)
+
+    # ---- context tokens (deterministic) ----
+    def context_tokens_version(self) -> str:
+        pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})
+        return str(pol.get("version") or CTX_TOKENS_VERSION_V1)
+
+    def context_tokens(self) -> list[str]:
+        """
+        Deterministic tokens used for context anchoring.
+        Priority:
+          1) context_tokens_text (ctx_tokens_v1 tokenizer)
+          2) fallback: tokenize core context fields (condition/tissue/perturbation/comparison)
+        """
+        pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})
+
+        # Tokenizer only; if future versions appear, keep fail-closed to v1 behavior.
+        # (Do NOT auto-upgrade behavior silently.)
+        text = self.context_tokens_text
+        if text:
+            return _tokenize_context_text_v1(text, policy=pol)
+
+        # Fallback (back-compat): derive from core fields
+        parts: list[str] = []
+        for k in CORE_KEYS:
+            v = getattr(self, k, NA_TOKEN)
+            if v and v != NA_TOKEN and str(v).strip().lower() not in _shared.NA_TOKENS_L:
+                parts.append(str(v))
+        fallback = " ".join(parts).strip()
+        if not fallback:
+            return []
+        return _tokenize_context_text_v1(fallback, policy=pol)
+
+    def context_tokens_signature(self) -> str:
+        """
+        Stable short signature for provenance logging (sha256[:12]).
+        """
+        toks = self.context_tokens()
+        return _ctx_signature_v1(toks, version=self.context_tokens_version())
+
+    def context_tokens_effective(self) -> dict[str, Any]:
+        """
+        Convenience payload for run_meta logging (does not write anything).
+        """
+        toks = self.context_tokens()
+        pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})
+        return {
+            "version": str(pol.get("version") or CTX_TOKENS_VERSION_V1),
+            "tokens": toks,
+            "n": int(len(toks)),
+            "signature": _ctx_signature_v1(
+                toks, version=str(pol.get("version") or CTX_TOKENS_VERSION_V1)
+            ),
+            "policy": pol,
+        }
