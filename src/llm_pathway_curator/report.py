@@ -863,6 +863,7 @@ def _ensure_canonical_audit_cols(audit_log: pd.DataFrame, card: SampleCard) -> p
     for c in ["abstain_reason", "fail_reason", "audit_notes"]:
         if c not in out.columns:
             out[c] = ""
+    out["term_survival_agg"] = pd.to_numeric(out["term_survival_agg"], errors="coerce")
 
     return out
 

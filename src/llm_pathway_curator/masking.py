@@ -1,16 +1,23 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/masking.py
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from . import _shared
 from .noise_lists import NOISE_LISTS, NOISE_PATTERNS
+from .utils import (
+    build_id_to_symbol_from_distilled,
+    load_id_map_tsv,
+    map_ids_to_symbols,
+)
 
-RESCUE_MODULES_DEFAULT = ("LINC_Noise", "Hemo_Contam")
+RESCUE_MODULES_DEFAULT = ("LINC_Noise", "LOC_Locus", "Mouse_Predicted_Gm", "Mouse_Rik")
 
 
 # -------------------------
@@ -36,7 +43,6 @@ def _as_gene_list(x: Any) -> list[str]:
       - deterministic dedup preserving order
     """
     genes = _shared.parse_genes(x)
-    # parse_genes already strips/cleans tokens; keep minimal normalization here.
     genes = [str(g).strip() for g in genes if str(g).strip()]
     return _shared.dedup_preserve_order(genes)
 
@@ -58,7 +64,165 @@ def _safe_int(x: Any, default: int) -> int:
         return int(default)
 
 
+def _load_gene_id_map_from_env() -> tuple[dict[str, str], str]:
+    """
+    Reproducible, no network.
+
+    Priority:
+      1) env LLMPATH_GENE_ID_MAP_TSV (explicit user-supplied)
+      2) repo-local defaults (union):
+           - resources/gene_id_maps/id_map.tsv(.gz)
+           - resources/gene_id_maps/ensembl_id_map.tsv(.gz)
+
+    Returns:
+      (map, source_label)
+    """
+    # 1) explicit env (single file)
+    try:
+        p = (os.environ.get("LLMPATH_GENE_ID_MAP_TSV", "") or "").strip()
+        if p:
+            m = load_id_map_tsv(p)
+            if isinstance(m, dict) and m:
+                return m, f"env:{p}"
+    except Exception:
+        pass
+
+    # 2) repo-local default union
+    merged: dict[str, str] = {}
+    used: list[str] = []
+
+    try:
+        here = Path(__file__).resolve()
+        repo_root = here.parents[2]
+        cand = [
+            repo_root / "resources" / "gene_id_maps" / "id_map.tsv.gz",
+            repo_root / "resources" / "gene_id_maps" / "id_map.tsv",
+            repo_root / "resources" / "gene_id_maps" / "ensembl_id_map.tsv.gz",
+            repo_root / "resources" / "gene_id_maps" / "ensembl_id_map.tsv",
+        ]
+        for p in cand:
+            if not p.exists():
+                continue
+            try:
+                m = load_id_map_tsv(str(p))
+                if isinstance(m, dict) and m:
+                    # deterministic merge: keep first mapping for a given key
+                    for k, v in m.items():
+                        merged.setdefault(str(k).strip(), str(v).strip())
+                    used.append(str(p))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if merged:
+        # keep src short but informative
+        if len(used) == 1:
+            return merged, f"default:{used[0]}"
+        return merged, "default:entrez+ensembl"
+
+    return {}, "none"
+
+
+def _resolve_id2sym(
+    distilled: pd.DataFrame,
+    *,
+    user_id2sym: dict[str, str] | None = None,
+) -> tuple[dict[str, str], str]:
+    """
+    Best-effort, reproducible, no network.
+
+    Priority (same spirit as audit_log/report):
+      1) distilled-derived mapping (if columns exist)
+      2) env LLMPATH_GENE_ID_MAP_TSV OR repo-local default (entrez+ensembl union)
+      3) user-provided override (function arg)  <-- wins
+
+    Returns:
+      (id2sym, source_label)
+    """
+    base: dict[str, str] = {}
+    try:
+        base = build_id_to_symbol_from_distilled(distilled) or {}
+    except Exception:
+        base = {}
+
+    extra, extra_src = _load_gene_id_map_from_env()
+
+    merged: dict[str, str] = {}
+    # deterministic: base first, then extra (extra can fill gaps)
+    for k, v in (base or {}).items():
+        kk = str(k).strip()
+        vv = str(v).strip()
+        if kk and vv:
+            merged.setdefault(kk, vv)
+    for k, v in (extra or {}).items():
+        kk = str(k).strip()
+        vv = str(v).strip()
+        if kk and vv:
+            merged.setdefault(kk, vv)
+
+    # user overrides win (explicit > implicit)
+    if isinstance(user_id2sym, dict) and user_id2sym:
+        for k, v in user_id2sym.items():
+            kk = str(k).strip()
+            vv = str(v).strip()
+            if kk and vv:
+                merged[kk] = vv
+        src = "user_override"
+    else:
+        if extra:
+            src = extra_src
+        elif base:
+            src = "distilled"
+        else:
+            src = "none"
+
+    return merged, src
+
+
+def _expand_whitelist(
+    *, whitelist: list[str] | None, id2sym: dict[str, str], sym2id: dict[str, str]
+) -> set[str]:
+    """
+    Allow whitelist entries to be either IDs or symbols.
+    If user passes a symbol, we also allow its mapped ID when known (and vice versa).
+    """
+    wl_raw = [str(g).strip() for g in (whitelist or []) if str(g).strip()]
+    wl: set[str] = set(wl_raw)
+
+    # Add mapped symbol for whitelisted IDs
+    for g in wl_raw:
+        s = id2sym.get(g, "")
+        if s:
+            wl.add(s)
+
+    # Add mapped ID for whitelisted symbols (best-effort)
+    for g in wl_raw:
+        i = sym2id.get(g, "")
+        if i:
+            wl.add(i)
+
+    return wl
+
+
+def _build_sym2id(id2sym: dict[str, str]) -> dict[str, str]:
+    """
+    Best-effort reverse map.
+    If multiple IDs map to the same symbol, keep the first encountered
+    (deterministic by insertion order).
+    """
+    sym2id: dict[str, str] = {}
+    for i, s in id2sym.items():
+        if s and s not in sym2id:
+            sym2id[s] = i
+    return sym2id
+
+
 def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str, str]:
+    """
+    Noise dictionaries are symbol-centric.
+    Keep them as-is (trim-only), and do symbol-view matching upstream.
+    """
     if whitelist is None:
         whitelist = []
 
@@ -77,8 +241,8 @@ def _build_noise_pool(*, whitelist: set[str]) -> list[str]:
     """
     Pool for noise injection.
     Keep it simple + deterministic:
-      - all genes from NOISE_LISTS
-      - exclude whitelist
+      - all genes from NOISE_LISTS (symbol tokens)
+      - exclude whitelist (accepts IDs/symbols)
     """
     pool: list[str] = []
     for _module, genes in NOISE_LISTS.items():
@@ -116,8 +280,35 @@ def _row_id_for_events(row: pd.Series, idx: Any) -> int:
         return 0
 
 
+def _match_key(token: str, *, id2sym: dict[str, str], use_symbol_view: bool) -> str:
+    """
+    Key used for matching against NOISE_LISTS/NOISE_PATTERNS.
+
+    Policy (audit-safe):
+      - Matching is performed in "symbol-view" when enabled (best-effort ID->symbol).
+      - Removal always targets the ORIGINAL token (ID) to preserve evidence identity.
+
+    Implementation:
+      - Use utils.map_ids_to_symbols() as the single source of truth
+        (same behavior as report/audit_log symbol rendering).
+    """
+    t = str(token).strip()
+    if not t:
+        return ""
+    if not use_symbol_view:
+        return t
+    try:
+        xs = map_ids_to_symbols(t, id2sym)
+        if isinstance(xs, list) and xs:
+            s = str(xs[0]).strip()
+            return s or t
+    except Exception:
+        pass
+    return t
+
+
 # -------------------------
-# v0: deterministic masking (kept for backward compatibility)
+# deterministic masking (backward compatible)
 # -------------------------
 def apply_gene_masking(
     distilled: pd.DataFrame,
@@ -128,13 +319,21 @@ def apply_gene_masking(
     seed: int | None = None,
     # advanced knobs (default keep v0 behavior)
     pattern_mode: str = "match",  # "match" (prefix) or "search" (substring)
+    # NEW: symbol-view matching for mixed ID/symbol inputs
+    id2sym: dict[str, str] | None = None,
+    use_symbol_view: bool = True,
 ) -> MaskResult:
     """
-    v0 behavior: deterministic "noise gene" masking by lists/patterns.
+    behavior: deterministic "noise gene" masking by lists/patterns.
 
     NOTE:
       - seed is accepted for CLI plumbing; v0 masking is deterministic (seed ignored).
       - For Fig2 v4 stress (dropout/noise/contradiction), use apply_evidence_stress().
+
+    Mixed token policy (important):
+      - NOISE_LISTS/NOISE_PATTERNS are symbol-centric.
+      - If use_symbol_view=True, masking matches on symbol-view keys (best-effort mapping),
+        but always removes the ORIGINAL token from evidence_genes (audit identity preserved).
     """
     _ = seed  # intentionally unused in v0
 
@@ -146,7 +345,42 @@ def apply_gene_masking(
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_gene_masking: missing column {genes_col}")
 
-    list_reasons = build_noise_gene_reasons(whitelist=whitelist)
+    # Resolve mapping (reproducible, no network)
+    if use_symbol_view:
+        resolved_id2sym, id2sym_src = _resolve_id2sym(distilled, user_id2sym=id2sym)
+    else:
+        resolved_id2sym, id2sym_src = {}, "disabled"
+
+    sym2id = _build_sym2id(resolved_id2sym) if use_symbol_view else {}
+
+    # Whitelist supports both token and symbol forms.
+    # IMPORTANT: keep consistent with report/audit_log mapping behavior.
+    if use_symbol_view:
+        wl_raw = [str(g).strip() for g in (whitelist or []) if str(g).strip()]
+        wl: set[str] = set(wl_raw)
+
+        # Add symbol-view for each whitelist token (ID -> symbol if possible)
+        for g in wl_raw:
+            try:
+                syms = map_ids_to_symbols(g, resolved_id2sym)
+                if isinstance(syms, list):
+                    for s in syms:
+                        ss = str(s).strip()
+                        if ss:
+                            wl.add(ss)
+            except Exception:
+                pass
+
+        # Add reverse map (symbol -> ID) best-effort
+        for g in wl_raw:
+            i = sym2id.get(g, "")
+            if i:
+                wl.add(str(i).strip())
+    else:
+        wl = set([str(g).strip() for g in (whitelist or []) if str(g).strip()])
+
+    # Noise dictionaries are symbol-centric; remove whitelisted tokens in either space.
+    list_reasons = build_noise_gene_reasons(whitelist=list(wl))
 
     import re
 
@@ -154,8 +388,6 @@ def apply_gene_masking(
     pattern_mode = str(pattern_mode or "match").strip().lower()
     if pattern_mode not in {"match", "search"}:
         raise ValueError("pattern_mode must be 'match' or 'search'")
-
-    wl = set([str(g).strip() for g in whitelist if str(g).strip()])
 
     gene_reasons: dict[str, str] = {}
     out = distilled.copy()
@@ -191,45 +423,98 @@ def apply_gene_masking(
 
         kept: list[str] = []
         removed: list[tuple[str, str]] = []
-        for g in genes:
-            if g in wl:
-                kept.append(g)
-            elif g in list_reasons:
-                removed.append((g, list_reasons[g]))
+
+        # list-based masking (symbol-centric match key)
+        for token in genes:
+            t = str(token).strip()
+            if not t:
+                continue
+            key = _match_key(t, id2sym=resolved_id2sym, use_symbol_view=use_symbol_view)
+
+            # whitelist applies to both token and symbol view
+            if t in wl or key in wl:
+                kept.append(t)
+            elif key in list_reasons:
+                removed.append((t, list_reasons[key]))
             else:
-                kept.append(g)
+                kept.append(t)
 
         kept2 = kept[:]
+
+        # pattern-based masking (match on key, remove original token)
         for module_name, rx in compiled.items():
             if pattern_mode == "search":
-                matches = [g for g in kept2 if (g not in wl) and bool(rx.search(g))]
+                matches = [
+                    t
+                    for t in kept2
+                    if (t not in wl)
+                    and (
+                        _match_key(t, id2sym=resolved_id2sym, use_symbol_view=use_symbol_view)
+                        not in wl
+                    )
+                    and bool(
+                        rx.search(
+                            _match_key(t, id2sym=resolved_id2sym, use_symbol_view=use_symbol_view)
+                        )
+                    )
+                ]
             else:
-                matches = [g for g in kept2 if (g not in wl) and bool(rx.match(g))]
+                matches = [
+                    t
+                    for t in kept2
+                    if (t not in wl)
+                    and (
+                        _match_key(t, id2sym=resolved_id2sym, use_symbol_view=use_symbol_view)
+                        not in wl
+                    )
+                    and bool(
+                        rx.match(
+                            _match_key(t, id2sym=resolved_id2sym, use_symbol_view=use_symbol_view)
+                        )
+                    )
+                ]
 
             if not matches:
                 continue
 
             if module_name in rescue_modules and len(matches) >= 2:
                 sentinel = sorted(matches)[0]
-                for g in matches:
-                    if g != sentinel:
-                        removed.append((g, f"Module_{module_name} (Redundant)"))
-                kept2 = [g for g in kept2 if (g == sentinel) or (g not in matches)]
+                for t in matches:
+                    if t != sentinel:
+                        removed.append((t, f"Module_{module_name} (Redundant)"))
+                kept2 = [t for t in kept2 if (t == sentinel) or (t not in matches)]
             else:
-                for g in matches:
-                    removed.append((g, f"Module_{module_name}"))
-                kept2 = [g for g in kept2 if g not in matches]
+                for t in matches:
+                    removed.append((t, f"Module_{module_name}"))
+                kept2 = [t for t in kept2 if t not in matches]
 
-        for g, reason in removed:
+        for t, reason in removed:
             # v0: global map (best-effort). Keep first reason to avoid overwriting.
-            if g not in gene_reasons:
-                gene_reasons[g] = reason
+            if t not in gene_reasons:
+                gene_reasons[t] = reason
 
         after = _shared.dedup_preserve_order(kept2[:])
         masked_lists.append(after)
         masked_counts.append(len(removed))
 
-        dropped = [g for g, _ in removed]
+        dropped = [t for t, _ in removed]
+
+        # Human-readable: also emit symbol-view dropped list (does NOT affect masking identity).
+        dropped_syms: list[str] = []
+        if dropped and use_symbol_view and resolved_id2sym:
+            for tok in dropped:
+                try:
+                    xs = map_ids_to_symbols(tok, resolved_id2sym)
+                    if isinstance(xs, list) and xs:
+                        dropped_syms.append(str(xs[0]).strip())
+                    else:
+                        dropped_syms.append(str(tok).strip())
+                except Exception:
+                    dropped_syms.append(str(tok).strip())
+        notes = ""
+        if use_symbol_view and not resolved_id2sym:
+            notes = "symbol_view_requested_but_id2sym_empty"
+
         events.append(
             {
                 "row_index": int(row_id),
@@ -237,10 +522,14 @@ def apply_gene_masking(
                 "before_n": int(len(before)),
                 "after_n": int(len(after)),
                 "dropped_n": int(len(dropped)),
+                "dropped_genes_str": _shared.join_genes_tsv(dropped) if dropped else "",
+                "dropped_genes_symbols_str": _shared.join_genes_tsv(dropped_syms)
+                if dropped_syms
+                else "",
                 "dropped_hash": _shared.sha256_short(dropped) if dropped else "",
                 "injected_n": 0,
                 "injected_hash": "",
-                "notes": "",
+                "notes": notes,
             }
         )
 
@@ -255,10 +544,16 @@ def apply_gene_masking(
     out.attrs["masking"] = {
         "mode": "clean",
         "rescue_modules": list(rescue_modules),
-        "whitelist_n": int(len(whitelist)),
+        "whitelist_n_expanded": int(len(wl)),  # <- expanded wl size
         "pattern_mode": pattern_mode,
         "gene_join_delim": _shared.GENE_JOIN_DELIM,
-        "notes": "deterministic masking by NOISE_LISTS/NOISE_PATTERNS",
+        "use_symbol_view": bool(use_symbol_view),
+        "id2sym_src": str(id2sym_src),
+        "id2sym_n": int(len(resolved_id2sym)) if use_symbol_view else 0,  # <- no recompute
+        "notes": (
+            "deterministic masking by NOISE_LISTS/NOISE_PATTERNS "
+            "(symbol-view matching when enabled)"
+        ),
     }
 
     return MaskResult(masked_distilled=out, gene_reasons=gene_reasons, term_events=term_events)
@@ -297,10 +592,9 @@ def apply_evidence_stress(
          - does NOT modify claim_json here (keep layers separated)
          - emits stress_tag/contradiction_flip columns + term_events log
 
-    Outputs:
-      - masked_distilled: updated evidence_genes (+ evidence_genes_str)
-      - gene_reasons: global reasons (best-effort)
-      - term_events: per-term audit log (drop/inject/flip tags, hashes)
+    Notes:
+      - noise injection pool is symbol-centric (NOISE_LISTS). This is acceptable
+        because stress is an adversarial perturbation; it is not a biological claim.
     """
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_evidence_stress: missing column {genes_col}")
@@ -472,3 +766,42 @@ def apply_evidence_stress(
     }
 
     return MaskResult(masked_distilled=out, gene_reasons=gene_reasons, term_events=term_events)
+
+
+def write_masking_artifacts(
+    masked: MaskResult,
+    *,
+    outdir: str,
+    prefix: str = "masking",
+) -> None:
+    """
+    Persist masking artifacts as TSV.
+
+    - Explicit call only (no hidden side effects in apply_gene_masking).
+    - Token space only (symbols/IDs); no mapping; no network.
+    - Minimal outputs: events + compact summary.
+    """
+    out_path = Path(outdir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    events = masked.term_events.copy()
+    events.to_csv(out_path / f"{prefix}_events.tsv", sep="\t", index=False)
+
+    # Compact per-term summary (easy to read)
+    cols = [
+        "row_index",
+        "mode",
+        "before_n",
+        "after_n",
+        "dropped_n",
+        "dropped_hash",
+        "injected_n",
+        "injected_hash",
+        "contradiction_flip",
+        "stress_tag",
+    ]
+    keep = [c for c in cols if c in events.columns]
+    summary = events[keep].copy() if keep else pd.DataFrame()
+    if (not summary.empty) and ("row_index" in summary.columns):
+        summary = summary.drop_duplicates(subset=["row_index"])
+    summary.to_csv(out_path / f"{prefix}_summary.tsv", sep="\t", index=False)
