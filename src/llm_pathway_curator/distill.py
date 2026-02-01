@@ -641,12 +641,10 @@ def distill_evidence(
         i = int(out.index[empty_post][0])
         bad = out.loc[i, ["term_id", "term_name", "source", "raw_index"]].to_dict()
         raise ValueError(
-            
-                "distill_evidence: masking produced empty evidence_genes at row "
-                f"index={i} (row={bad}). "
-                "Fix: adjust masking lists/rescue rules to preserve ≥1 evidence gene "
-                "per term."
-            
+            "distill_evidence: masking produced empty evidence_genes at row "
+            f"index={i} (row={bad}). "
+            "Fix: adjust masking lists/rescue rules to preserve ≥1 evidence gene "
+            "per term."
         )
 
     # Attach masking debug columns (so we can verify masking actually happened)
