@@ -12,16 +12,42 @@ from .sample_card import SampleCard
 
 
 def _is_na_scalar(x: Any) -> bool:
-    """Single source of truth: _shared.is_na_scalar."""
+    """
+    Check whether a scalar should be treated as missing (NA).
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar.
+
+    Returns
+    -------
+    bool
+        True if NA-like according to `_shared.is_na_scalar`.
+    """
     return _shared.is_na_scalar(x)
 
 
 def _get_distill_knob(card: SampleCard, key: str, default: Any) -> Any:
     """
-    Single source of truth: SampleCard.extra only.
-    Distill knobs are namespaced to avoid collisions: "distill_*".
+    Read a distillation knob from `SampleCard`.
 
-    We also tolerate a legacy fallback (un-namespaced) if already shipped.
+    Knobs are stored in `SampleCard.extra` under the `distill_*` namespace.
+    A legacy (un-namespaced) fallback is tolerated for backward compatibility.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card containing `extra`.
+    key : str
+        Knob name (without the `distill_` prefix).
+    default : Any
+        Default value if the knob is not set.
+
+    Returns
+    -------
+    Any
+        Knob value if present, otherwise `default`.
     """
     v = None
     if hasattr(card, "get_extra"):
@@ -36,65 +62,155 @@ def _get_distill_knob(card: SampleCard, key: str, default: Any) -> Any:
 
 
 def _normalize_direction(x: Any) -> str:
-    """Single source of truth: _shared.normalize_direction()."""
+    """
+    Normalize direction vocabulary to the contract.
+
+    Parameters
+    ----------
+    x : Any
+        Direction-like value.
+
+    Returns
+    -------
+    str
+        Normalized direction string (e.g., 'up', 'down', 'na').
+
+    See Also
+    --------
+    llm_pathway_curator._shared.normalize_direction
+    """
     return _shared.normalize_direction(x)
 
 
 def _clean_gene_token(g: str) -> str:
     """
-    Single source of truth: _shared.clean_gene_token (NO forced uppercasing).
+    Clean a gene token using the spec-owned normalizer.
+
+    Parameters
+    ----------
+    g : str
+        Raw gene token.
+
+    Returns
+    -------
+    str
+        Cleaned gene token (trim-only / conservative; no forced uppercasing).
     """
     return _shared.clean_gene_token(g)
 
 
 def _split_genes_loose(x: Any) -> list[str]:
     """
-    Single source of truth: _shared.parse_genes().
+    Parse evidence genes into a list of canonical tokens.
 
-    Rationale:
-      - Align tokenization across distill/audit/modules/select.
-      - Conservative split (avoid destructive whitespace splitting).
-      - NO forced uppercasing.
+    Parameters
+    ----------
+    x : Any
+        Evidence genes as list-like or a scalar string.
+
+    Returns
+    -------
+    list[str]
+        Parsed gene list, using `_shared.parse_genes`.
+
+    Notes
+    -----
+    Tokenization is centralized in `_shared` to avoid contract drift.
     """
     return _shared.parse_genes(x)
 
 
 def _ensure_float64_na_series(n: int) -> pd.Series:
-    """Float64 NA-capable series of length n."""
+    """
+    Create a nullable Float64 series filled with NA.
+
+    Parameters
+    ----------
+    n : int
+        Length of the series.
+
+    Returns
+    -------
+    pandas.Series
+        Length-`n` series with dtype 'Float64' and all values NA.
+    """
     return pd.Series([pd.NA] * n, dtype="Float64")
 
 
 def _ensure_int64_na_series(n: int) -> pd.Series:
-    """Int64 (nullable) NA-capable series of length n."""
+    """
+    Create a nullable Int64 series filled with NA.
+
+    Parameters
+    ----------
+    n : int
+        Length of the series.
+
+    Returns
+    -------
+    pandas.Series
+        Length-`n` series with dtype 'Int64' and all values NA.
+    """
     return pd.Series([pd.NA] * n, dtype="Int64")
 
 
 def _seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = None) -> int:
-    """Single source of truth: _shared.seed_for_term()."""
+    """
+    Derive a deterministic per-term RNG seed.
+
+    Parameters
+    ----------
+    seed : int or None
+        Global seed.
+    term_uid : str
+        Stable term identifier (e.g., derived from source + term_id).
+    term_row_id : int or None, optional
+        Optional row id to further disambiguate.
+
+    Returns
+    -------
+    int
+        Deterministic seed value for this term.
+    """
     return _shared.seed_for_term(seed, term_uid, term_row_id=term_row_id)
 
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Single source of truth: _shared.hash_gene_set_12hex (NO forced uppercasing).
-    Kept as a thin wrapper for backward readability inside distill.py.
+    Compute a set-stable short hash for an evidence gene set.
+
+    Parameters
+    ----------
+    genes : list[str]
+        Evidence genes.
+
+    Returns
+    -------
+    str
+        12-hex set-stable hash of the gene set.
+
+    Notes
+    -----
+    Hashing is spec-owned by `_shared.hash_gene_set_12hex`.
     """
     return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _get_distill_mode(card: SampleCard) -> str:
     """
-    Explicit mode switch. Default keeps v1 semantics (evidence perturbation).
+    Get the distillation mode from `SampleCard`.
 
-    Allowed:
-      - "evidence_perturb" (default): perturb evidence genes deterministically
-        (no re-running enrichment)
-      - "replicates_proxy": proxy LOO-like survival using replicate_id
-        (NOT true patient-level LOO enrichment)
+    Returns
+    -------
+    str
+        One of:
+        - 'evidence_perturb' : deterministic evidence-gene perturbations (default)
+        - 'replicates_proxy' : replicate-stacked proxy survival (requires replicate_id)
 
-    IMPORTANT:
-      Do NOT accept aliases like "loo"/"patient_loo" here: those imply true re-run LOO enrichment.
-      Keep vocabulary unambiguous for reproducibility and paper claims.
+    Notes
+    -----
+    This function intentionally does not accept ambiguous aliases like 'loo'
+    that could be misconstrued as true patient-level re-run LOO enrichment.
     """
     m = _get_distill_knob(card, "mode", None)
     if m is None:
@@ -109,14 +225,24 @@ def _get_distill_mode(card: SampleCard) -> str:
 
 def _get_distill_pre_gate_mode(card: SampleCard, default: str = "off") -> str:
     """
-    Distill is measurement, audit is decision.
-    pre_gate_mode controls whether distill marks keep_term early.
+    Get the optional distill pre-gate mode.
 
-      - "off" (default): do not change keep_term based on tau
-      - "note": keep_term stays True, but keep_reason annotates low survival
-      - "hard": keep_term=False when term_survival_agg < tau
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card containing distill knobs.
+    default : str, optional
+        Default gate mode. Default is 'off'.
 
-    Normalization is spec-owned by _shared.normalize_gate_mode().
+    Returns
+    -------
+    str
+        Normalized gate mode: 'off', 'note', or 'hard'.
+
+    Notes
+    -----
+    Pre-gate only annotates or filters `keep_term` as a convenience.
+    Final PASS/ABSTAIN/FAIL decisions are made in audit.
     """
     v = _get_distill_knob(card, "pre_gate_mode", None)
     # Spec-level single source of truth (accepts legacy/synonyms; emits off|note|hard)
@@ -124,7 +250,21 @@ def _get_distill_pre_gate_mode(card: SampleCard, default: str = "off") -> str:
 
 
 def _compute_similarity_metrics(orig: set[str], pert: set[str]) -> tuple[float, float, float]:
-    """Return (jaccard, recall, precision)."""
+    """
+    Compute similarity metrics between two gene sets.
+
+    Parameters
+    ----------
+    orig : set[str]
+        Baseline gene set.
+    pert : set[str]
+        Perturbed gene set.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (jaccard, recall, precision)
+    """
     if not orig and not pert:
         return (1.0, 1.0, 1.0)
     if not orig:
@@ -149,14 +289,34 @@ def _perturb_genes(
     rescue: bool,
 ) -> set[str]:
     """
-    Evidence perturbation:
-      - dropout: remove each gene with prob p_drop
-      - add/jitter: add ~p_add * |genes| random genes from global pool
+    Perturb an evidence gene list deterministically using an RNG.
 
-    min_genes:
-      - always enforce a hard floor by adding back from originals when needed
-    rescue:
-      - retained for backward compatibility; no longer controls the hard floor
+    The perturbation is defined as:
+    - dropout: remove each gene with probability `p_drop`
+    - add/jitter: add ~p_add * |genes| random genes from `gene_pool`
+    - enforce a hard floor `min_genes` by adding back from the original set
+
+    Parameters
+    ----------
+    genes : list[str]
+        Original evidence genes.
+    gene_pool : numpy.ndarray
+        Global gene pool used for jitter additions.
+    rng : numpy.random.Generator
+        RNG seeded per term for reproducibility.
+    p_drop : float
+        Dropout probability per gene.
+    p_add : float
+        Jitter/addition rate relative to |genes|.
+    min_genes : int
+        Hard minimum number of genes to keep.
+    rescue : bool
+        Legacy parameter kept for backward compatibility (hard floor is enforced regardless).
+
+    Returns
+    -------
+    set[str]
+        Perturbed gene set (cleaned tokens).
     """
     if not genes:
         return set()
@@ -207,18 +367,42 @@ def _loo_survival_from_replicates(
     p_min: float,
 ) -> pd.DataFrame:
     """
-    Compute proxy survival given stacked EvidenceTable with replicate_id column.
+    Compute proxy survival from replicate-stacked evidence tables.
 
-    Proxy survival definition (per term_uid, anchored to baseline replicate):
-      survival = fraction of non-baseline replicates where:
-        - term exists (same term_uid), and
-        - direction matches baseline (optional), and
-        - evidence_genes similarity to baseline passes gates (jaccard/recall/precision).
+    This computes, per `term_uid`, the fraction of non-baseline replicates that:
+    - contain the term,
+    - (optionally) match the baseline direction,
+    - pass similarity gates vs. baseline evidence genes (Jaccard/Recall/Precision).
 
-    NOTE:
-      This is NOT true patient-level LOO enrichment re-run. It is a proxy
-      based on replicate tables already computed upstream.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Evidence table containing `replicate_id`, `term_uid`, `evidence_genes`, and `direction`.
+    baseline_id : str
+        Replicate id used as the baseline anchor.
+    direction_match : bool
+        If True, require direction agreement with baseline when both are in {up, down}.
+    j_min, r_min, p_min : float
+        Similarity thresholds for Jaccard, recall, and precision.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table keyed by `term_uid` with:
+        - term_survival_loo (legacy name; proxy)
+        - term_survival_proxy
+        - loo_n_total, loo_n_ok
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing, baseline is not found, or duplicates of term_uid exist
+        within a replicate (decision-grade policy).
     """
+
+    # NOTE:
+    #  This is NOT true patient-level LOO enrichment re-run. It is a proxy
+    #  based on replicate tables already computed upstream.
     if "replicate_id" not in df.columns:
         raise ValueError("replicate_id column is required for replicates_proxy survival")
     if "term_uid" not in df.columns:
@@ -346,15 +530,42 @@ def distill_evidence(
     seed: int | None = None,
 ) -> pd.DataFrame:
     """
-    A) Evidence hygiene (v1, deterministic)
+    Distill evidence into stability/provenance features (A-stage; deterministic).
 
-    v1 semantics:
-      - Evidence-level stress tests reproducible from EvidenceTable (no re-running enrichment).
-      - Optional replicates_proxy mode if replicate_id exists (NOT true re-run LOO enrichment).
+    This function performs evidence hygiene and produces per-term stability proxies
+    without re-running enrichment. Two modes are supported:
 
-    Contract:
-      - Input must preserve term×gene (evidence_genes non-empty) for rows used downstream.
-      - Output is stable/joinable and carries term_uid + survival fields.
+    - evidence_perturb (default): perturb evidence genes deterministically and compute
+      term survival as the fraction of perturbations that preserve evidence similarity.
+    - replicates_proxy: compute proxy survival from replicate-stacked evidence tables
+      (requires `replicate_id`; not true patient-level re-run LOO enrichment).
+
+    Parameters
+    ----------
+    evidence : pandas.DataFrame
+        Normalized EvidenceTable-like dataframe with required columns:
+        term_id, term_name, source, stat, qval, direction, evidence_genes.
+    card : SampleCard
+        Sample card controlling distill knobs under `extra` (namespaced as `distill_*`).
+    seed : int or None, optional
+        Global seed for deterministic per-term perturbations.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Distilled table containing stable join keys (term_uid), TSV-friendly genes,
+        survival fields, and knob provenance columns used by downstream modules/audit/report.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing, `stat` is non-numeric, evidence_genes is empty,
+        or `replicates_proxy` is requested but replicate requirements are not met.
+
+    Notes
+    -----
+    - This stage measures stability and records provenance; it does not decide PASS/ABSTAIN/FAIL.
+    - Contract-critical: term×gene must be preserved post-masking (≥1 evidence gene per term).
     """
     required = {
         "term_id",
@@ -419,6 +630,22 @@ def distill_evidence(
     # Optional masking
     masked = apply_gene_masking(out, genes_col="evidence_genes", seed=seed)
     out = masked.masked_distilled.copy()
+
+    # Recompute evidence gene counts after masking (contract-critical).
+    out["evidence_genes"] = out["evidence_genes"].map(_split_genes_loose)
+    out["n_evidence_genes"] = out["evidence_genes"].map(len)
+
+    # Distill is an entry gate: never allow term×gene to collapse post-masking.
+    empty_post = out["n_evidence_genes"].eq(0)
+    if empty_post.any():
+        i = int(out.index[empty_post][0])
+        bad = out.loc[i, ["term_id", "term_name", "source", "raw_index"]].to_dict()
+        raise ValueError(
+            "distill_evidence: masking produced empty evidence_genes at row "
+            f"index={i} (row={bad}). "
+            "Fix: adjust masking lists/rescue rules to preserve ≥1 evidence gene "
+            "per term."
+        )
 
     # Attach masking debug columns (so we can verify masking actually happened)
     try:
@@ -738,6 +965,12 @@ def distill_evidence(
 
     # Export pre-gate provenance (distill convenience; audit decides)
     out["distill_pre_gate_mode"] = str(pre_gate_mode)
-    out["distill_pre_gate_tau"] = pd.NA if pre_gate_tau is None else float(pre_gate_tau)
+    tau_out = pd.NA
+    if pre_gate_tau is not None:
+        try:
+            tau_out = float(pre_gate_tau)
+        except Exception:
+            tau_out = pd.NA
+    out["distill_pre_gate_tau"] = tau_out
 
     return out

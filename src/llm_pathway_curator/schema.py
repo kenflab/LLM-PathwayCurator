@@ -1,4 +1,12 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/schema.py
+"""
+EvidenceTable schema gate for LLM-PathwayCurator.
+This module defines the tool-facing EvidenceTable contract (v1) that preserves
+term×gene relationships across enrichment analysis tools (ORA, fgsea/GSEA, etc.).
+It provides robust IO, conservative column aliasing, spec-owned evidence parsing
+(delegated to _shared), and provenance metadata (df.attrs) for auditability.
+"""
+
 from __future__ import annotations
 
 import re
@@ -12,7 +20,7 @@ from . import _shared
 # -----------------------------------------------------------------------------
 # EvidenceTable schema gate (tool-facing contract)
 # -----------------------------------------------------------------------------
-# v1 contract: we MUST preserve term×gene.
+# Contract: we MUST preserve term×gene.
 #
 # Practical reality:
 # - ORA often has no direction
@@ -145,12 +153,37 @@ ReadMode = Literal["tsv", "sniff", "whitespace"]
 
 @dataclass(frozen=True)
 class EvidenceReadResult:
+    """
+    Result of a flexible EvidenceTable read.
+
+    Attributes
+    ----------
+    df : pandas.DataFrame
+        Raw dataframe loaded from file (no contract normalization applied yet).
+    read_mode : {'tsv', 'sniff', 'whitespace'}
+        Reader mode that successfully parsed the file.
+    """
+
     df: pd.DataFrame
     read_mode: ReadMode
 
 
 @dataclass(frozen=True)
 class EvidenceTable:
+    """
+    Tool-facing EvidenceTable wrapper.
+
+    This class normalizes heterogeneous enrichment analysis outputs into a stable,
+    auditable internal representation that preserves term×gene relationships.
+
+    Notes
+    -----
+    - The contract requires non-empty `term_id`, `term_name`, and `evidence_genes`.
+    - Parsing/normalization of gene tokens is spec-owned by `llm_pathway_curator._shared`
+      (e.g., `parse_genes`, `clean_gene_token`), to avoid contract drift.
+    - Provenance and health summaries are recorded in `df.attrs`.
+    """
+
     df: pd.DataFrame
 
     # -------------------------
@@ -158,6 +191,24 @@ class EvidenceTable:
     # -------------------------
     @staticmethod
     def _normalize_col(c: str) -> str:
+        """
+        Normalize a raw column header conservatively.
+
+        Parameters
+        ----------
+        c : str
+            Raw column name.
+
+        Returns
+        -------
+        str
+            Normalized column name:
+            - stripped
+            - BOM removed
+            - spaces/dashes converted to underscores
+            - repeated underscores collapsed
+            - lowercased
+        """
         # Normalize common messiness while keeping it conservative.
         s = str(c).strip().lstrip("\ufeff")
         s = s.replace(" ", "_").replace("-", "_")
@@ -166,10 +217,40 @@ class EvidenceTable:
 
     @staticmethod
     def _is_na_scalar(x: object) -> bool:
+        """
+        Check whether a scalar should be treated as NA.
+
+        Parameters
+        ----------
+        x : object
+            Input scalar.
+
+        Returns
+        -------
+        bool
+            True if `x` is NA-like according to `_shared.is_na_scalar`.
+        """
         return _shared.is_na_scalar(x)
 
     @staticmethod
     def _clean_required_str(x: object) -> str:
+        """
+        Clean a required string field to a non-NA canonical form.
+
+        Parameters
+        ----------
+        x : object
+            Input value.
+
+        Returns
+        -------
+        str
+            Cleaned string. Returns an empty string for NA-like values or NA tokens.
+
+        Notes
+        -----
+        This is used for required fields such as `term_id`, `term_name`, and `source`.
+        """
         if EvidenceTable._is_na_scalar(x):
             return ""
         s = str(x).strip()
@@ -179,11 +260,45 @@ class EvidenceTable:
 
     @staticmethod
     def _normalize_direction(x: object) -> str:
+        """
+        Normalize direction vocabulary to the contract.
+
+        Parameters
+        ----------
+        x : object
+            Direction-like value (e.g., 'up', 'down', '+', '-', NA).
+
+        Returns
+        -------
+        str
+            Normalized direction string (e.g., 'up', 'down', 'na').
+
+        See Also
+        --------
+        llm_pathway_curator._shared.normalize_direction
+        """
         # Spec-level vocabulary normalization lives in _shared to avoid contract drift.
         return _shared.normalize_direction(x)
 
     @staticmethod
     def _normalize_bool(x: object) -> bool:
+        """
+        Parse a boolean-like scalar.
+
+        Parameters
+        ----------
+        x : object
+            Boolean-like value.
+
+        Returns
+        -------
+        bool
+            True for {'1','true','t','yes','y'} (case-insensitive), otherwise False.
+
+        Notes
+        -----
+        NA-like values are treated as False.
+        """
         if EvidenceTable._is_na_scalar(x):
             return False
         s = str(x).strip().lower()
@@ -194,6 +309,30 @@ class EvidenceTable:
     # -------------------------
     @classmethod
     def _read_flexible(cls, path: str) -> EvidenceReadResult:
+        """
+        Read a delimited table with robust fallbacks.
+
+        The reader attempts, in order:
+        1) TSV (`sep='\\t'`)
+        2) Sniffed delimiter (`sep=None`, `engine='python'`)
+        3) Whitespace-delimited (`sep='\\s+'`)
+
+        Parameters
+        ----------
+        path : str
+            Input file path. Compression is inferred (e.g., .gz).
+
+        Returns
+        -------
+        EvidenceReadResult
+            Loaded dataframe and the read mode that succeeded.
+
+        Notes
+        -----
+        - Uses `encoding='utf-8-sig'` to tolerate BOM.
+        - Uses `keep_default_na=False` to avoid accidental NA coercion of gene tokens.
+        """
+
         # robust defaults: BOM, comments, gzip, do not auto-convert NA tokens
         common_kwargs = dict(
             encoding="utf-8-sig",
@@ -226,16 +365,57 @@ class EvidenceTable:
         cls, path: str, *, strict: bool = False, drop_invalid: bool = True
     ) -> EvidenceTable:
         """
-        Read an evidence table and normalize it to the tool-facing contract.
+        Read and normalize an evidence table to the contract (v1).
 
-        strict:
-          - if True, any invalid row triggers ValueError.
-          - if False (default), invalid rows are dropped/kept per drop_invalid and marked.
+        This is the main schema gate that:
+        - aliases common column variants to contract names
+        - cleans required fields
+        - parses `evidence_genes` via `_shared.parse_genes`
+        - normalizes numeric fields (`stat`, `qval`, `pval`)
+        - validates the term×gene contract
+        - optionally computes q-values from p-values (BH) when q-values are missing
+        - records provenance and health metrics in `df.attrs`
 
-        drop_invalid:
-          - if True (default), drop rows that violate term×gene (e.g., empty evidence_genes),
-            unless strict=True (then we raise).
-          - if False, keep rows but mark them invalid; downstream should ignore them via is_valid.
+        Parameters
+        ----------
+        path : str
+            Input evidence table path.
+        strict : bool, optional
+            If True, the first invalid row raises ValueError.
+            If False, invalid rows are marked (and optionally dropped). Default is False.
+        drop_invalid : bool, optional
+            If True, drop rows with `is_valid=False`. Default is True.
+            If False, keep invalid rows and rely on `is_valid` downstream.
+
+        Returns
+        -------
+        EvidenceTable
+            Normalized evidence table wrapper.
+
+        Raises
+        ------
+        ValueError
+            If core required columns are missing after aliasing.
+            If `strict=True` and an invalid row is encountered.
+
+        Notes
+        -----
+        Contract-required columns (core)
+        - term_id
+        - term_name
+        - stat
+        - evidence_genes
+
+        Output guarantees (post-normalization)
+        - `evidence_genes` is a list-like object per row (and `evidence_genes_str` is TSV-safe)
+        - `direction` is normalized (typically 'up', 'down', 'na')
+        - `df.attrs` contains: `contract_version`, `read_mode`, `aliasing`, `health`
+
+        Examples
+        --------
+        >>> et = EvidenceTable.read_tsv("evidence_table.tsv")
+        >>> info = et.summarize()
+        >>> et.write_tsv("normalized_evidence_table.tsv")
         """
         rr = cls._read_flexible(path)
         df_raw = rr.df
@@ -246,6 +426,8 @@ class EvidenceTable:
 
         df = df_raw.copy()
         df.columns = cols_mapped
+        # Snapshot attrs for safe propagation across slice/copy steps.
+        _attrs_snapshot: dict[str, object] = dict(getattr(df, "attrs", {}))
 
         dup = df.columns[df.columns.duplicated()].tolist()
         if dup:
@@ -297,15 +479,15 @@ class EvidenceTable:
                 # Write back merged target into the original target position.
                 df.iloc[:, target_pos] = target
 
-                # Drop all other duplicate columns by position
-                # (from right to left to keep positions valid).
-                for pos in sorted(src_positions, reverse=True):
-                    df = df.drop(df.columns[pos], axis=1)
+                # Drop duplicate columns by *position* (safe even with duplicate labels).
+                keep_positions = [i for i in range(df.shape[1]) if i not in src_positions]
+                df = df.iloc[:, keep_positions]
 
                 coalesced[name] = used_sources if used_sources else ["no_nonempty_fills"]
 
             # Attach provenance for auditability (attrs preserved downstream in summarize()).
             df.attrs["coalesced_duplicate_columns"] = coalesced
+            _attrs_snapshot = dict(df.attrs)
 
         # ---- auto-fill optional normalized columns ----
         if "source" not in df.columns:
@@ -552,6 +734,8 @@ class EvidenceTable:
 
         if drop_invalid:
             df = df.loc[df["is_valid"]].copy()
+            # Ensure attrs survive copy/slice across pandas versions.
+            df.attrs.update(_attrs_snapshot)
 
         # provenance (attrs)
         df.attrs["read_mode"] = rr.read_mode
@@ -596,6 +780,20 @@ class EvidenceTable:
         return cls(df=df)
 
     def summarize(self) -> dict[str, object]:
+        """
+        Summarize the normalized EvidenceTable for logging and QA.
+
+        Returns
+        -------
+        dict[str, object]
+            Summary dictionary including:
+            - contract version
+            - number of terms and sources
+            - direction counts
+            - evidence genes per term quantiles
+            - q-value provenance counts
+            - `df.attrs['health']` and `df.attrs['aliasing']` (if present)
+        """
         df = self.df
         genes_n = df["evidence_genes"].map(len)
         return {
@@ -617,14 +815,32 @@ class EvidenceTable:
         }
 
     def write_tsv(self, path: str) -> None:
+        """
+        Write the normalized EvidenceTable to a TSV file.
+
+        This writer:
+        - applies a small Excel formula-injection defense for common text fields
+        - serializes `evidence_genes` as a TSV-friendly string column
+        - emits a stable column order for reproducibility
+
+        Parameters
+        ----------
+        path : str
+            Output TSV path.
+
+        Notes
+        -----
+        - `evidence_genes` is written as a joined string under the column name
+          `evidence_genes` (list form is dropped).
+        - Normalized contract columns are emitted first; remaining columns are sorted.
+        """
         out = self.df.copy()
 
         def _excel_safe_cell(txt: object) -> str:
-            s = str(txt or "")
-            if not s:
+            if self._is_na_scalar(txt):
                 return ""
-            s = s.strip()
-            if not s:
+            s = str(txt).strip()
+            if (not s) or _shared.is_na_token(s):
                 return ""
             if s.startswith(_EXCEL_FORMULA_START):
                 return "'" + s
