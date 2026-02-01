@@ -44,30 +44,38 @@ NOISE_PATTERNS = {
     "TCR_Clone_Mouse": r"^Tr[abgd][vdj]",  # T-cell Receptors (Mouse)
     "Ig_Clone": r"^IG[HKL][VDJ]",  # Immunoglobulins (Human)
     "Ig_Clone_Mouse": r"^Ig[hkl][vdj]",  # Immunoglobulins (Mouse)
+    # IMPORTANT (PathwayCurator):
+    #   Do NOT treat Ig constant regions as removable "noise" for enrichment evidence.
+    #   They are core biology for B cell / plasma cell states
+    #   (e.g., class switching, antibody production),
+    #   and masking them can systematically bias pathway support and inflate abstention.
+    #
+    #   If a marker-centric suppression is desired (LLM-scCurator prompt hygiene),
+    #   enable these patterns only in that context (not in PathwayCurator default).
     # --- Ig Constant Regions (Human) ---
-    "Ig_Constant_Heavy": r"^IGH[-_]?((M|D)|G[1-4]|A[1-2]|E)$",  # IGHM, IGHD, IGHG1–4, IGHA1–2, IGHE
-    "Ig_Constant_Light_Kappa": r"^IGKC$",  # IGKC
-    "Ig_Constant_Light_Lambda": r"^IGLC.*$",  # IGLC1–7
+    # "Ig_Constant_Heavy": r"^IGH[-_]?((M|D)|G[1-4]|A[1-2]|E)$",  # IGHM/IGHD/IGHG1–4/IGHA1–2/IGHE
+    # "Ig_Constant_Light_Kappa": r"^IGKC$",  # IGKC
+    # "Ig_Constant_Light_Lambda": r"^IGLC.*$",  # IGLC1–7
     # --- Ig Constant Regions (Mouse) ---
-    "Ig_Constant_Heavy_Mouse": r"^Igh[-_]?((m|d)|g[1-4]|a|e)$",  # Ighm, Ighd, Ighg1–4, Igha, I ghe
-    "Ig_Constant_Light_Kappa_Mouse": r"^Igkc$",  # Igkc
-    "Ig_Constant_Light_Lambda_Mouse": r"^Iglc.*$",  # Iglc1–7
+    # "Ig_Constant_Heavy_Mouse": r"^Igh[-_]?((m|d)|g[1-4]|a|e)$",  # Ighm/Ighd/Ighg1–4/Igha/Ighe
+    # "Ig_Constant_Light_Kappa_Mouse": r"^Igkc$",  # Igkc
+    # "Ig_Constant_Light_Lambda_Mouse": r"^Iglc.*$",  # Iglc1–7
     # --- Biological State Noise ---
-    "Mito_Artifact": r"^[Mm][Tt]-",  # Mitochondrial (MT- or mt-)
-    "Ribo_Artifact": r"^[Rr][Pp][LSls]",  # Ribosomal (RPS/RPL or Rps/Rpl)
-    "HeatShock": r"^[Hh][Ss][Pp]",  # Heat shock (HSP or Hsp)
-    "JunFos_Stress": r"^(JUN|FOS|Jun|Fos)",  # Dissociation stress
-    "Hemo_Contam": r"^[Hh][Bb][ABab]",  # Hemoglobin
-    "Translation_Factor": r"^(EEF|EIF|TPT1|Eef|Eif|Tpt1)",  # Translation
+    # "Mito_Artifact": r"^[Mm][Tt]-",  # Mitochondrial (MT- or mt-)
+    # "Ribo_Artifact": r"^[Rr][Pp][LSls]",  # Ribosomal (RPS/RPL or Rps/Rpl)
+    # "HeatShock": r"^[Hh][Ss][Pp]",  # Heat shock (HSP or Hsp)
+    # "JunFos_Stress": r"^(JUN|FOS|Jun|Fos)",  # Dissociation stress
+    # "Hemo_Contam": r"^[Hh][Bb][ABab]",  # Hemoglobin
+    # "Translation_Factor": r"^(EEF|EIF|TPT1|Eef|Eif|Tpt1)",  # Translation
     # --- Chromatin & Proliferation Artifacts ---
-    "Histone": r"^(HIST|Hist)",
+    # "Histone": r"^(HIST|Hist)",
     # --- Donor/Batch Confounders ---
     # 1. HLA Class I (Human): Ubiquitous & Interferon-sensitive.
-    "HLA_ClassI_Noise": r"^HLA-[ABCEFG]",  # Keeps Class II (HLA-D) for APC definition.
+    # "HLA_ClassI_Noise": r"^HLA-[ABCEFG]",  # Keeps Class II (HLA-D) for APC definition.
     # 2. MHC Class I (Mouse): H-2K, H-2D, H-2L.
-    "MHC_ClassI_Noise": r"^H2-[DKL]",  # Keeps Class II (H-2A, H-2E) for APC definition.
+    # "MHC_ClassI_Noise": r"^H2-[DKL]",  # Keeps Class II (H-2A, H-2E) for APC definition.
     # 3. Sex Chromosome (Gender Batch Effect Removal)
-    "SexChromosome": r"^(XIST|UTY|DDX3Y|Xist|Uty|Ddx3y)",  # Removes XIST (Female)
+    # "SexChromosome": r"^(XIST|UTY|DDX3Y|Xist|Uty|Ddx3y)",  # Removes XIST (Female)
     # and Y-linked genes (Male)
 }
 
@@ -259,4 +267,39 @@ PROLIFERATION_SENTINELS = {
 _CELL_CYCLE_ALL = _HUMAN_CC_GENES.union({g.capitalize() for g in _HUMAN_CC_GENES})
 CELL_CYCLE_GENES = _CELL_CYCLE_ALL.difference(PROLIFERATION_SENTINELS)
 
-NOISE_LISTS = {"CellCycle_State": CELL_CYCLE_GENES}
+# -----------------------------------------------------------------------------
+# Noise list profiles
+# -----------------------------------------------------------------------------
+# IMPORTANT (PathwayCurator):
+#   LLM-PathwayCurator is an interpretation QA layer for enrichment outputs.
+#   For pathway interpretation, many "dominant" programs (e.g., cell cycle,
+#   interferon, ribosome/mitochondria) can be the *true biology* and must NOT be
+#   pre-emptively removed from evidence_genes. Removing them upstream can:
+#     - collapse evidence for legitimate pathways,
+#     - inflate ABSTAIN via missing/unstable evidence,
+#     - bias benchmarks toward "secondary" pathways.
+#
+#   Therefore, we keep cell-cycle definitions here (shared asset with LLM-scCurator),
+#   but we DO NOT enable them in the default noise masking list for PathwayCurator.
+#
+# Reviewer note:
+#   - Cell-cycle genes are *not* treated as removable "noise" for enrichment evidence.
+#   - If users want a marker-centric suppression behavior, they can use the
+#     NOISE_LISTS_CELLTYPE profile explicitly in LLM-scCurator contexts.
+# -----------------------------------------------------------------------------
+
+# Cell-type / marker-centric suppression profile (LLM-scCurator legacy behavior).
+NOISE_LISTS_CELLTYPE = {
+    "CellCycle_State": CELL_CYCLE_GENES,
+}
+
+# -----------------------------------------------------------------------------
+# PathwayCurator policy
+# -----------------------------------------------------------------------------
+# LLM-PathwayCurator is an interpretation QA layer for enrichment outputs.
+# For pathway interpretation, cell-cycle programs are often true biology and
+# must NOT be pre-emptively removed from evidence_genes.
+#
+# Therefore: keep the cell-cycle gene set defined here for reference/documentation,
+# but DO NOT activate it as a masking list in this repository.
+NOISE_LISTS: dict[str, set[str]] = {}

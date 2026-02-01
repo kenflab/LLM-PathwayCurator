@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897456_6d799ce686",
+  "run_id": "1769917279_6d799ce686",
   "status": "ok",
-  "started_epoch": 1769897456.6203759,
+  "started_epoch": 1769917279.253815,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/OV.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/OV.hard.sample_card.json",
@@ -136,7 +136,7 @@
         "n_terms": 184,
         "n_pairs_total": 16836,
         "n_pairs_sampled": 16836,
-        "shared_pos_rate": 0.06575196008553101,
+        "shared_pos_rate": 0.0650392017106201,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -152,7 +152,7 @@
         "n_terms": 184,
         "n_pairs_total": 16836,
         "n_pairs_sampled": 16836,
-        "shared_pos_rate": 0.06426704680446661,
+        "shared_pos_rate": 0.06355428842955571,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -165,7 +165,7 @@
         "jaccard_p99": 0.8
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.06575196008553101,
+      "shared_pos_rate_for_tuning": 0.0650392017106201,
       "sparsity_detected": true,
       "tuned_min_shared_genes": 2,
       "tuned_jaccard_min": 0.02,
@@ -173,7 +173,7 @@
       "n_terms": 184,
       "n_pairs_est": 16836,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.5,
+      "singleton_frac": 0.5641025641025641,
       "did_tune": true,
       "effective_min_shared_genes": 2,
       "effective_jaccard_min": 0.02,
@@ -181,11 +181,11 @@
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 36,
-      "n_terms_median": 1.5,
-      "n_genes_median": 7.5,
+      "n_modules": 39,
+      "n_terms_median": 1.0,
+      "n_genes_median": 6.0,
       "n_terms_max": 44,
-      "n_genes_max": 107
+      "n_genes_max": 106
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -345,5 +345,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/OV/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897457.6975737
+  "finished_epoch": 1769917281.043105
 }

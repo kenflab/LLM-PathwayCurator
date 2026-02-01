@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897454_bb3097fc65",
+  "run_id": "1769917275_bb3097fc65",
   "status": "ok",
-  "started_epoch": 1769897454.2530632,
+  "started_epoch": 1769917275.6813643,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
@@ -136,7 +136,7 @@
         "n_terms": 186,
         "n_pairs_total": 17205,
         "n_pairs_sampled": 17205,
-        "shared_pos_rate": 0.062191223481546064,
+        "shared_pos_rate": 0.062074978204010464,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
@@ -152,12 +152,12 @@
         "n_terms": 176,
         "n_pairs_total": 15400,
         "n_pairs_sampled": 15400,
-        "shared_pos_rate": 0.04772727272727273,
+        "shared_pos_rate": 0.0475974025974026,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
         "shared_p95": 0.0,
-        "shared_p99": 5.0,
+        "shared_p99": 4.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
@@ -165,7 +165,7 @@
         "jaccard_p99": 0.5714285714285714
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.062191223481546064,
+      "shared_pos_rate_for_tuning": 0.062074978204010464,
       "sparsity_detected": true,
       "tuned_min_shared_genes": 2,
       "tuned_jaccard_min": 0.02,
@@ -173,19 +173,19 @@
       "n_terms": 176,
       "n_pairs_est": 15400,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.6481481481481481,
+      "singleton_frac": 0.6428571428571429,
       "did_tune": true,
       "effective_min_shared_genes": 2,
       "effective_jaccard_min": 0.02,
-      "largest_component_frac": 0.32954545454545453,
+      "largest_component_frac": 0.30113636363636365,
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 54,
+      "n_modules": 56,
       "n_terms_median": 1.0,
-      "n_genes_median": 4.0,
-      "n_terms_max": 58,
-      "n_genes_max": 122
+      "n_genes_median": 3.5,
+      "n_terms_max": 53,
+      "n_genes_max": 116
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -254,7 +254,7 @@
           ],
           "module_col": "module_id",
           "n_anchor_terms": 33,
-          "n_anchor_modules": 14,
+          "n_anchor_modules": 15,
           "anchor_terms_preview": [
             "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_ACTIVATED_SMO_TO_HEDGEHOG_SIGNALING_PATHWAY",
             "fgsea_msigdb_C2_CP_KEGG_MEDICUS_entrez:KEGG_MEDICUS_VARIANT_MUTATION_INACTIVATED_PTCH1_TO_HEDGEHOG_SIGNALING_PATHWAY",
@@ -269,9 +269,9 @@
           ]
         },
         "n_eval": 50,
-        "n_pass": 39,
+        "n_pass": 38,
         "n_fail": 1,
-        "n_abstain": 10,
+        "n_abstain": 11,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -279,7 +279,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 11,
+        "n_blocked": 12,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -346,5 +346,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/LUSC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897455.424483
+  "finished_epoch": 1769917277.4483612
 }

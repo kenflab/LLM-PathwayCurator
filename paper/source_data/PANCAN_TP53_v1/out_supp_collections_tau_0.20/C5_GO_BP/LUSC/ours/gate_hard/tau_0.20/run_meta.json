@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897112_58c67d9ce7",
+  "run_id": "1769916893_58c67d9ce7",
   "status": "ok",
-  "started_epoch": 1769897112.5534859,
+  "started_epoch": 1769916893.2316318,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.C5_GO_BP.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
@@ -133,10 +133,10 @@
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
       "pair_stats_raw": {
-        "n_terms": 3386,
-        "n_pairs_total": 5730805,
+        "n_terms": 3385,
+        "n_pairs_total": 5727420,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.14696,
+        "shared_pos_rate": 0.14306,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -144,15 +144,15 @@
         "shared_p99": 5.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.022222222222222223,
-        "jaccard_p95": 0.042105263157894736,
+        "jaccard_p90": 0.02197802197802198,
+        "jaccard_p95": 0.041666666666666664,
         "jaccard_p99": 0.09523809523809523
       },
       "pair_stats_filtered": {
-        "n_terms": 3384,
-        "n_pairs_total": 5724036,
+        "n_terms": 3383,
+        "n_pairs_total": 5720653,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.113355,
+        "shared_pos_rate": 0.11161,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -160,44 +160,44 @@
         "shared_p99": 4.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.013513513513513514,
+        "jaccard_p90": 0.013157894736842105,
         "jaccard_p95": 0.03333333333333333,
-        "jaccard_p99": 0.08490766760337401
+        "jaccard_p99": 0.08695652173913043
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.14696,
+      "shared_pos_rate_for_tuning": 0.14306,
       "sparsity_detected": false,
-      "n_terms": 3384,
-      "n_pairs_est": 5724036,
+      "n_terms": 3383,
+      "n_pairs_est": 5720653,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.8666666666666667,
+      "singleton_frac": 0.8679867986798679,
       "did_tune": false,
       "effective_min_shared_genes": 3,
       "effective_jaccard_min": 0.1,
-      "largest_component_frac": 0.9001182033096927,
+      "largest_component_frac": 0.892403192432752,
       "giant_frac_threshold": 0.6,
       "tighten_iter_1": {
         "min_shared_genes": 4,
         "jaccard_min": 0.12000000000000001,
-        "largest_component_frac": 0.7836879432624113,
-        "n_components": 567
+        "largest_component_frac": 0.7750517292344073,
+        "n_components": 594
       },
       "tighten_iter_2": {
         "min_shared_genes": 5,
         "jaccard_min": 0.14,
-        "largest_component_frac": 0.6495271867612293,
-        "n_components": 869
+        "largest_component_frac": 0.6378953591486846,
+        "n_components": 903
       },
       "giant_detected": true,
       "giant_tighten_applied": false,
       "giant_tighten_reason": "still giant after 2 iterations"
     },
     "modules_stats": {
-      "n_modules": 285,
+      "n_modules": 303,
       "n_terms_median": 1.0,
       "n_genes_median": 4.0,
-      "n_terms_max": 3046,
-      "n_genes_max": 4079
+      "n_terms_max": 3019,
+      "n_genes_max": 3922
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -344,5 +344,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/LUSC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897169.598949
+  "finished_epoch": 1769916954.3689272
 }

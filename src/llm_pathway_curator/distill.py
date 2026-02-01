@@ -427,6 +427,33 @@ def distill_evidence(
     masked = apply_gene_masking(out, genes_col="evidence_genes", seed=seed)
     out = masked.masked_distilled.copy()
 
+    # Attach masking debug columns (so we can verify masking actually happened)
+    try:
+        ev = masked.term_events.copy()
+        if (not ev.empty) and ("row_index" in ev.columns):
+            # row_index is raw_index-preferred, so align with out["raw_index"]
+            out["_mask_row_index"] = pd.to_numeric(out["raw_index"], errors="coerce").astype(
+                "Int64"
+            )
+            ev["_mask_row_index"] = pd.to_numeric(ev["row_index"], errors="coerce").astype("Int64")
+
+            keep_cols = [
+                c
+                for c in [
+                    "_mask_row_index",
+                    "dropped_n",
+                    "dropped_genes_str",
+                    "dropped_genes_symbols_str",
+                    "notes",
+                ]
+                if c in ev.columns
+            ]
+
+            out = out.merge(ev[keep_cols], on="_mask_row_index", how="left")
+            out = out.drop(columns=["_mask_row_index"], errors="ignore")
+    except Exception:
+        pass
+
     # Stable IDs for joins/reports
     out = out.reset_index(drop=True)
     out["term_row_id"] = range(len(out))

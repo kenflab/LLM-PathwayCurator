@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897002_c1b3a7cb18",
+  "run_id": "1769916769_c1b3a7cb18",
   "status": "ok",
-  "started_epoch": 1769897002.038521,
+  "started_epoch": 1769916769.290015,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.H.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
@@ -136,36 +136,36 @@
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.3093877551020408,
+        "shared_pos_rate": 0.3053061224489796,
         "shared_p50": 0.0,
         "shared_p75": 1.0,
         "shared_p90": 2.0,
         "shared_p95": 4.0,
-        "shared_p99": 8.759999999999991,
+        "shared_p99": 8.0,
         "jaccard_p50": 0.0,
-        "jaccard_p75": 0.012987012987012988,
-        "jaccard_p90": 0.03389830508474576,
-        "jaccard_p95": 0.05128205128205128,
-        "jaccard_p99": 0.11115401491882397
+        "jaccard_p75": 0.013333333333333334,
+        "jaccard_p90": 0.03278688524590164,
+        "jaccard_p95": 0.05122972265829408,
+        "jaccard_p99": 0.11046854082998658
       },
       "pair_stats_filtered": {
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.29714285714285715,
+        "shared_pos_rate": 0.29306122448979594,
         "shared_p50": 0.0,
         "shared_p75": 1.0,
         "shared_p90": 2.0,
         "shared_p95": 3.0,
         "shared_p99": 7.0,
         "jaccard_p50": 0.0,
-        "jaccard_p75": 0.012345679012345678,
-        "jaccard_p90": 0.03058275058275065,
-        "jaccard_p95": 0.04630021141649043,
-        "jaccard_p99": 0.10655203619909498
+        "jaccard_p75": 0.01282051282051282,
+        "jaccard_p90": 0.029850746268656712,
+        "jaccard_p95": 0.04521319388576021,
+        "jaccard_p99": 0.1042407660738714
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.3093877551020408,
+      "shared_pos_rate_for_tuning": 0.3053061224489796,
       "sparsity_detected": false,
       "n_terms": 50,
       "n_pairs_est": 1225,
@@ -180,9 +180,9 @@
     "modules_stats": {
       "n_modules": 39,
       "n_terms_median": 1.0,
-      "n_genes_median": 31.0,
+      "n_genes_median": 30.0,
       "n_terms_max": 6,
-      "n_genes_max": 201
+      "n_genes_max": 195
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -329,5 +329,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/H/SKCM/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897003.1391861
+  "finished_epoch": 1769916771.1062524
 }

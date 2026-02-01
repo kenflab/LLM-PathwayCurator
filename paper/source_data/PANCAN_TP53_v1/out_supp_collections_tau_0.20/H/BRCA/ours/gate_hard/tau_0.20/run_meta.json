@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769896998_d3725e6999",
+  "run_id": "1769916763_d3725e6999",
   "status": "ok",
-  "started_epoch": 1769896998.6098578,
+  "started_epoch": 1769916763.8681128,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/BRCA.H.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/BRCA.hard.sample_card.json",
@@ -136,7 +136,7 @@
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.20816326530612245,
+        "shared_pos_rate": 0.20326530612244897,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -145,14 +145,14 @@
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.022222222222222223,
-        "jaccard_p95": 0.037596086652690396,
-        "jaccard_p99": 0.08932552427734743
+        "jaccard_p95": 0.0362337662337662,
+        "jaccard_p99": 0.08665838509316769
       },
       "pair_stats_filtered": {
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.19183673469387755,
+        "shared_pos_rate": 0.18775510204081633,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -161,11 +161,11 @@
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.020833333333333332,
-        "jaccard_p95": 0.034482758620689655,
-        "jaccard_p99": 0.07806938159879334
+        "jaccard_p95": 0.03436586791350085,
+        "jaccard_p99": 0.07783653846153846
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.20816326530612245,
+      "shared_pos_rate_for_tuning": 0.20326530612244897,
       "sparsity_detected": false,
       "n_terms": 50,
       "n_pairs_est": 1225,
@@ -180,9 +180,9 @@
     "modules_stats": {
       "n_modules": 42,
       "n_terms_median": 1.0,
-      "n_genes_median": 30.0,
+      "n_genes_median": 29.0,
       "n_terms_max": 3,
-      "n_genes_max": 100
+      "n_genes_max": 98
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -329,5 +329,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/H/BRCA/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769896999.7009966
+  "finished_epoch": 1769916765.639183
 }

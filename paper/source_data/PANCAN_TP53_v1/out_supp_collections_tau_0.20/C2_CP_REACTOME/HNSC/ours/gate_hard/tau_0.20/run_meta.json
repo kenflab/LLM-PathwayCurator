@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897374_69eec211a0",
+  "run_id": "1769917182_69eec211a0",
   "status": "ok",
-  "started_epoch": 1769897374.4937208,
+  "started_epoch": 1769917182.4688191,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/HNSC.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json",
@@ -133,67 +133,67 @@
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
       "pair_stats_raw": {
-        "n_terms": 984,
-        "n_pairs_total": 483636,
+        "n_terms": 980,
+        "n_pairs_total": 479710,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.08729,
+        "shared_pos_rate": 0.085205,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
         "shared_p95": 2.0,
-        "shared_p99": 11.0,
+        "shared_p99": 10.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.06666666666666667,
+        "jaccard_p95": 0.0625,
         "jaccard_p99": 0.3333333333333333
       },
       "pair_stats_filtered": {
-        "n_terms": 983,
-        "n_pairs_total": 482653,
+        "n_terms": 979,
+        "n_pairs_total": 478731,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.069775,
+        "shared_pos_rate": 0.06649,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 0.0,
         "shared_p95": 1.0,
-        "shared_p99": 7.0,
+        "shared_p99": 6.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
         "jaccard_p90": 0.0,
-        "jaccard_p95": 0.037037037037037035,
-        "jaccard_p99": 0.25
+        "jaccard_p95": 0.03571428571428571,
+        "jaccard_p99": 0.2647058823529412
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.08729,
+      "shared_pos_rate_for_tuning": 0.085205,
       "sparsity_detected": true,
       "tuned_min_shared_genes": 2,
       "tuned_jaccard_min": 0.02,
       "tune_reason": "shared_pos_rate<0.1",
-      "n_terms": 983,
-      "n_pairs_est": 482653,
+      "n_terms": 979,
+      "n_pairs_est": 478731,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.7878787878787878,
+      "singleton_frac": 0.7692307692307693,
       "did_tune": true,
       "effective_min_shared_genes": 3,
       "effective_jaccard_min": 0.04,
-      "largest_component_frac": 0.9582909460834181,
+      "largest_component_frac": 0.9499489274770173,
       "giant_frac_threshold": 0.6,
       "tighten_iter_1": {
         "min_shared_genes": 3,
         "jaccard_min": 0.04,
-        "largest_component_frac": 0.5096642929806714,
-        "n_components": 96
+        "largest_component_frac": 0.48621041879468846,
+        "n_components": 115
       },
       "giant_detected": true,
       "giant_tighten_applied": true
     },
     "modules_stats": {
-      "n_modules": 96,
+      "n_modules": 115,
       "n_terms_median": 1.0,
       "n_genes_median": 4.0,
-      "n_terms_max": 501,
-      "n_genes_max": 1382
+      "n_terms_max": 476,
+      "n_genes_max": 1281
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -277,9 +277,9 @@
           ]
         },
         "n_eval": 50,
-        "n_pass": 43,
-        "n_fail": 2,
-        "n_abstain": 5,
+        "n_pass": 41,
+        "n_fail": 3,
+        "n_abstain": 6,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -287,7 +287,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 7,
+        "n_blocked": 9,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -354,5 +354,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/HNSC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897385.5461314
+  "finished_epoch": 1769917194.4211793
 }
