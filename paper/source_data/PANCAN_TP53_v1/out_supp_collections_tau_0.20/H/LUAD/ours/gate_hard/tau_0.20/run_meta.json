@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769896996_2441139d28",
+  "run_id": "1769916760_2441139d28",
   "status": "ok",
-  "started_epoch": 1769896996.286368,
+  "started_epoch": 1769916760.3287802,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUAD.H.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUAD.hard.sample_card.json",
@@ -140,29 +140,29 @@
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
-        "shared_p95": 3.0,
-        "shared_p99": 6.0,
+        "shared_p95": 2.0,
+        "shared_p99": 5.759999999999991,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.025,
-        "jaccard_p95": 0.041039977634889556,
-        "jaccard_p99": 0.0875555555555555
+        "jaccard_p90": 0.02538461538461547,
+        "jaccard_p95": 0.04329324699352447,
+        "jaccard_p99": 0.09090909090909091
       },
       "pair_stats_filtered": {
         "n_terms": 50,
         "n_pairs_total": 1225,
         "n_pairs_sampled": 1225,
-        "shared_pos_rate": 0.19918367346938776,
+        "shared_pos_rate": 0.1983673469387755,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
         "shared_p95": 2.0,
-        "shared_p99": 6.0,
+        "shared_p99": 5.759999999999991,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.020833333333333332,
-        "jaccard_p95": 0.03571428571428571,
-        "jaccard_p99": 0.07803615046409378
+        "jaccard_p90": 0.02127659574468085,
+        "jaccard_p95": 0.037037037037037035,
+        "jaccard_p99": 0.08996047430830037
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
       "shared_pos_rate_for_tuning": 0.2179591836734694,
@@ -182,7 +182,7 @@
       "n_terms_median": 1.0,
       "n_genes_median": 33.0,
       "n_terms_max": 3,
-      "n_genes_max": 112
+      "n_genes_max": 86
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -329,5 +329,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/H/LUAD/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769896997.4717963
+  "finished_epoch": 1769916762.1040885
 }

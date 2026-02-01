@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769897169_96d49d6b28",
+  "run_id": "1769916954_96d49d6b28",
   "status": "ok",
-  "started_epoch": 1769897169.6070445,
+  "started_epoch": 1769916954.3751805,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/BRCA.C5_GO_BP.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/BRCA.hard.sample_card.json",
@@ -133,26 +133,10 @@
       "term_id_col": "term_uid",
       "genes_col": "evidence_genes",
       "pair_stats_raw": {
-        "n_terms": 3386,
-        "n_pairs_total": 5730805,
+        "n_terms": 3385,
+        "n_pairs_total": 5727420,
         "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.12597,
-        "shared_p50": 0.0,
-        "shared_p75": 0.0,
-        "shared_p90": 1.0,
-        "shared_p95": 2.0,
-        "shared_p99": 5.0,
-        "jaccard_p50": 0.0,
-        "jaccard_p75": 0.0,
-        "jaccard_p90": 0.018018018018018014,
-        "jaccard_p95": 0.038461538461538464,
-        "jaccard_p99": 0.09090909090909091
-      },
-      "pair_stats_filtered": {
-        "n_terms": 3383,
-        "n_pairs_total": 5720653,
-        "n_pairs_sampled": 200000,
-        "shared_pos_rate": 0.100485,
+        "shared_pos_rate": 0.12411,
         "shared_p50": 0.0,
         "shared_p75": 0.0,
         "shared_p90": 1.0,
@@ -160,29 +144,45 @@
         "shared_p99": 4.0,
         "jaccard_p50": 0.0,
         "jaccard_p75": 0.0,
-        "jaccard_p90": 0.007462686567164179,
+        "jaccard_p90": 0.017857142857142856,
+        "jaccard_p95": 0.038461538461538464,
+        "jaccard_p99": 0.09090909090909091
+      },
+      "pair_stats_filtered": {
+        "n_terms": 3382,
+        "n_pairs_total": 5717271,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.09771,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 0.0,
+        "shared_p95": 1.0,
+        "shared_p99": 4.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.0,
         "jaccard_p95": 0.030303030303030304,
-        "jaccard_p99": 0.08219264782382601
+        "jaccard_p99": 0.08333333333333333
       },
       "pair_stats_for_tuning": "raw_pre_hub_filter",
-      "shared_pos_rate_for_tuning": 0.12597,
+      "shared_pos_rate_for_tuning": 0.12411,
       "sparsity_detected": false,
-      "n_terms": 3383,
-      "n_pairs_est": 5720653,
+      "n_terms": 3382,
+      "n_pairs_est": 5717271,
       "max_terms_for_pairwise": 3500,
-      "singleton_frac": 0.8825503355704698,
+      "singleton_frac": 0.8875,
       "did_tune": false,
       "effective_min_shared_genes": 3,
       "effective_jaccard_min": 0.1,
-      "largest_component_frac": 0.4629027490393142,
+      "largest_component_frac": 0.4600827912477824,
       "giant_frac_threshold": 0.6
     },
     "modules_stats": {
-      "n_modules": 298,
+      "n_modules": 320,
       "n_terms_median": 1.0,
-      "n_genes_median": 4.0,
-      "n_terms_max": 1566,
-      "n_genes_max": 2081
+      "n_genes_median": 3.0,
+      "n_terms_max": 1556,
+      "n_genes_max": 1999
     },
     "claims": {
       "context_gate_review_compat_final": {
@@ -252,9 +252,9 @@
           "n_anchor_terms": 0
         },
         "n_eval": 50,
-        "n_pass": 42,
+        "n_pass": 41,
         "n_fail": 4,
-        "n_abstain": 4,
+        "n_abstain": 5,
         "n_anchor_downgrade": 0
       },
       "context_gate_pre_audit": {
@@ -262,7 +262,7 @@
         "gate_mode": "hard",
         "reason": "OK",
         "n_rows": 50,
-        "n_blocked": 8,
+        "n_blocked": 9,
         "eligible_written": true,
         "preselect_tau_gate_written": true
       }
@@ -329,5 +329,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/BRCA/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769897218.8163385
+  "finished_epoch": 1769917008.1605601
 }
