@@ -52,10 +52,22 @@ _CTX_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 def _norm_optional_text(x: Any) -> str | None:
     """
-    Optional text normalizer:
-      - None/NA/empty -> None
-      - otherwise -> stripped string
-    IMPORTANT: This differs from _norm_str which returns NA_TOKEN.
+    Normalize optional text input.
+
+    Parameters
+    ----------
+    x : Any
+        Candidate text-like value.
+
+    Returns
+    -------
+    str or None
+        - None if `x` is None, NA-like, or empty after stripping.
+        - Otherwise a stripped string.
+
+    Notes
+    -----
+    This differs from `_norm_str`, which returns `NA_TOKEN` instead of None.
     """
     if x is None:
         return None
@@ -74,6 +86,24 @@ def _norm_optional_text(x: Any) -> str | None:
 
 
 def _ctx_nfkc_lower(text: str) -> str:
+    """
+    Normalize free-form context text for deterministic tokenization.
+
+    Parameters
+    ----------
+    text : str
+        Input text.
+
+    Returns
+    -------
+    str
+        NFKC-normalized, lowercased text where non [a-z0-9] are replaced
+        by spaces and whitespace is collapsed.
+
+    Notes
+    -----
+    This is a tokenizer pre-pass for ctx_tokens_v1.
+    """
     t = unicodedata.normalize("NFKC", str(text or ""))
     t = t.lower()
     # Replace any non [a-z0-9] with space, then collapse.
@@ -83,21 +113,40 @@ def _ctx_nfkc_lower(text: str) -> str:
 
 
 def _ctx_is_numeric_only(tok: str) -> bool:
+    """
+    Check whether a token is composed of digits only.
+
+    Parameters
+    ----------
+    tok : str
+        Token string.
+
+    Returns
+    -------
+    bool
+        True if token is non-empty and all characters are digits.
+    """
     return bool(tok) and all(ch.isdigit() for ch in tok)
 
 
 @lru_cache(maxsize=1)
 def _load_context_lexicon_tsv() -> dict[str, list[str]]:
     """
-    Load fixed synonym lexicon.
-    Expected path: llm_pathway_curator/resources/context_lexicon.tsv
+    Load a fixed synonym lexicon for optional token expansion.
 
-    Format (tolerant):
-      head<TAB>syn1,syn2,...   OR head<TAB>syn1<TAB>syn2...
-    Lines starting with '#' are ignored.
+    Returns
+    -------
+    dict[str, list[str]]
+        Mapping `head_token -> sorted unique synonyms` (lowercase).
+        The head token itself is excluded from its synonym list.
 
-    Output:
-      dict[head_token] -> sorted unique synonyms (lowercase), head excluded.
+    Notes
+    -----
+    - Expected path is `resources/context_lexicon.tsv` next to this module.
+    - Lines starting with '#' are ignored.
+    - Format is tolerant:
+      `head<TAB>syn1,syn2,...` or `head<TAB>syn1<TAB>syn2...`.
+    - Fail-closed: returns {} if file is missing or parsing fails.
     """
     path = Path(__file__).resolve().parent / "resources" / "context_lexicon.tsv"
     if not path.exists():
@@ -145,8 +194,27 @@ def _load_context_lexicon_tsv() -> dict[str, list[str]]:
 
 def _ctx_tokens_policy_effective(policy: dict[str, Any] | None) -> dict[str, Any]:
     """
-    Merge defaults with user policy (shallow).
-    Unknown keys are tolerated; this is *not* a validator.
+    Compute effective context-tokenization policy from user input.
+
+    Parameters
+    ----------
+    policy : dict[str, Any] or None
+        User-provided policy dictionary.
+
+    Returns
+    -------
+    dict[str, Any]
+        Shallow-merged policy with defaults applied. Keys include:
+        - version
+        - min_len
+        - max_tokens
+        - allow_numeric
+        - lexicon_expand
+        - stopwords_set
+
+    Notes
+    -----
+    Unknown keys are tolerated; this is not a strict validator.
     """
     p = dict(policy or {})
     v_raw = str(p.get("version") or CTX_TOKENS_VERSION_V1).strip() or CTX_TOKENS_VERSION_V1
@@ -181,7 +249,24 @@ def _ctx_tokens_policy_effective(policy: dict[str, Any] | None) -> dict[str, Any
 
 def _tokenize_context_text_v1(text: str, *, policy: dict[str, Any]) -> list[str]:
     """
-    Deterministic tokenizer (ctx_tokens_v1).
+    Tokenize context text deterministically (ctx_tokens_v1).
+
+    Parameters
+    ----------
+    text : str
+        Input text.
+    policy : dict[str, Any]
+        Effective policy (typically from `_ctx_tokens_policy_effective`).
+
+    Returns
+    -------
+    list[str]
+        Deterministic token list:
+        - normalized via NFKC + lowercase
+        - filtered by stopwords, min length, numeric policy
+        - deduplicated with order preserved
+        - optional one-hop synonym expansion
+        - optionally truncated to max_tokens (0 means no cap)
     """
     txt = _ctx_nfkc_lower(text)
     if not txt:
@@ -229,6 +314,21 @@ def _tokenize_context_text_v1(text: str, *, policy: dict[str, Any]) -> list[str]
 
 
 def _ctx_signature_v1(tokens: list[str], *, version: str) -> str:
+    """
+    Compute a stable short signature for a token list.
+
+    Parameters
+    ----------
+    tokens : list[str]
+        Token sequence.
+    version : str
+        Tokenization policy version string.
+
+    Returns
+    -------
+    str
+        12-hex short hash (sha256[:12]) of "version|token1 token2 ...".
+    """
     payload = str(version or CTX_TOKENS_VERSION_V1) + "|" + " ".join(tokens or [])
     return _shared.sha256_12hex(payload)
 
@@ -311,7 +411,23 @@ CTX_ALIASES = {
 
 
 def _apply_aliases(flat: dict[str, Any]) -> dict[str, Any]:
-    # If canonical missing but alias exists, hoist alias value to canonical key
+    """
+    Apply backward-compat key aliases in-place (hoist to canonical keys).
+
+    Parameters
+    ----------
+    flat : dict[str, Any]
+        Flattened extra dictionary.
+
+    Returns
+    -------
+    dict[str, Any]
+        The same dictionary, with missing canonical keys filled from aliases.
+
+    Notes
+    -----
+    If a canonical key is present and non-null, it is not overwritten.
+    """
     for canon, aliases in ALIASES.items():
         if canon in flat and flat.get(canon) is not None:
             continue
@@ -323,6 +439,24 @@ def _apply_aliases(flat: dict[str, Any]) -> dict[str, Any]:
 
 
 def _norm_str(x: Any) -> str:
+    """
+    Normalize a required string-like value into a stable token.
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+
+    Returns
+    -------
+    str
+        - `NA_TOKEN` if value is None, NA-like, or empty after stripping.
+        - Otherwise, a stripped string with BOM removed.
+
+    Notes
+    -----
+    Use this for core required context keys (condition/tissue/etc.).
+    """
     if x is None:
         return NA_TOKEN
     try:
@@ -343,6 +477,19 @@ def _norm_str(x: Any) -> str:
 
 
 def _is_dict(x: Any) -> bool:
+    """
+    Return True if the input is a dict.
+
+    Parameters
+    ----------
+    x : Any
+        Candidate value.
+
+    Returns
+    -------
+    bool
+        True if `x` is an instance of dict.
+    """
     return isinstance(x, dict)
 
 
@@ -351,7 +498,22 @@ def _flatten_extra_recursive(
 ) -> dict[str, Any]:
     """
     Flatten repeated {"extra": {...}} wrappers.
-    Inner overrides outer (most specific wins).
+
+    Parameters
+    ----------
+    extra : dict[str, Any]
+        Extra dictionary that may contain nested {"extra": {...}} wrappers.
+    max_depth : int, optional
+        Maximum wrapper depth to unwrap, by default MAX_EXTRA_NESTING.
+
+    Returns
+    -------
+    dict[str, Any]
+        Flattened dictionary where inner levels override outer levels.
+
+    Notes
+    -----
+    Unknown keys are preserved. This is a structural normalization step.
     """
     if not _is_dict(extra):
         return {}
@@ -375,8 +537,21 @@ def _find_in_nested_extra(
     extra: dict[str, Any], key: str, *, max_depth: int = MAX_EXTRA_NESTING
 ) -> Any:
     """
-    Look for key in extra or nested extra.extra... up to max_depth.
-    Returns the first found value (prefers outer levels).
+    Find a key in extra or nested extra.extra... wrappers.
+
+    Parameters
+    ----------
+    extra : dict[str, Any]
+        Extra dictionary.
+    key : str
+        Key name to look up.
+    max_depth : int, optional
+        Maximum nested search depth, by default MAX_EXTRA_NESTING.
+
+    Returns
+    -------
+    Any
+        The first found value (outer levels preferred), or None if not found.
     """
     if not _is_dict(extra):
         return None
@@ -395,15 +570,27 @@ def _find_in_nested_extra(
 
 def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
     """
-    Contract:
-      - Flatten nested extra wrappers (inner overrides outer).
-      - Apply backward-compat aliases.
-      - Hoist official TOOL_KNOBS if still buried (defensive).
-      - Do NOT delete unknown keys (user notes / future compat).
+    Canonicalize extra knobs used by the tool while preserving unknown keys.
 
-    IMPORTANT:
-      - k_claims MUST be top-level (SampleCard field). Do not keep it in extra.
-        (We drop canonical + aliases here as a last line of defense.)
+    Parameters
+    ----------
+    extra : dict[str, Any]
+        Input extra dictionary.
+
+    Returns
+    -------
+    dict[str, Any]
+        Canonicalized dictionary:
+        - nested extra wrappers flattened
+        - backward-compat aliases applied
+        - known tool knobs hoisted if still buried
+        - unknown keys preserved
+
+    Notes
+    -----
+    Contract:
+    - `k_claims` must be top-level only. This function removes `k_claims`
+      and its aliases from extra defensively.
     """
     if not _is_dict(extra):
         return {}
@@ -428,6 +615,26 @@ def _canonicalize_audit_knobs(extra: dict[str, Any]) -> dict[str, Any]:
 
 
 def _as_bool(x: Any, default: bool) -> bool:
+    """
+    Parse a boolean-like value robustly.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse.
+    default : bool
+        Default value for None/unknown inputs.
+
+    Returns
+    -------
+    bool
+        Parsed boolean.
+
+    Notes
+    -----
+    Accepts common string forms: "true/false", "yes/no", "on/off", "1/0".
+    Avoids pitfalls like bool("False") == True.
+    """
     if x is None:
         return bool(default)
     if isinstance(x, bool):
@@ -441,8 +648,23 @@ def _as_bool(x: Any, default: bool) -> bool:
 
 
 def _as_int(x: Any, default: int) -> int:
+    """
+    Parse an int-like value with a fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse.
+    default : int
+        Default value if parsing fails.
+
+    Returns
+    -------
+    int
+        Parsed integer or `default`.
+    """
     try:
-        if x is None:
+        if x is None or isinstance(x, bool):
             return int(default)
         return int(x)
     except Exception:
@@ -450,8 +672,23 @@ def _as_int(x: Any, default: int) -> int:
 
 
 def _as_float(x: Any, default: float) -> float:
+    """
+    Parse a float-like value with a fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse.
+    default : float
+        Default value if parsing fails.
+
+    Returns
+    -------
+    float
+        Parsed float or `default`.
+    """
     try:
-        if x is None:
+        if x is None or isinstance(x, bool):
             return float(default)
         return float(x)
     except Exception:
@@ -459,15 +696,46 @@ def _as_float(x: Any, default: float) -> float:
 
 
 def _normalize_gate_mode(x: Any, default: str) -> str:
-    # Spec-level single source of truth (off|note|hard; accepts legacy like soft/abstain/on)
+    """
+    Normalize gate mode strings to the spec vocabulary.
+
+    Parameters
+    ----------
+    x : Any
+        Candidate gate mode (may include legacy aliases).
+    default : str
+        Default mode when input is missing/invalid.
+
+    Returns
+    -------
+    str
+        One of {"off", "note", "hard"}.
+
+    Notes
+    -----
+    Delegates to `_shared.normalize_gate_mode` (single source of truth).
+    """
     return _shared.normalize_gate_mode(x, default=default)
 
 
 def _hoist_context_aliases(obj: dict[str, Any]) -> dict[str, Any]:
     """
-    Back-compat:
-      - If "condition" is missing, accept "disease"/"cancer"/"tumor" and hoist to "condition".
-      - Keep the *original* keys in obj (we don't delete here); SampleCard ignores unknown keys.
+    Hoist legacy context keys into the canonical core key.
+
+    Parameters
+    ----------
+    obj : dict[str, Any]
+        Parsed JSON object.
+
+    Returns
+    -------
+    dict[str, Any]
+        Object with `condition` filled from legacy keys if missing.
+
+    Notes
+    -----
+    If "condition" is missing, accepts "disease"/"cancer"/"tumor" and
+    sets "condition" accordingly. Original keys are not deleted here.
     """
     if not isinstance(obj, dict):
         return obj
@@ -482,11 +750,32 @@ def _hoist_context_aliases(obj: dict[str, Any]) -> dict[str, Any]:
 
 class SampleCard(BaseModel):
     """
-    Tool-facing contract:
-      - Core context keys are normalized strings.
-      - The neutral key is "condition" (legacy disease/cancer/tumor accepted on input).
-      - k_claims is TOP-LEVEL ONLY (not inside extra).
-      - extra is flattened + alias-canonicalized (but keeps unknown keys).
+    SampleCard: tool-facing context and knob container.
+
+    Attributes
+    ----------
+    condition, tissue, perturbation, comparison : str
+        Core context keys normalized into stable strings.
+    notes : str or None
+        Optional free-form notes for humans.
+    context_tokens_text : str or None
+        Optional free-form text used to derive deterministic context tokens.
+    context_tokens_policy : dict[str, Any]
+        Tokenization policy for deterministic context tokens.
+    context_tokens_meta : dict[str, Any]
+        Optional metadata for provenance logging.
+    k_claims_value : int
+        Top-level `k_claims` value (stored under JSON key "k_claims").
+    extra : dict[str, Any]
+        Tool knobs and future-compatible fields. Flattened + alias-canonicalized.
+
+    Notes
+    -----
+    Contract:
+    - Core context keys are normalized strings; NA is represented by NA_TOKEN.
+    - The neutral disease-like key is "condition" (legacy keys accepted on input).
+    - `k_claims` is top-level only; it is not stored inside `extra`.
+    - `extra` keeps unknown keys for forward compatibility.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -511,17 +800,55 @@ class SampleCard(BaseModel):
     @field_validator("condition", "tissue", "perturbation", "comparison", mode="before")
     @classmethod
     def _normalize_core(cls, v: Any) -> str:
+        """
+        Normalize core context keys into stable strings.
+
+        Parameters
+        ----------
+        v : Any
+            Raw input value for a core key.
+
+        Returns
+        -------
+        str
+            Normalized string or NA_TOKEN.
+        """
         return _norm_str(v)
 
     @field_validator("k_claims_value", mode="before")
     @classmethod
     def _normalize_k_claims_value(cls, v: Any) -> int:
-        # be forgiving; enforce >=1 downstream
+        """
+        Normalize the top-level k_claims value.
+
+        Parameters
+        ----------
+        v : Any
+            Raw value from JSON/YAML.
+
+        Returns
+        -------
+        int
+            Parsed integer (non-negativity is enforced downstream via `k_claims()`).
+        """
         return _as_int(v, 3)
 
     @field_validator("extra", mode="before")
     @classmethod
     def _normalize_extra(cls, v: Any) -> dict[str, Any]:
+        """
+        Canonicalize `extra` field.
+
+        Parameters
+        ----------
+        v : Any
+            Raw extra value.
+
+        Returns
+        -------
+        dict[str, Any]
+            Canonicalized extra dictionary.
+        """
         if not _is_dict(v):
             v = {}
         return _canonicalize_audit_knobs(dict(v))
@@ -529,26 +856,94 @@ class SampleCard(BaseModel):
     @field_validator("context_tokens_text", mode="before")
     @classmethod
     def _normalize_context_tokens_text(cls, v: Any) -> str | None:
+        """
+        Normalize optional context tokenization text.
+
+        Parameters
+        ----------
+        v : Any
+            Raw value.
+
+        Returns
+        -------
+        str or None
+            Normalized optional text.
+        """
         return _norm_optional_text(v)
 
     @field_validator("context_tokens_policy", mode="before")
     @classmethod
     def _normalize_context_tokens_policy(cls, v: Any) -> dict[str, Any]:
+        """
+        Normalize context tokenization policy container.
+
+        Parameters
+        ----------
+        v : Any
+            Raw value.
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary or empty dict.
+        """
         return dict(v) if isinstance(v, dict) else {}
 
     @field_validator("context_tokens_meta", mode="before")
     @classmethod
     def _normalize_context_tokens_meta(cls, v: Any) -> dict[str, Any]:
+        """
+        Normalize context tokenization metadata container.
+
+        Parameters
+        ----------
+        v : Any
+            Raw value.
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary or empty dict.
+        """
         return dict(v) if isinstance(v, dict) else {}
 
     def context_key(self) -> str:
+        """
+        Build a stable composite context key string.
+
+        Returns
+        -------
+        str
+            "condition|tissue|perturbation|comparison" using normalized fields.
+        """
         return "|".join([self.condition, self.tissue, self.perturbation, self.comparison])
 
     def context_dict(self) -> dict[str, str]:
+        """
+        Return core context keys as a dictionary.
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping from CORE_KEYS to their normalized values.
+        """
         return {k: getattr(self, k) for k in CORE_KEYS}
 
     # ---- audit knobs ----
     def audit_tau(self, default: float = 0.8) -> float:
+        """
+        Get audit stability tau.
+
+        Parameters
+        ----------
+        default : float, optional
+            Default value, by default 0.8.
+
+        Returns
+        -------
+        float
+            Tau value used by the audit layer.
+        """
         try:
             v = (self.extra or {}).get("audit_tau", None)
             return float(default) if v is None else float(v)
@@ -556,6 +951,19 @@ class SampleCard(BaseModel):
             return float(default)
 
     def audit_min_gene_overlap(self, default: int = 1) -> int:
+        """
+        Get minimum gene overlap for evidence drift checks.
+
+        Parameters
+        ----------
+        default : int, optional
+            Default value, by default 1.
+
+        Returns
+        -------
+        int
+            Minimum overlap threshold.
+        """
         try:
             v = (self.extra or {}).get("audit_min_gene_overlap", None)
             return int(default) if v is None else int(v)
@@ -563,32 +971,150 @@ class SampleCard(BaseModel):
             return int(default)
 
     def hub_term_degree(self, default: int = 200) -> int:
+        """
+        Get hub gene degree threshold for hub-bridge gating.
+
+        Parameters
+        ----------
+        default : int, optional
+            Default threshold, by default 200.
+
+        Returns
+        -------
+        int
+            Threshold (>= 1).
+        """
         return max(1, _as_int((self.extra or {}).get("hub_term_degree", None), default))
 
     def hub_frac_thr(self, default: float = 0.5) -> float:
+        """
+        Get hub fraction threshold for ABSTAIN_HUB_BRIDGE gating.
+
+        Parameters
+        ----------
+        default : float, optional
+            Default threshold, by default 0.5.
+
+        Returns
+        -------
+        float
+            Fraction clamped into [0, 1].
+        """
         v = _as_float((self.extra or {}).get("hub_frac_thr", None), default)
         return float(min(max(v, 0.0), 1.0))
 
     def min_union_genes(self, default: int = 3) -> int:
+        """
+        Get minimum union evidence genes required for support.
+
+        Parameters
+        ----------
+        default : int, optional
+            Default minimum, by default 3.
+
+        Returns
+        -------
+        int
+            Minimum union size (>= 1).
+        """
         return max(1, _as_int((self.extra or {}).get("min_union_genes", None), default))
 
     def trust_input_survival(self, default: bool = False) -> bool:
+        """
+        Decide whether to trust survival values provided in inputs.
+
+        Parameters
+        ----------
+        default : bool, optional
+            Default behavior, by default False.
+
+        Returns
+        -------
+        bool
+            True if tool should trust input survival rather than recomputing.
+        """
         return _as_bool((self.extra or {}).get("trust_input_survival", None), default)
 
     # audit behavior knobs used by audit.py
     def pass_notes(self, default: bool = True) -> bool:
+        """
+        Decide whether to emit compact notes for PASS rows.
+
+        Parameters
+        ----------
+        default : bool, optional
+            Default behavior, by default True.
+
+        Returns
+        -------
+        bool
+            True if PASS rows may receive a short note (e.g., "ok").
+        """
         return _as_bool((self.extra or {}).get("pass_notes", None), default)
 
     def stability_gate_mode(self, default: str = "hard") -> str:
+        """
+        Get stability gate mode.
+
+        Parameters
+        ----------
+        default : str, optional
+            Default mode, by default "hard".
+
+        Returns
+        -------
+        str
+            Gate mode normalized to {"off", "note", "hard"}.
+        """
         v = (self.extra or {}).get("stability_gate_mode", None)
         return _normalize_gate_mode(v, default)
 
     def strict_evidence_check(self, default: bool = False) -> bool:
+        """
+        Get strict evidence linkage policy.
+
+        Parameters
+        ----------
+        default : bool, optional
+            Default behavior, by default False.
+
+        Returns
+        -------
+        bool
+            If True, missing evidence linkage becomes schema violation in audit.
+        """
         return _as_bool((self.extra or {}).get("strict_evidence_check", None), default)
 
     # ---- IO ----
     @classmethod
     def from_json(cls, path: str | Path) -> SampleCard:
+        """
+        Load a SampleCard from a JSON file (tool contract).
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Path to a JSON file containing a SampleCard object.
+
+        Returns
+        -------
+        SampleCard
+            Parsed and normalized SampleCard instance.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist.
+        ValueError
+            If JSON is invalid or not a dict-like object.
+
+        Notes
+        -----
+        Backward compatibility:
+        - Accepts legacy disease-like keys and hoists into "condition".
+        - Allows `k_claims` stored in extra or via aliases, but hoists to top-level.
+        - Removes `k_claims` and its aliases from extra on load.
+        """
         p = Path(path)
         try:
             obj = json.loads(p.read_text(encoding="utf-8"))
@@ -654,6 +1180,25 @@ class SampleCard(BaseModel):
         return cls(**known)
 
     def to_json(self, path: str | Path, *, indent: int = 2) -> None:
+        """
+        Serialize this SampleCard to JSON.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output path.
+        indent : int, optional
+            JSON indentation level, by default 2.
+
+        Returns
+        -------
+        None
+            Writes the file.
+
+        Notes
+        -----
+        Uses `model_dump(by_alias=True)` so the JSON key is "k_claims".
+        """
         p = Path(path)
         p.write_text(
             json.dumps(self.model_dump(by_alias=True), ensure_ascii=False, indent=indent) + "\n",
@@ -661,6 +1206,26 @@ class SampleCard(BaseModel):
         )
 
     def apply_patch(self, patch: dict[str, Any]) -> SampleCard:
+        """
+        Apply a patch dictionary and return a new SampleCard.
+
+        Parameters
+        ----------
+        patch : dict[str, Any]
+            Patch values. Core keys are applied at top-level.
+            Other keys are merged into `extra`.
+
+        Returns
+        -------
+        SampleCard
+            New SampleCard instance with patch applied.
+
+        Notes
+        -----
+        Contract enforcement:
+        - Never keeps `k_claims` or its aliases inside extra.
+        - Accepts legacy disease-like keys to fill "condition" when missing.
+        """
         base = self.model_dump(by_alias=True)
         for k, v in patch.items():
             if k in {
@@ -694,46 +1259,156 @@ class SampleCard(BaseModel):
 
     # ---- select / tool knobs (minimal) ----
     def claim_mode(self, default: str = "deterministic") -> str:
+        """
+        Get claim generation mode.
+
+        Parameters
+        ----------
+        default : str, optional
+            Default mode, by default "deterministic".
+
+        Returns
+        -------
+        str
+            One of {"deterministic", "llm"}.
+        """
         v = (self.extra or {}).get("claim_mode", None)
         s = str(v).strip().lower() if v is not None else ""
         return s if s in {"deterministic", "llm"} else str(default)
 
     def k_claims(self, default: int = 3) -> int:
-        # TOP-LEVEL has priority; extra is fallback only (should be absent).
+        """
+        Get number of claims to generate.
+
+        Parameters
+        ----------
+        default : int, optional
+            Default count, by default 3.
+
+        Returns
+        -------
+        int
+            Number of claims (>= 1).
+
+        Notes
+        -----
+        Top-level `k_claims_value` has priority. Extra is fallback only.
+        """
         v_top = getattr(self, "k_claims_value", None)
         if v_top is not None:
             return max(1, _as_int(v_top, default))
         return max(1, _as_int((self.extra or {}).get("k_claims", None), default))
 
     def max_per_module(self, default: int = 1) -> int:
+        """
+        Get maximum claims per module (diversity control).
+
+        Parameters
+        ----------
+        default : int, optional
+            Default value, by default 1.
+
+        Returns
+        -------
+        int
+            Maximum per module (>= 1).
+        """
         return max(1, _as_int((self.extra or {}).get("max_per_module", None), default))
 
     def preselect_tau_gate(self, default: bool = False) -> bool:
+        """
+        Get whether preselection should apply a tau gate.
+
+        Parameters
+        ----------
+        default : bool, optional
+            Default behavior, by default False.
+
+        Returns
+        -------
+        bool
+            True if preselection tau gating is enabled.
+        """
         return _as_bool((self.extra or {}).get("preselect_tau_gate", None), default)
 
     def enable_context_score_proxy(self, default: bool = False) -> bool:
+        """
+        Get whether proxy context scoring is enabled.
+
+        Parameters
+        ----------
+        default : bool, optional
+            Default behavior, by default False.
+
+        Returns
+        -------
+        bool
+            True if proxy context scoring is enabled.
+        """
         return _as_bool((self.extra or {}).get("enable_context_score_proxy", None), default)
 
     # ---- gate behavior knobs (tool contract; align with audit.py) ----
     def context_gate_mode(self, default: str = "hard") -> str:
+        """
+        Get context gate mode for audit integration.
+
+        Parameters
+        ----------
+        default : str, optional
+            Default mode, by default "hard".
+
+        Returns
+        -------
+        str
+            Gate mode normalized to {"off", "note", "hard"}.
+        """
         v = (self.extra or {}).get("context_gate_mode", None)
         return _normalize_gate_mode(v, default)
 
     def stress_gate_mode(self, default: str = "off") -> str:
+        """
+        Get stress gate mode for audit integration.
+
+        Parameters
+        ----------
+        default : str, optional
+            Default mode, by default "off".
+
+        Returns
+        -------
+        str
+            Gate mode normalized to {"off", "note", "hard"}.
+        """
         v = (self.extra or {}).get("stress_gate_mode", None)
         return _normalize_gate_mode(v, default)
 
     # ---- context tokens (deterministic) ----
     def context_tokens_version(self) -> str:
+        """
+        Get effective context tokenization version.
+
+        Returns
+        -------
+        str
+            Policy version string (currently "ctx_tokens_v1").
+        """
         pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})
         return str(pol.get("version") or CTX_TOKENS_VERSION_V1)
 
     def context_tokens(self) -> list[str]:
         """
-        Deterministic tokens used for context anchoring.
+        Compute deterministic context tokens used for anchoring.
+
+        Returns
+        -------
+        list[str]
+            Deterministic token list.
+
+        Notes
+        -----
         Priority:
-          1) context_tokens_text (ctx_tokens_v1 tokenizer)
-          2) fallback: tokenize core context fields (condition/tissue/perturbation/comparison)
+        1) `context_tokens_text` is tokenized via ctx_tokens_v1.
+        2) Fallback: core context fields are concatenated and tokenized.
         """
         pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})
 
@@ -756,14 +1431,29 @@ class SampleCard(BaseModel):
 
     def context_tokens_signature(self) -> str:
         """
-        Stable short signature for provenance logging (sha256[:12]).
+        Compute a stable short signature for current context tokens.
+
+        Returns
+        -------
+        str
+            12-hex sha256-based signature.
         """
         toks = self.context_tokens()
         return _ctx_signature_v1(toks, version=self.context_tokens_version())
 
     def context_tokens_effective(self) -> dict[str, Any]:
         """
-        Convenience payload for run_meta logging (does not write anything).
+        Build a provenance payload for logging (pure function).
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary containing:
+            - version
+            - tokens
+            - n
+            - signature
+            - policy
         """
         toks = self.context_tokens()
         pol = _ctx_tokens_policy_effective(self.context_tokens_policy or {})

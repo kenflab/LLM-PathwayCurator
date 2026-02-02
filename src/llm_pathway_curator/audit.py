@@ -37,6 +37,19 @@ _NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
+    """
+    Wrapper for scalar NA detection.
+
+    Parameters
+    ----------
+    x : Any
+        Value to test.
+
+    Returns
+    -------
+    bool
+        True if `x` should be treated as NA-like scalar.
+    """
     return _shared.is_na_scalar(x)
 
 
@@ -44,33 +57,86 @@ def _is_na_scalar(x: Any) -> bool:
 # Gene canonicalization + hashing (compat-safe)
 # -------------------------
 def _clean_gene_id(g: Any) -> str:
-    # Align with _shared policy (trim + conservative wrapper stripping; no uppercasing)
+    """
+    Clean a gene identifier token conservatively.
+
+    Parameters
+    ----------
+    g : Any
+        Gene-like token (scalar).
+
+    Returns
+    -------
+    str
+        Cleaned token (trimmed and wrapper-stripped), preserving case.
+
+    Notes
+    -----
+    This delegates to `_shared.clean_gene_token` and does not uppercase.
+    """
     return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: Any) -> str:
     """
-    Canonical gene token for audit comparisons.
+    Normalize a gene identifier for audit comparisons.
 
-    IMPORTANT:
-      - Do NOT force uppercasing here (align with _shared).
-      - Canonicalization beyond trimming should be an explicit, opt-in mapping step.
+    Parameters
+    ----------
+    g : Any
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Canonical token used in audit comparisons.
+
+    Notes
+    -----
+    Case is preserved (no uppercasing) to align with `_shared` policy.
     """
     return _clean_gene_id(g)
 
 
 def _norm_gene_id_upper(g: Any) -> str:
-    """Legacy HGNC-like normalization (deprecated; used only for backward-compat hash matching)."""
+    """
+    Legacy uppercase normalization for gene identifiers.
+
+    Parameters
+    ----------
+    g : Any
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Uppercased canonical token.
+
+    Notes
+    -----
+    This is a compatibility path only (not the default audit policy).
+    """
     return _clean_gene_id(g).upper()
 
 
 def _hash_gene_set_trim12(genes: list[str]) -> str:
     """
-    Set-stable hash over trim-only canonicalization.
+    Compute a 12-hex set-stable hash for genes (trim-only policy).
 
-    NOTE:
-      - Delegate to _shared for single-source hashing semantics.
-      - We pass already-normalized (trim-only) tokens to avoid double-normalization.
+    Parameters
+    ----------
+    genes : list[str]
+        Gene tokens (may be messy / duplicated).
+
+    Returns
+    -------
+    str
+        12-hex hash string.
+
+    Notes
+    -----
+    - Tokens are normalized via `_norm_gene_id` (trim-only).
+    - Hashing semantics are delegated to `_shared.hash_set_12hex`.
     """
     toks = [_norm_gene_id(g) for g in (genes or []) if str(g).strip()]
     return _shared.hash_set_12hex([t for t in toks if t])
@@ -78,17 +144,46 @@ def _hash_gene_set_trim12(genes: list[str]) -> str:
 
 def _hash_gene_set_upper12(genes: list[str]) -> str:
     """
-    Set-stable hash over legacy uppercasing canonicalization (compat).
+    Compute a 12-hex set-stable hash for genes (legacy uppercasing policy).
 
-    NOTE:
-      - This is intentionally not the default path.
-      - Used only for backward-compat matching of historical outputs.
+    Parameters
+    ----------
+    genes : list[str]
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        12-hex hash string.
+
+    Notes
+    -----
+    This is intended for backward-compat matching of historical outputs.
     """
     toks = [_norm_gene_id_upper(g) for g in (genes or []) if str(g).strip()]
     return _shared.hash_set_12hex([t for t in toks if t])
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
+    """
+    Compute Jaccard similarity between two sets.
+
+    Parameters
+    ----------
+    a : set[str]
+        Left set.
+    b : set[str]
+        Right set.
+
+    Returns
+    -------
+    float
+        Jaccard index in [0, 1].
+
+    Notes
+    -----
+    Empty-vs-empty returns 1.0 by convention.
+    """
     if not a and not b:
         return 1.0
     if not a or not b:
@@ -99,6 +194,21 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def _get_stress_jaccard_pass(card: SampleCard, default: float = 0.8) -> float:
+    """
+    Get the Jaccard threshold for passing stress robustness.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card holding knobs in `.extra`.
+    default : float, optional
+        Default threshold, by default 0.8.
+
+    Returns
+    -------
+    float
+        Clamped threshold in [0, 1].
+    """
     ex = _get_extra(card)
     v = ex.get("stress_jaccard_pass", None)
     if v is None:
@@ -112,8 +222,24 @@ def _get_stress_jaccard_pass(card: SampleCard, default: float = 0.8) -> float:
 
 def _get_stress_jaccard_soft(card: SampleCard, default: float = 0.5) -> float:
     """
-    If J < soft => "strong" inconclusive bucket.
-    soft <= J < pass => inconclusive bucket.
+    Get the Jaccard threshold for the "soft" stress bucket.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card holding knobs in `.extra`.
+    default : float, optional
+        Default threshold, by default 0.5.
+
+    Returns
+    -------
+    float
+        Clamped threshold in [0, 1].
+
+    Notes
+    -----
+    If J < soft: treated as strongly inconclusive.
+    soft <= J < pass: treated as inconclusive.
     """
     ex = _get_extra(card)
     v = ex.get("stress_jaccard_soft", None)
@@ -128,6 +254,19 @@ def _get_stress_jaccard_soft(card: SampleCard, default: float = 0.5) -> float:
 
 # -------- SampleCard knob access (single boundary, with robust fallback) --------
 def _get_extra(card: SampleCard) -> dict[str, Any]:
+    """
+    Safely access `SampleCard.extra` as a dictionary.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card object.
+
+    Returns
+    -------
+    dict[str, Any]
+        Extra configuration dictionary (empty on failure).
+    """
     try:
         ex = getattr(card, "extra", {}) or {}
         return ex if isinstance(ex, dict) else {}
@@ -136,6 +275,25 @@ def _get_extra(card: SampleCard) -> dict[str, Any]:
 
 
 def _as_bool(x: Any, default: bool) -> bool:
+    """
+    Parse a value into boolean with robust string handling.
+
+    Parameters
+    ----------
+    x : Any
+        Input value (bool-like).
+    default : bool
+        Default value when parsing fails or value is unknown.
+
+    Returns
+    -------
+    bool
+        Parsed boolean.
+
+    Notes
+    -----
+    Avoids pitfalls like `bool("False") == True`.
+    """
     if x is None:
         return bool(default)
     if isinstance(x, bool):
@@ -149,6 +307,19 @@ def _as_bool(x: Any, default: bool) -> bool:
 
 
 def _get_tau_default(card: SampleCard) -> float:
+    """
+    Get default audit tau from the sample card.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    float
+        Tau value used as default (falls back to 0.8).
+    """
     try:
         return float(card.audit_tau())
     except Exception:
@@ -156,6 +327,19 @@ def _get_tau_default(card: SampleCard) -> float:
 
 
 def _get_min_overlap_default(card: SampleCard) -> int:
+    """
+    Get default minimum gene overlap from the sample card.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+
+    Returns
+    -------
+    int
+        Minimum overlap (falls back to 1).
+    """
     try:
         return int(card.audit_min_gene_overlap())
     except Exception:
@@ -163,6 +347,21 @@ def _get_min_overlap_default(card: SampleCard) -> int:
 
 
 def _get_min_union_genes(card: SampleCard, default: int = 3) -> int:
+    """
+    Get minimum union size required for evidence support.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : int, optional
+        Default minimum union size, by default 3.
+
+    Returns
+    -------
+    int
+        Minimum union size used in audit.
+    """
     if hasattr(card, "min_union_genes") and callable(card.min_union_genes):
         try:
             return int(card.min_union_genes(default=default))  # type: ignore[attr-defined]
@@ -177,6 +376,21 @@ def _get_min_union_genes(card: SampleCard, default: int = 3) -> int:
 
 
 def _get_hub_term_degree(card: SampleCard, default: int = 200) -> int:
+    """
+    Get hub gene degree threshold for hub-bridge gating.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : int, optional
+        Default threshold, by default 200.
+
+    Returns
+    -------
+    int
+        Degree threshold; genes with degree > threshold are treated as hubs.
+    """
     if hasattr(card, "hub_term_degree") and callable(card.hub_term_degree):
         try:
             return int(card.hub_term_degree(default=default))  # type: ignore[attr-defined]
@@ -191,6 +405,21 @@ def _get_hub_term_degree(card: SampleCard, default: int = 200) -> int:
 
 
 def _get_hub_frac_thr(card: SampleCard, default: float = 0.5) -> float:
+    """
+    Get hub fraction threshold for ABSTAIN_HUB_BRIDGE.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : float, optional
+        Default fraction threshold, by default 0.5.
+
+    Returns
+    -------
+    float
+        Fraction in [0, 1].
+    """
     if hasattr(card, "hub_frac_thr") and callable(card.hub_frac_thr):
         try:
             return float(card.hub_frac_thr(default=default))  # type: ignore[attr-defined]
@@ -205,6 +434,21 @@ def _get_hub_frac_thr(card: SampleCard, default: float = 0.5) -> float:
 
 
 def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
+    """
+    Determine whether PASS notes should be populated.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : bool, optional
+        Default behavior, by default True.
+
+    Returns
+    -------
+    bool
+        True if PASS rows may receive a compact "ok" note.
+    """
     if hasattr(card, "pass_notes") and callable(card.pass_notes):
         try:
             return bool(card.pass_notes(default=default))  # type: ignore[attr-defined]
@@ -219,8 +463,23 @@ def _get_pass_notes(card: SampleCard, default: bool = True) -> bool:
 
 def _get_context_proxy_swap_penalty(card: SampleCard, default: float = 0.6) -> float:
     """
-    Swap penalty added to p_warn under context_swap_active.
-    Increasing this makes swap strictly harder without changing u.
+    Get additive swap penalty for proxy context WARN probability.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : float, optional
+        Default penalty, by default 0.6.
+
+    Returns
+    -------
+    float
+        Penalty in [0, 1].
+
+    Notes
+    -----
+    Applied only when context swap is active and proxy scoring is used.
     """
     ex = _get_extra(card)
     v = ex.get("context_proxy_swap_penalty", None)
@@ -234,6 +493,21 @@ def _get_context_proxy_swap_penalty(card: SampleCard, default: float = 0.6) -> f
 
 
 def _get_context_proxy_warn_p(card: SampleCard, default: float = 0.05) -> float:
+    """
+    Get base WARN probability for proxy context scoring.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : float, optional
+        Default probability, by default 0.05.
+
+    Returns
+    -------
+    float
+        Probability in [0, 1].
+    """
     ex = _get_extra(card)
     v = ex.get("context_proxy_warn_p", None)
     if v is None:
@@ -249,13 +523,26 @@ def _get_context_proxy_key_fields(
     card: SampleCard, default: str = "ctx0,context_keys,term_uid,cancer"
 ) -> list[str]:
     """
-    Comma-separated list of fields to build deterministic proxy key.
+    Get fields used to build deterministic proxy-context key.
 
-    Rationale:
-      - Must depend on *swap target* to make context_swap ablation actually change gating.
-      - Must not rely on card.disease (often null); prefer row-level cancer/disease/etc.
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Comma-separated field names, by default
+        "ctx0,context_keys,term_uid,cancer".
 
-    Allowed:
+    Returns
+    -------
+    list[str]
+        Normalized list of field names.
+
+    Notes
+    -----
+    - This controls which row/claim attributes contribute to the proxy key.
+    - Unknown names are ignored by the proxy builder.
+    - Allowed:
       context_keys,
       term_uid,
       module_id,
@@ -287,12 +574,23 @@ def _get_context_proxy_key_fields(
 
 def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
     """
-    Tool contract (user-facing):
-      - off: ignore context gate
-      - note: annotate only
-      - hard: evaluated-only gating (safe-side): unevaluated => ABSTAIN
+    Get context gate mode (off|note|hard) from card or extras.
 
-    Normalization is spec-owned by _shared.normalize_gate_mode().
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Default gate mode, by default "note".
+
+    Returns
+    -------
+    str
+        Canonical gate mode: "off", "note", or "hard".
+
+    Notes
+    -----
+    Normalization uses `_shared.normalize_gate_mode`.
     """
     try:
         if hasattr(card, "context_gate_mode") and callable(card.context_gate_mode):
@@ -308,12 +606,23 @@ def _get_context_gate_mode(card: SampleCard, default: str = "note") -> str:
 
 def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
     """
-    Tool contract (user-facing):
-      - off (default): ignore missing stress entirely
-      - note: annotate stress results, do not change status
-      - hard: safe-side robustness gating (missing/failed stress => ABSTAIN)
+    Get stress gate mode (off|note|hard) from card or extras.
 
-    Normalization is spec-owned by _shared.normalize_gate_mode().
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Default gate mode, by default "off".
+
+    Returns
+    -------
+    str
+        Canonical gate mode: "off", "note", or "hard".
+
+    Notes
+    -----
+    Normalization uses `_shared.normalize_gate_mode`.
     """
     try:
         if hasattr(card, "stress_gate_mode") and callable(card.stress_gate_mode):
@@ -329,9 +638,23 @@ def _get_stress_gate_mode(card: SampleCard, default: str = "off") -> str:
 
 def _get_audit_mode(card: SampleCard, default: str = "decision") -> str:
     """
-    Audit mode (tool contract):
-      - "decision" (default): optimize for status changes (decision-grade)
-      - "diagnostic": optimize for annotation/debug (status changes optional)
+    Get audit mode.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Default mode, by default "decision".
+
+    Returns
+    -------
+    str
+        "decision" or "diagnostic".
+
+    Notes
+    -----
+    Diagnostic mode prefers annotation over status changes.
     """
     ex = _get_extra(card)
     s = str(ex.get("audit_mode", default)).strip().lower()
@@ -342,10 +665,24 @@ def _get_audit_mode(card: SampleCard, default: str = "decision") -> str:
 
 def _get_context_swap_strict_mode(card: SampleCard, default: str = "warn_to_abstain") -> str:
     """
-    Swap ablation contract (paper-facing):
-      - "off": do nothing special under context_swap
-      - "warn_to_abstain" (default): if context_swap_active, promote WARN->ABSTAIN
-        and missing->ABSTAIN
+    Get strictness mode under context swap.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Default strict mode, by default "warn_to_abstain".
+
+    Returns
+    -------
+    str
+        "off" or "warn_to_abstain".
+
+    Notes
+    -----
+    Under "warn_to_abstain", swap-active rows promote WARN->ABSTAIN and
+    missing evaluation -> ABSTAIN.
     """
     ex = _get_extra(card)
     s = str(ex.get("context_swap_strict_mode", default)).strip().lower()
@@ -359,12 +696,24 @@ def _get_context_swap_strict_mode(card: SampleCard, default: str = "warn_to_abst
 
 def _row_context_swap_active(row: pd.Series) -> bool:
     """
-    Detect swap activation robustly.
+    Determine whether context swap is active for a given row.
 
-    Contract:
-      - Prefer explicit boolean flag if present.
-      - Otherwise, require variant marker (context_swap) to avoid false positives
-        when from/to columns are present for bookkeeping in non-swap runs.
+    Parameters
+    ----------
+    row : pandas.Series
+        Claim row.
+
+    Returns
+    -------
+    bool
+        True if swap is detected as active.
+
+    Notes
+    -----
+    Priority:
+    1) explicit boolean flag `context_swap_active`
+    2) `variant` marker suggests swap (e.g., "context_swap")
+    3) fallback on from/to mismatch (only if variant is unavailable)
     """
     # 1) Explicit flag wins
     v = row.get("context_swap_active", None)
@@ -394,8 +743,21 @@ def _row_context_swap_active(row: pd.Series) -> bool:
 
 def _row_original_context_id(row: pd.Series) -> str:
     """
-    Return a stable "original context id" used to seed proxy u.
-    Goal: u must NOT change under context_swap.
+    Get a stable original-context identifier for proxy seeding.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Claim row.
+
+    Returns
+    -------
+    str
+        Original context id (may be empty string if unavailable).
+
+    Notes
+    -----
+    Intended to be invariant under context swap so proxy `u` does not change.
 
     Preferred columns (if present):
       - context_ctx_id_original
@@ -435,12 +797,19 @@ def _row_original_context_id(row: pd.Series) -> str:
 
 def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
     """
-    Tool contract (user-facing):
-      - off: do not gate on stability
-      - note: annotate only
-      - hard: agg < tau => ABSTAIN_UNSTABLE
+    Get stability gate mode (off|note|hard).
 
-    Normalization is spec-owned by _shared.normalize_gate_mode().
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : str, optional
+        Default mode, by default "hard".
+
+    Returns
+    -------
+    str
+        Canonical mode: "off", "note", or "hard".
     """
     try:
         if hasattr(card, "stability_gate_mode") and callable(card.stability_gate_mode):
@@ -456,16 +825,41 @@ def _get_stability_gate_mode(card: SampleCard, default: str = "hard") -> str:
 
 def _get_strict_evidence_check(card: SampleCard, default: bool = False) -> bool:
     """
-    If True: missing evidence_genes or missing gene_set_hash
-      => FAIL_SCHEMA_VIOLATION (strict contract).
-    If False (default): missing evidence_genes/hash
-      => ABSTAIN (decision-grade).
+    Get strict evidence linkage policy.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : bool, optional
+        Default behavior, by default False.
+
+    Returns
+    -------
+    bool
+        If True, missing evidence genes/hash becomes FAIL (schema violation).
+        If False, missing evidence becomes ABSTAIN (decision-grade).
     """
     ex = _get_extra(card)
     return _as_bool(ex.get("strict_evidence_check", None), default=default)
 
 
 def _get_evidence_dropout_p(card: SampleCard, default: float = 0.0) -> float:
+    """
+    Get internal evidence dropout probability.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : float, optional
+        Default probability, by default 0.0.
+
+    Returns
+    -------
+    float
+        Probability in [0, 1].
+    """
     ex = _get_extra(card)
     v = ex.get("evidence_dropout_p", None)
     if v is None:
@@ -478,6 +872,25 @@ def _get_evidence_dropout_p(card: SampleCard, default: float = 0.0) -> float:
 
 
 def _get_contradictory_p(card: SampleCard, default: float = 0.0) -> float:
+    """
+    Get internal contradiction-probe probability.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card.
+    default : float, optional
+        Default probability, by default 0.0.
+
+    Returns
+    -------
+    float
+        Probability in [0, 1].
+
+    Notes
+    -----
+    This is a robustness probe tag, not a logical contradiction proof.
+    """
     ex = _get_extra(card)
     v = ex.get("contradictory_p", None)
     if v is None:
@@ -490,11 +903,39 @@ def _get_contradictory_p(card: SampleCard, default: float = 0.0) -> float:
 
 
 def _append_note(old: str, msg: str) -> str:
+    """
+    Append a message to an audit note string.
+
+    Parameters
+    ----------
+    old : str
+        Existing note (may be NA-like).
+    msg : str
+        Message to append.
+
+    Returns
+    -------
+    str
+        Combined note string joined by " | ".
+    """
     old = "" if _is_na_scalar(old) else str(old)
     return msg if not old else f"{old} | {msg}"
 
 
 def _extract_claim_obj(cj: str) -> Claim | None:
+    """
+    Parse claim JSON into a `Claim` model.
+
+    Parameters
+    ----------
+    cj : str
+        Claim JSON string.
+
+    Returns
+    -------
+    Claim or None
+        Parsed `Claim` object, or None on validation failure.
+    """
     try:
         return Claim.model_validate_json(cj)
     except Exception:
@@ -503,8 +944,28 @@ def _extract_claim_obj(cj: str) -> Claim | None:
 
 def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], Any, Any]:
     """
-    Source of truth: claim_json (Claim schema).
-    Returns: (term_ids, gene_ids, gene_set_hash, module_id)
+    Extract evidence reference fields from claim JSON.
+
+    Parameters
+    ----------
+    cj : str
+        Claim JSON string.
+
+    Returns
+    -------
+    term_ids : list[str]
+        Term identifiers (term_id or term_uid), as a list.
+    gene_ids : list[str]
+        Gene identifiers referenced by the claim, as a list.
+    gene_set_hash : Any
+        Gene set hash stored in the claim (may be None).
+    module_id : Any
+        Module identifier stored in the claim (may be None).
+
+    Notes
+    -----
+    Evidence source is the Claim schema fields:
+    `evidence_ref` or `evidence_refs` and their nested keys.
     """
     try:
         obj = json.loads(cj)
@@ -530,6 +991,19 @@ def _extract_evidence_from_claim_json(cj: str) -> tuple[list[str], list[str], An
 
 
 def _extract_direction_from_claim_json(cj: str) -> str:
+    """
+    Extract normalized direction ("up"|"down"|"na") from claim JSON.
+
+    Parameters
+    ----------
+    cj : str
+        Claim JSON string.
+
+    Returns
+    -------
+    str
+        "up", "down", or "na".
+    """
     try:
         obj = json.loads(cj)
     except Exception:
@@ -549,11 +1023,25 @@ def _extract_direction_from_claim_json(cj: str) -> str:
 
 def _extract_context_review_from_claim_json(cj: str) -> tuple[bool, str, str]:
     """
-    Primary source: Claim schema fields.
-    Returns: (evaluated, status, note)
-      - evaluated: bool
-      - status: "PASS"|"WARN"|"FAIL"|"" (may be empty if missing/legacy)
-      - note: compact description for audit_notes
+    Extract context review fields from the claim schema.
+
+    Parameters
+    ----------
+    cj : str
+        Claim JSON string.
+
+    Returns
+    -------
+    evaluated : bool
+        Whether context was evaluated.
+    status : str
+        Context status string ("PASS", "WARN", "FAIL", or "").
+    note : str
+        Compact note suitable for `audit_notes`.
+
+    Notes
+    -----
+    This is the primary source of truth when present.
     """
     c = _extract_claim_obj(cj)
     if c is None:
@@ -573,13 +1061,28 @@ def _extract_context_review_from_claim_json(cj: str) -> tuple[bool, str, str]:
 
 def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
     """
-    Row-level context fields (compat).
-    Returns: (evaluated, status, note)
+    Extract context evaluation information from row-level columns (compat).
 
-    Priority (most specific first):
-      1) context_review_* (from select.py LLM probe)
-      2) legacy context_* (pre-schema)
-      3) context_score presence
+    Parameters
+    ----------
+    row : pandas.Series
+        Claim row.
+
+    Returns
+    -------
+    evaluated : bool
+        Whether context evaluation is considered present.
+    status : str
+        "PASS", "WARN", "FAIL", or "".
+    note : str
+        Compact note explaining the source/decision.
+
+    Notes
+    -----
+    Priority:
+    1) `context_review_*` (LLM probe output)
+    2) legacy `context_*`
+    3) presence of `context_score` (proxy indicator)
     """
     if "context_review_evaluated" in row.index:
         v = row.get("context_review_evaluated")
@@ -662,15 +1165,27 @@ def _context_eval_from_row(row: pd.Series) -> tuple[bool, str, str]:
 
 def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) -> pd.DataFrame:
     """
-    Backfill stress/contradiction columns on claims using distilled annotations.
+    Backfill stress and contradiction columns on claims using distilled data.
 
-    Policy:
-      - If claims already include stress_* columns, do nothing (respect caller).
-      - If claims already include contradiction_* columns, do nothing.
-      - Map using term_uid when possible; fall back to raw term_id -> unique term_uid mapping.
-      - stress_tag is normalized via _shared.split_tags/join_tags (spec-level).
-      - contradiction_flip is a *robustness probe tag* (NOT a logical contradiction proof):
-          => inject contradiction_status=ABSTAIN (inconclusive), not FAIL.
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        Claims table to be audited.
+    distilled : pandas.DataFrame
+        Distilled evidence table providing stress/contradiction annotations.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `out` with injected columns when needed.
+
+    Notes
+    -----
+    - If claims already include stress/contradiction columns, they are respected.
+    - Mapping is primarily by `term_uid`, with a best-effort fallback from raw
+      `term_id` to unique `term_uid`.
+    - Stress and contradiction injections are treated as robustness probes and
+      injected as ABSTAIN (inconclusive), not FAIL.
     """
     out2 = out.copy()
 
@@ -747,7 +1262,7 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
             if _is_na_scalar(v):
                 continue
             try:
-                contra_uid[tu] = bool(v)
+                contra_uid[tu] = _as_bool(v, default=False)
             except Exception:
                 continue
 
@@ -832,13 +1347,25 @@ def _inject_stress_from_distilled(out: pd.DataFrame, distilled: pd.DataFrame) ->
 
 def _apply_external_contradiction(out: pd.DataFrame, i: int, row: pd.Series) -> None:
     """
-    External contradiction check (optional).
+    Apply external contradiction status to the audit result for a row.
+
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        Audit output table (mutated in place).
+    i : int
+        Row index label used with `out.at`.
+    row : pandas.Series
+        Input claim row.
+
+    Notes
+    -----
     Policy:
-      - Missing contradiction_status => do NOT abstain; just note.
-      - PASS => ok
-      - ABSTAIN/WARN => abstain (inconclusive contradiction)
-      - FAIL => fail (contradiction)
-      - Unknown => schema violation
+    - Missing contradiction_status: do not abstain; only note.
+    - PASS: ok
+    - ABSTAIN/WARN: ABSTAIN with ABSTAIN_INCONCLUSIVE_STRESS
+    - FAIL: FAIL with FAIL_CONTRADICTION
+    - Unknown: FAIL with FAIL_SCHEMA_VIOLATION
     """
     if "contradiction_status" not in out.columns:
         return
@@ -896,12 +1423,25 @@ def _apply_external_stress(
     input_stress_cols: list[str],
 ) -> None:
     """
-    Apply stress results if present.
+    Apply stress results from input columns to the audit result for a row.
 
-    Contract intent:
-      - Stress is a robustness probe, not a validity proof.
-      - Therefore, stress failures should NOT be escalated to FAIL.
-      - In hard mode, "missing" or "failed/abstained" stress => ABSTAIN_INCONCLUSIVE_STRESS.
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        Audit output table (mutated in place).
+    i : int
+        Row index label used with `out.at`.
+    row : pandas.Series
+        Input claim row.
+    gate_mode : str
+        Stress gate mode: "off", "note", or "hard".
+    input_stress_cols : list[str]
+        Names of stress-related columns available in the input.
+
+    Notes
+    -----
+    Stress is treated as a robustness probe, not a validity proof.
+    Therefore, stress failures should not become FAIL; at most ABSTAIN.
     """
     if not input_stress_cols:
         out.at[i, "stress_ok"] = pd.NA
@@ -1004,6 +1544,22 @@ def _apply_external_stress(
 
 
 def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
+    """
+    Enforce reason-code vocabulary for a single audited row.
+
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        Audit output table (mutated in place).
+    i : int
+        Row index label used with `out.at`.
+
+    Notes
+    -----
+    - Invalid fail_reason => replaced with FAIL_SCHEMA_VIOLATION.
+    - Invalid abstain_reason => escalated to FAIL_SCHEMA_VIOLATION.
+    - Ensures FAIL/ABSTAIN rows have non-empty `audit_notes`.
+    """
     st = str(out.at[i, "status"]).strip().upper()
 
     if st == "FAIL":
@@ -1040,9 +1596,18 @@ def _enforce_reason_vocab(out: pd.DataFrame, i: int) -> None:
 
 def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
     """
-    Intra-run contradiction check:
-      - Among PASS claims only
-      - If same evidence key has both direction=up and direction=down => FAIL_CONTRADICTION
+    Detect and mark intra-run contradictions among PASS claims.
+
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        Audit output table (mutated in place).
+
+    Notes
+    -----
+    For PASS claims only:
+    - If the same evidence_key appears with both direction "up" and "down",
+      those claims are marked FAIL with FAIL_CONTRADICTION.
     """
     if "evidence_key" not in out.columns or "direction_norm" not in out.columns:
         return
@@ -1070,6 +1635,25 @@ def _apply_intra_run_contradiction(out: pd.DataFrame) -> None:
 
 
 def _deterministic_uniform_0_1(key: str, salt: str = "") -> float:
+    """
+    Generate a deterministic pseudo-uniform value in [0, 1).
+
+    Parameters
+    ----------
+    key : str
+        Deterministic key.
+    salt : str, optional
+        Extra salt for independent streams, by default "".
+
+    Returns
+    -------
+    float
+        Value in [0, 1).
+
+    Notes
+    -----
+    Based on SHA-256 and a fixed modulus to ensure reproducibility.
+    """
     payload = f"{salt}|{key}".encode()
     h = hashlib.sha256(payload).hexdigest()
     x = int(h[:12], 16)
@@ -1085,13 +1669,40 @@ def _proxy_context_status(
     gene_set_hash: str,
 ) -> tuple[bool, str, str, float, float, str]:
     """
-    Deterministic proxy context review (Proposal B):
-      - u is seeded from ORIGINAL context only (must not change under swap)
-      - swap makes gating strictly harder by increasing p_warn_eff, without changing u
-      - Therefore swap can never improve PASS rate (no WARN->PASS flips)
+    Compute deterministic proxy context status for a row.
 
-    Returns:
-      (evaluated, status, note, u01, p_warn_eff, key_base)
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card holding proxy knobs.
+    row : pandas.Series
+        Claim row.
+    term_ids : list[str]
+        Term identifiers (resolved term_uids when possible).
+    module_id : str
+        Module identifier (may be empty).
+    gene_set_hash : str
+        Gene set hash (may be empty).
+
+    Returns
+    -------
+    evaluated : bool
+        Always True for proxy evaluation.
+    status : str
+        "PASS" or "WARN" from proxy scoring.
+    note : str
+        Compact note describing proxy parameters.
+    u01 : float
+        Deterministic uniform sample in [0, 1).
+    p_warn_eff : float
+        Effective WARN probability (includes swap penalty when active).
+    key_base : str
+        Base key used to seed `u01`.
+
+    Notes
+    -----
+    Swap strictness is implemented by increasing `p_warn_eff` without
+    changing the seeded `u01`.
     """
     p_warn = _get_context_proxy_warn_p(card)
     swap_penalty = _get_context_proxy_swap_penalty(card)
@@ -1186,6 +1797,25 @@ def _apply_internal_evidence_dropout(
     evidence_key: str,
     p: float,
 ) -> tuple[list[str], str]:
+    """
+    Apply deterministic evidence dropout to a gene list (internal stress probe).
+
+    Parameters
+    ----------
+    genes : list[str]
+        Evidence gene list.
+    evidence_key : str
+        Evidence key used to seed deterministic sampling.
+    p : float
+        Dropout probability in [0, 1].
+
+    Returns
+    -------
+    kept : list[str]
+        Kept genes after dropout (at least one gene is kept if input non-empty).
+    note : str
+        Compact note including kept counts.
+    """
     if p <= 0.0 or (not genes):
         return (genes, "dropout_p=0")
 
@@ -1203,6 +1833,27 @@ def _apply_internal_evidence_dropout(
 
 
 def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
+    """
+    Build mappings to resolve raw term_ids into unique term_uids.
+
+    Parameters
+    ----------
+    dist : pandas.DataFrame
+        DataFrame containing a `term_uid` column.
+
+    Returns
+    -------
+    known : set[str]
+        Set of known term_uids.
+    raw_unique : dict[str, str]
+        Mapping raw term_id -> unique term_uid (only when unambiguous).
+    raw_ambiguous : set[str]
+        Raw term_ids that map to multiple term_uids.
+
+    Notes
+    -----
+    Intended for best-effort linkage when claims provide raw term_ids.
+    """
     term_uids = dist["term_uid"].astype(str).str.strip().tolist()
     known = {t for t in term_uids if t and t.lower() not in _NA_TOKENS_L}
 
@@ -1220,8 +1871,21 @@ def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], 
 
 def _term_uid_to_raw_term_id(tu: str) -> str:
     """
-    Extract raw term_id from term_uid.
-    We intentionally avoid depending on source normalization details.
+    Extract raw term_id from a term_uid string.
+
+    Parameters
+    ----------
+    tu : str
+        Term UID string, typically "<source>:<term_id>".
+
+    Returns
+    -------
+    str
+        Raw term_id portion (may be empty).
+
+    Notes
+    -----
+    Splits from the right to tolerate sources that contain ':'.
     """
     s = "" if tu is None else str(tu).strip()
     if not s:
@@ -1237,6 +1901,33 @@ def _resolve_term_ids_to_uids(
     raw_unique: dict[str, str],
     raw_ambiguous: set[str],
 ) -> tuple[list[str], list[str], list[str]]:
+    """
+    Resolve term identifiers to term_uids with ambiguity tracking.
+
+    Parameters
+    ----------
+    term_ids : list[str]
+        Term identifiers from a claim (may include raw term_id or term_uid).
+    known : set[str]
+        Known term_uids.
+    raw_unique : dict[str, str]
+        Mapping raw term_id -> unique term_uid.
+    raw_ambiguous : set[str]
+        Raw term_ids that are ambiguous.
+
+    Returns
+    -------
+    resolved : list[str]
+        Resolved term_uids.
+    unknown : list[str]
+        Inputs that could not be resolved.
+    ambiguous : list[str]
+        Inputs that map to multiple term_uids.
+
+    Notes
+    -----
+    Unknown and ambiguous terms are handled as audit failures upstream.
+    """
     resolved: list[str] = []
     unknown: list[str] = []
     ambiguous: list[str] = []
@@ -1268,8 +1959,44 @@ def audit_claims(
     tau: float | None = None,
 ) -> pd.DataFrame:
     """
-    Mechanical audit (tool-facing).
-    Status priority: FAIL > ABSTAIN > PASS
+    Mechanically audit claims against distilled evidence and sample context.
+
+    Parameters
+    ----------
+    claims : pandas.DataFrame
+        Claims table. Must include `claim_json` with Claim schema JSON.
+    distilled : pandas.DataFrame
+        Distilled evidence table. Must provide term linkage via `term_uid` or
+        (`source`, `term_id`). Evidence genes are read from `evidence_genes` or
+        `evidence_genes_str`. Stability uses `term_survival` when available.
+    card : SampleCard
+        Sample card providing audit knobs and gate modes.
+    tau : float or None, optional
+        Override stability tau. If None, uses `card.audit_tau()`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Audited claims with status, reasons, and audit notes.
+
+    Raises
+    ------
+    ValueError
+        If `distilled` cannot provide term linkage (missing required columns).
+
+    Notes
+    -----
+    Status priority is: FAIL > ABSTAIN > PASS.
+
+    Major checks:
+    - Linkage: term_id -> term_uid resolution; reject unknown/ambiguous terms.
+    - Evidence identity: gene_set_hash match against computed union evidence genes.
+    - Stability: term-level survival aggregation (min across referenced terms).
+    - Under-support: minimum union evidence genes.
+    - Hub-bridge: abstain when evidence is dominated by hub genes.
+    - Context gate: uses claim schema context review, with optional proxy fallback.
+    - Stress probes: optional internal dropout and contradiction probes and/or
+      external stress columns; treated as ABSTAIN (inconclusive), not FAIL.
     """
     out = claims.copy()
 

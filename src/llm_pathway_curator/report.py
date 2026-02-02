@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
 from .audit_reasons import (
     ABSTAIN_INCONCLUSIVE_STRESS,
@@ -44,19 +45,39 @@ def _is_na_scalar(x: Any) -> bool:
 
 def _json_sanitize(x: Any) -> Any:
     """
-    Make an object JSON-serializable (robust against numpy/pandas scalars, pd.NA, Paths, etc.).
-    This is the LAST LINE OF DEFENSE for report.jsonl stability.
+    Convert an object into a JSON-serializable form.
 
-    Rules:
-      - pd.NA / NaN -> None
-      - numpy/pandas scalar -> native Python scalar (via .item() when available)
-      - datetime -> ISO string
-      - Path -> str
-      - set/tuple -> list
-      - dict/list -> recurse
-      - pydantic models -> model_dump()
-      - fallback -> str(x)
+    This function is the last line of defense for stable `report.jsonl`
+    writing. It converts common numpy/pandas scalars, `pd.NA`, and other
+    non-serializable objects to JSON-safe Python types.
+
+    Parameters
+    ----------
+    x
+        Arbitrary object to be serialized.
+
+    Returns
+    -------
+    Any
+        JSON-serializable object. Non-serializable objects are converted
+        using the following rules:
+
+        - `pd.NA` / NaN -> None
+        - numpy/pandas scalar -> native Python scalar (via `.item()` when
+          available)
+        - `datetime` -> ISO 8601 string (UTC if possible)
+        - `Path` -> str
+        - set/tuple -> list
+        - dict/list -> recursively sanitized
+        - pydantic model -> `model_dump()` recursively sanitized
+        - fallback -> `str(x)`
+
+    Notes
+    -----
+    This function is intentionally conservative and never raises for
+    conversion failures; it falls back to `str(x)`.
     """
+
     # fast-path for simple primitives
     if x is None or isinstance(x, (str, int, float, bool)):
         if isinstance(x, float) and (pd.isna(x)):
@@ -107,6 +128,26 @@ def _json_sanitize(x: Any) -> Any:
 
 
 def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
+    """
+    Render the head of a DataFrame as a markdown table (with TSV fallback).
+
+    Parameters
+    ----------
+    df
+        Source DataFrame.
+    n
+        Number of rows to include from the head of `df`.
+
+    Returns
+    -------
+    str
+        Markdown table string if available; otherwise a TSV string.
+
+    Notes
+    -----
+    This is a display helper for `report.md` and does not affect any
+    audited decisions.
+    """
     head = df.head(n).copy()
     try:
         return head.to_markdown(index=False)
@@ -116,8 +157,32 @@ def _safe_table_md(df: pd.DataFrame, n: int = 20) -> str:
 
 def _prefer_str_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     """
-    For each requested column c, if c_str exists use it (but keep the display name as c).
-    This stabilizes markdown output for list-like columns.
+    Prefer `<col>_str` columns for display when present.
+
+    For each requested column name `c`, this function selects:
+
+    - `c_str` if present (and exposes it under the display name `c`)
+    - otherwise `c` if present
+
+    This stabilizes markdown/TSV output for list-like columns that have
+    companion string columns.
+
+    Parameters
+    ----------
+    df
+        Input DataFrame.
+    cols
+        Column names to select (display names).
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame with selected columns. If no requested columns are
+        present, a copy of `df` is returned.
+
+    Notes
+    -----
+    This function is used for report display only.
     """
     out = pd.DataFrame()
     for c in cols:
@@ -131,21 +196,36 @@ def _prefer_str_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    TSV-safe conversion for list-like columns.
-    - If a <col>_str already exists, prefer it.
-    - Otherwise stringify list/tuple/set as separator-joined.
-    - Scalar NA handling MUST NOT break numeric dtypes.
+    Create TSV-safe string companions for list-like columns.
 
-    IMPORTANT:
-      Use ';' as the list separator to reduce Excel auto-formatting risk.
+    Behavior
+    --------
+    - If a `<col>_str` already exists, it is preserved and preferred.
+    - Otherwise, list/tuple/set values are converted into a delimiter-
+      joined string and stored in a new `<col>_str` column.
+    - Scalar object columns get printable missing values (`""`) without
+      forcing numeric columns into object dtype.
+    - Numeric columns remain numeric; missing is represented as NaN.
+    - Bool-like columns preserve boolean-ish semantics; missing uses `pd.NA`.
 
-    Contract (paper/repro):
-      - numeric columns stay numeric (missing -> NaN)
-      - object scalar columns may use "" for missing (TSV readability)
-      - list-like columns get a companion <col>_str, do not overwrite original by default
+    Parameters
+    ----------
+    df
+        Input DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy of `df` with additional `<col>_str` columns as needed.
+
+    Notes
+    -----
+    - The delimiter is taken from `_shared.GENE_JOIN_DELIM` for consistency
+      across artifacts.
+    - This helper is designed to tolerate duplicate column names by
+      iterating columns by position.
+    - The original list-like columns are not overwritten by default.
     """
-    from pandas.api.types import is_bool_dtype, is_numeric_dtype
-
     LIST_SEP = _shared.GENE_JOIN_DELIM
     out = df.copy()
 
@@ -210,12 +290,45 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str], who: str) -> None:
+    """
+    Validate that required columns are present in a DataFrame.
+
+    Parameters
+    ----------
+    df
+        Input DataFrame.
+    cols
+        Required column names.
+    who
+        Short label used in error messages (e.g., function name).
+
+    Raises
+    ------
+    ValueError
+        If one or more required columns are missing.
+    """
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"{who} missing required columns: {missing}")
 
 
 def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
+    """
+    Return the first non-missing value among candidate keys in a row.
+
+    Parameters
+    ----------
+    row
+        Row as a pandas Series.
+    keys
+        Candidate column names to check in order.
+
+    Returns
+    -------
+    Any
+        The first value that is present and not NA-like. Returns None if
+        none are found.
+    """
     for k in keys:
         if k in row.index:
             v = row.get(k)
@@ -226,6 +339,25 @@ def _get_first_present(row: pd.Series, keys: list[str]) -> Any:
 
 
 def _normalize_status(raw: Any) -> str:
+    """
+    Normalize and validate a decision status string.
+
+    Parameters
+    ----------
+    raw
+        Input status value. Typical inputs include "PASS", "ABSTAIN",
+        "FAIL" or case/whitespace variants.
+
+    Returns
+    -------
+    str
+        Canonical status string (e.g., "PASS", "ABSTAIN", "FAIL").
+
+    Raises
+    ------
+    ValueError
+        If the normalized status is not in `_shared.ALLOWED_STATUSES`.
+    """
     s = _shared.normalize_status_str(raw)
     if s not in _ALLOWED_STATUSES:
         raise ValueError(f"invalid status='{s}' (allowed: {sorted(_ALLOWED_STATUSES)})")
@@ -234,11 +366,26 @@ def _normalize_status(raw: Any) -> str:
 
 def _normalize_stress_tag(raw: Any) -> str:
     """
-    Canonicalize stress_tag across historical artifacts.
+    Canonicalize a stress-tag string for stable display and logging.
 
+    This normalizes historical tag formats and produces a canonical comma-
+    separated string.
+
+    Parameters
+    ----------
+    raw
+        Raw stress tag value (may be empty, NA-like, or legacy-delimited).
+
+    Returns
+    -------
+    str
+        Canonical tag string, or empty string if missing.
+
+    Notes
+    -----
     Single source of truth:
-      - _shared.split_tags(): tolerates legacy '+', trims, dedups (order-preserving)
-      - _shared.join_tags(): canonical comma delimiter
+    - `_shared.split_tags()` for tolerant parsing
+    - `_shared.join_tags()` for canonical joining
     """
     if _is_na_scalar(raw):
         return ""
@@ -250,10 +397,30 @@ def _normalize_stress_tag(raw: Any) -> str:
 
 def _decision_from_audit_row(row: pd.Series) -> Decision:
     """
-    Decision is derived mechanically from audit_log row (no free-text generation).
-    - status: PASS/ABSTAIN/FAIL
-    - reason: known reason code (fallbacks are fixed)
-    - details: small structured extras (audit_notes, raw reason if unknown, etc.)
+    Derive a Decision object mechanically from an audit-log row.
+
+    The decision is computed from machine-audit outputs and never relies
+    on free-text generation.
+
+    Parameters
+    ----------
+    row
+        A row from `audit_log` as a pandas Series. Expected fields include
+        `status`, and optionally `abstain_reason`, `fail_reason`,
+        `audit_notes`, and stress-related columns.
+
+    Returns
+    -------
+    Decision
+        A `Decision` instance with fields:
+        - status: PASS / ABSTAIN / FAIL
+        - reason: known reason code (with fixed fallbacks)
+        - details: small structured extras for debugging/provenance
+
+    Raises
+    ------
+    ValueError
+        If `status` is missing or invalid.
     """
     st = _normalize_status(row.get("status", ""))
 
@@ -297,6 +464,27 @@ def _decision_from_audit_row(row: pd.Series) -> Decision:
 
 
 def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
+    """
+    Resolve the default audit threshold (tau) from a SampleCard.
+
+    Priority:
+    - `card.audit_tau()` if callable
+    - `card.audit_tau` attribute
+    - `card.extra["audit_tau"]` if present
+    - fallback default
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+    default
+        Fallback tau value if none is provided by `card`.
+
+    Returns
+    -------
+    float
+        Tau value used for reporting.
+    """
     if hasattr(card, "audit_tau") and callable(card.audit_tau):
         try:
             return float(card.audit_tau())  # type: ignore[attr-defined]
@@ -322,8 +510,20 @@ def _get_tau_default(card: SampleCard, default: float = 0.8) -> float:
 
 def _get_dev_meta_enabled() -> bool:
     """
-    Developer-only metadata gate.
-    Default: OFF (avoid exposing internal versions/knobs in user outputs).
+    Determine whether developer-only report metadata is enabled.
+
+    This is controlled by the environment variable
+    `LLMPATH_REPORT_INCLUDE_DEV_META`.
+
+    Returns
+    -------
+    bool
+        True if developer metadata should be included in user-facing
+        outputs; False otherwise.
+
+    Notes
+    -----
+    Default is OFF to avoid exposing internal versions/knobs.
     """
     s = (os.environ.get("LLMPATH_REPORT_INCLUDE_DEV_META", "") or "").strip().lower()
     return s in {"1", "true", "yes", "on"}
@@ -331,8 +531,23 @@ def _get_dev_meta_enabled() -> bool:
 
 def _get_schema_version(card: SampleCard, default: str = "v1") -> str:
     """
-    Internal schema contract version.
-    IMPORTANT: Do NOT expose this by default in user outputs (see _get_dev_meta_enabled).
+    Resolve an internal schema version string for developer metadata.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+    default
+        Default schema version if not found in `card.extra`.
+
+    Returns
+    -------
+    str
+        Internal schema version label (e.g., "v1").
+
+    Notes
+    -----
+    This should not be exposed unless `_get_dev_meta_enabled()` is True.
     """
     try:
         extra = getattr(card, "extra", {}) or {}
@@ -346,6 +561,22 @@ def _get_schema_version(card: SampleCard, default: str = "v1") -> str:
 
 
 def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Summarize ABSTAIN and FAIL reasons from an audit log.
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame. Requires a `status` column to compute
+        summaries.
+
+    Returns
+    -------
+    (pandas.DataFrame, pandas.DataFrame)
+        Tuple of (abstain_summary, fail_summary). Each summary has columns
+        `abstain_reason`/`fail_reason` and `n`. Empty DataFrames are
+        returned when required columns are missing.
+    """
     if "status" not in audit_log.columns:
         return (pd.DataFrame(), pd.DataFrame())
 
@@ -376,6 +607,25 @@ def _reason_summary(audit_log: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
+    """
+    Choose a score column for reporting/curves from an audit log.
+
+    Priority order:
+    - term_survival_agg
+    - term_survival
+    - context_score
+    - stat
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame.
+
+    Returns
+    -------
+    str or None
+        Selected score column name, or None if not found.
+    """
     for c in ["term_survival_agg", "term_survival", "context_score", "stat"]:
         if c in audit_log.columns:
             return c
@@ -384,8 +634,24 @@ def _pick_score_col(audit_log: pd.DataFrame) -> str | None:
 
 def _pick_claim_json_col(audit_log: pd.DataFrame) -> str | None:
     """
-    Prefer canonical 'claim_json'. If missing, accept common fallbacks produced by
-    TSV/markdown stringification or older pipeline stages.
+    Choose the best available claim JSON payload column.
+
+    This prefers canonical `claim_json` and tolerates common fallbacks
+    produced by stringification or older pipelines.
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame.
+
+    Returns
+    -------
+    str or None
+        Payload column name among:
+        - claim_json
+        - claim_json_str
+        - claim_json_raw
+        or None if none are present.
     """
     for c in ["claim_json", "claim_json_str", "claim_json_raw"]:
         if c in audit_log.columns:
@@ -394,6 +660,19 @@ def _pick_claim_json_col(audit_log: pd.DataFrame) -> str | None:
 
 
 def _to_float_or_none(x: Any) -> float | None:
+    """
+    Convert a value to float if possible; otherwise return None.
+
+    Parameters
+    ----------
+    x
+        Value to convert.
+
+    Returns
+    -------
+    float or None
+        Float value if conversion succeeds and is not NaN; otherwise None.
+    """
     if _is_na_scalar(x):
         return None
     try:
@@ -406,6 +685,20 @@ def _to_float_or_none(x: Any) -> float | None:
 
 
 def _safe_json_loads(s: str) -> dict[str, Any] | None:
+    """
+    Parse a JSON string into a dict, returning None on failure.
+
+    Parameters
+    ----------
+    s
+        JSON string.
+
+    Returns
+    -------
+    dict[str, Any] or None
+        Parsed dict if successful and the JSON root is an object; None
+        otherwise.
+    """
     try:
         obj = json.loads(s)
         return obj if isinstance(obj, dict) else None
@@ -414,6 +707,23 @@ def _safe_json_loads(s: str) -> dict[str, Any] | None:
 
 
 def _claim_stub_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Create a minimal claim-like dict from a raw JSON payload.
+
+    This is used when typed Claim validation fails during reporting.
+    The stub preserves key fields needed for downstream display.
+
+    Parameters
+    ----------
+    raw
+        Raw claim payload parsed from JSON.
+
+    Returns
+    -------
+    dict[str, Any]
+        Minimal claim dict with keys: entity, direction, context_keys, and
+        evidence_ref (module_id, gene_ids, term_ids, gene_set_hash).
+    """
     ev = raw.get("evidence_ref", {}) if isinstance(raw.get("evidence_ref", {}), dict) else {}
     return {
         "entity": str(raw.get("entity", "") or ""),
@@ -429,6 +739,20 @@ def _claim_stub_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_context_review_fields(claim_raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Extract context-review fields from a raw claim payload.
+
+    Parameters
+    ----------
+    claim_raw
+        Raw claim dict.
+
+    Returns
+    -------
+    dict[str, Any]
+        Sub-dictionary with context-review fields when present, including
+        context_status, context_reason, and context_confidence.
+    """
     keys = [
         "context_evaluated",
         "context_method",
@@ -448,7 +772,22 @@ def _extract_context_review_fields(claim_raw: dict[str, Any]) -> dict[str, Any]:
 
 def _get_card_context(card: SampleCard) -> dict[str, str]:
     """
-    Neutral context block: prefer 'condition' over 'disease'.
+    Build a neutral context block from a SampleCard.
+
+    This prefers tool-facing `condition` over `disease` and keeps `disease`
+    as an alias for backward compatibility.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+
+    Returns
+    -------
+    dict[str, str]
+        Context dict with keys:
+        - condition, tissue, perturbation, comparison
+        - disease_alias (legacy)
     """
     ctx_condition = str(getattr(card, "condition", "") or "").strip()
     ctx_tissue = str(getattr(card, "tissue", "") or "").strip()
@@ -472,8 +811,23 @@ def _synthesize_claim_json_from_audit_log(
     audit_log: pd.DataFrame, card: SampleCard
 ) -> pd.DataFrame:
     """
-    If claim_json payload column is missing, synthesize a minimal claim JSON from audit_log columns.
-    This is report-only robustness: auditing is already done upstream.
+    Synthesize a minimal claim JSON payload from audit-log columns.
+
+    This is a report-only robustness fallback used when `claim_json` is
+    missing. It does not affect auditing, which is assumed to have been
+    performed upstream.
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame.
+    card
+        SampleCard for resolving context fields.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `audit_log` with a synthesized `claim_json_raw` column.
     """
     df = audit_log.copy()
 
@@ -546,6 +900,25 @@ def _synthesize_claim_json_from_audit_log(
 
 
 def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive stress-related display columns from audit output.
+
+    Adds/normalizes:
+    - stress_status (uppercased)
+    - stress_evaluated (bool)
+    - stress_ok (bool)
+    - stress_tag_norm (canonicalized tag string)
+
+    Parameters
+    ----------
+    audit_out
+        Audit output DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with derived stress display columns.
+    """
     out = audit_out.copy()
 
     # Normalize stress_status
@@ -573,8 +946,22 @@ def _derive_stress_display_cols(audit_out: pd.DataFrame) -> pd.DataFrame:
 
 def _load_gene_id_map_from_env() -> dict[str, str]:
     """
-    Keep consistent with pipeline.py:
-      - optional external mapping (TSV) via env LLMPATH_GENE_ID_MAP_TSV
+    Load an optional gene ID -> symbol mapping from the environment.
+
+    Environment variable
+    --------------------
+    LLMPATH_GENE_ID_MAP_TSV
+        Path to a TSV file containing a mapping.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping dictionary. Returns an empty dict if not configured or on
+        failure.
+
+    Notes
+    -----
+    This is display-only in `write_report` and does not affect auditing.
     """
     try:
         p = (os.environ.get("LLMPATH_GENE_ID_MAP_TSV", "") or "").strip()
@@ -604,21 +991,58 @@ def write_report_jsonl(
     disease: str | None = None,
 ) -> Path:
     """
-    Writes out/report.jsonl.
+    Write an audit-grade JSONL report artifact (`out/report.jsonl`).
 
-    Robustness:
-      - Accept 'claim_json' OR fallbacks as source-of-truth payload.
-      - Report should not crash if Claim validation fails (emit stub).
-      - Missing metrics columns should NOT crash the export (emit nulls).
+    This export is designed to be robust and reproducible:
+    - Accepts `claim_json` or common fallbacks as the payload source.
+    - If typed Claim validation fails, emits a minimal stub instead of
+      crashing.
+    - Missing metric columns do not crash the export (nulls are emitted).
 
-    Required columns in audit_log (strict):
-      - status
-      - <claim_json_col>  (claim_json or claim_json_str or claim_json_raw)
-    Optional columns (best-effort):
-      - term_survival_agg, context_score, stat, tau_used, stability_scope,
-        module_id_effective, gene_set_hash_effective
-      - stress_status/stress_reason/stress_notes
-      - stress_tag / contradiction_flip (if present)
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame. Required columns:
+        - status
+        - claim JSON payload column (one of: claim_json, claim_json_str,
+          claim_json_raw). If missing, the payload is synthesized from
+          audit-log columns when possible.
+    card
+        SampleCard used to supply context defaults and optional metadata.
+    outdir
+        Output directory path.
+    run_id
+        Run identifier string. If empty, a UTC timestamp is used.
+    method
+        Method label. Default is "llm-pathway-curator".
+    tau
+        Tau value to store in the JSONL. If None, resolves from `card`.
+    condition
+        Optional override for the condition label stored in JSONL.
+    comparison
+        Optional override for the comparison label stored in JSONL.
+    cancer
+        Backward-compatible alias for condition (discouraged for new use).
+    disease
+        Backward-compatible alias for condition (discouraged for new use).
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the written `report.jsonl`.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing and the claim payload cannot be
+        synthesized.
+
+    Notes
+    -----
+    - This function does not write `report.md`. Use `write_report` for the
+      human-facing markdown report.
+    - Developer-only metadata can be enabled via
+      `LLMPATH_REPORT_INCLUDE_DEV_META`.
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -810,6 +1234,29 @@ def write_report_jsonl(
 
 
 def _ensure_canonical_audit_cols(audit_log: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
+    """
+    Ensure canonical columns exist in an audit log for reporting.
+
+    This normalizes historical artifacts by adding standard columns
+    expected by `write_report` and related helpers.
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame.
+    card
+        SampleCard used for default tau resolution.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `audit_log` with canonical columns populated when missing.
+
+    Notes
+    -----
+    This function is reporting-only and does not alter upstream audit
+    decisions.
+    """
     out = audit_log.copy()
 
     # ---- score / stability (canonical) ----
@@ -875,12 +1322,39 @@ def write_report(
     audit_log: pd.DataFrame, distilled: pd.DataFrame, card: SampleCard, outdir: str
 ) -> None:
     """
-    Human-facing report.md + TSV artifacts.
+    Write a human-facing markdown report and TSV artifacts.
 
-    Note:
-      - This function does NOT write report.jsonl.
-      - JSONL export is explicit via write_report_jsonl(...).
-      - gene symbol mapping here is DISPLAY-ONLY and does not affect auditing.
+    Outputs
+    -------
+    - `out/report.md` (human-facing summary)
+    - `out/audit_log.tsv` (canonicalized audit log)
+    - `out/distilled.tsv` (stringified distilled evidence table)
+    - `out/risk_coverage.tsv` (optional; when calibration functions exist)
+
+    Parameters
+    ----------
+    audit_log
+        Audit log DataFrame containing PASS/ABSTAIN/FAIL outcomes and
+        supporting fields.
+    distilled
+        Distilled evidence table DataFrame.
+    card
+        SampleCard providing analysis context (condition/tissue/etc.).
+    outdir
+        Output directory path.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - This function does NOT write `report.jsonl`. JSONL export is explicit
+      via `write_report_jsonl(...)`.
+    - Gene symbol mapping in this report is DISPLAY-ONLY:
+      it does not affect auditing or evidence identity.
+    - The report remains best-effort and will fall back to a minimal report
+      if required decision columns are missing.
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)

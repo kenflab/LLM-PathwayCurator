@@ -1,6 +1,7 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/modules.py
 from __future__ import annotations
 
+import random
 from collections import deque
 from dataclasses import dataclass
 from typing import Literal
@@ -12,6 +13,23 @@ from . import _shared
 
 @dataclass(frozen=True)
 class ModuleOutputs:
+    """
+    Container for module factorization outputs.
+
+    Attributes
+    ----------
+    modules_df
+        Per-module summary table. One row per module_id. Contains stable hashes
+        (terms/genes/content) and representative genes, plus optional survival
+        fields if computed upstream.
+    term_modules_df
+        Term-to-module assignment table. Contract: one module_id per term_uid.
+    edges_df
+        Filtered term-by-gene edge table used for module construction.
+        Columns: term_uid, gene_id, weight. Additional debug/provenance lives in
+        ``edges_df.attrs``.
+    """
+
     modules_df: pd.DataFrame
     term_modules_df: pd.DataFrame
     edges_df: pd.DataFrame
@@ -21,40 +39,115 @@ class ModuleOutputs:
 # Normalization (align with schema/distill: trim-only; NO forced uppercasing)
 # -------------------------
 def _clean_gene_id(g: object) -> str:
+    """
+    Clean a gene token using the project-wide canonical normalizer.
+
+    Parameters
+    ----------
+    g
+        Raw gene token (string-like, numeric, NA, etc.).
+
+    Returns
+    -------
+    str
+        Canonical gene token after trim-only cleaning. Returns an empty string
+        for invalid/NA-like inputs.
+
+    Notes
+    -----
+    This is a thin wrapper around ``_shared.clean_gene_token`` to keep
+    modules.py readable.
+    """
     return _shared.clean_gene_token(g)
 
 
 def _norm_gene_id(g: object) -> str:
     """
-    Canonical gene token for graph/module construction.
+    Normalize gene tokens for graph/module construction.
 
-    IMPORTANT:
-      - Do NOT force uppercasing here.
-      - Case normalization can be species-dependent (e.g., mouse genes),
-        and should be handled upstream if desired.
+    Parameters
+    ----------
+    g
+        Raw gene token.
+
+    Returns
+    -------
+    str
+        Canonical gene token (trim-only). Returns an empty string for NA/invalid.
+
+    Notes
+    -----
+    - This function intentionally does NOT force uppercasing.
+    - Case conventions can be species-dependent (e.g., mouse genes) and should
+      be handled upstream if required.
     """
     return _clean_gene_id(g)
 
 
 def _hash_set_short12(items: list[str]) -> str:
     """
-    Set-stable short hash (12 hex), spec-owned by _shared.
+    Compute a deterministic short hash for an unordered set of strings.
+
+    Parameters
+    ----------
+    items
+        List of string tokens. Order is ignored by the hash.
+
+    Returns
+    -------
+    str
+        12-hex-character stable hash.
+
+    Notes
+    -----
+    This uses the spec-owned implementation ``_shared.hash_set_12hex``.
     """
     return _shared.hash_set_12hex(items)
 
 
 def _hash_gene_set_short12(genes: list[str]) -> str:
     """
-    Gene-set stable short hash (12 hex).
-    Spec-owned by _shared.hash_gene_set_12hex (order-invariant; trim-only).
-    This wrapper exists only for local readability in modules.py.
+    Compute a deterministic short hash for a gene set.
+
+    Parameters
+    ----------
+    genes
+        List of gene tokens. Order is ignored.
+
+    Returns
+    -------
+    str
+        12-hex-character stable hash.
+
+    Notes
+    -----
+    - Genes are normalized with ``_norm_gene_id`` before hashing.
+    - Hashing is delegated to ``_shared.hash_gene_set_12hex``.
     """
     return _shared.hash_gene_set_12hex([_norm_gene_id(x) for x in (genes or [])])
 
 
 def _module_hash_content12(terms: list[str], genes: list[str]) -> str:
     """
-    Module content hash (terms+genes) (12 hex), spec-owned by _shared.
+    Compute a deterministic short hash for module content (terms + genes).
+
+    Parameters
+    ----------
+    terms
+        Term identifiers included in the module.
+    genes
+        Gene identifiers included in the module.
+
+    Returns
+    -------
+    str
+        12-hex-character content hash.
+
+    Notes
+    -----
+    - Terms are trim-normalized.
+    - Genes are normalized with ``_norm_gene_id``.
+    - Hashing is delegated to ``_shared.module_hash_content12``.
     """
     return _shared.module_hash_content12(
         [str(x).strip() for x in (terms or [])],
@@ -72,14 +165,42 @@ def build_term_gene_edges(
     genes_col: str = "evidence_genes",
 ) -> pd.DataFrame:
     """
-    Build (term_uid, gene_id, weight) edges from evidence_df.
+    Build term-by-gene bipartite edges from an evidence table.
 
-    Performance policy:
-      - Prefer vectorized explode for list-like evidence_genes.
-      - Fall back to tolerant parsing for scalar strings (legacy inputs).
+    Parameters
+    ----------
+    evidence_df
+        Evidence table containing at least a term identifier column and a gene
+        evidence column.
+    term_id_col
+        Column name for the term identifier in ``evidence_df``.
+    genes_col
+        Column name for evidence genes in ``evidence_df``. Values can be
+        list-like (preferred) or legacy scalar strings.
 
-    Contract:
-      - Empty/invalid gene lists are dropped (no edges produced).
+    Returns
+    -------
+    pandas.DataFrame
+        Edge table with columns:
+        - term_uid : str
+        - gene_id  : str
+        - weight   : float
+
+        The returned DataFrame also stores a small provenance dict under
+        ``out.attrs["edges"]``.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+
+    Notes
+    -----
+    - Empty/invalid gene lists produce no edges and are dropped.
+    - List-like gene inputs are processed via vectorized explode.
+    - Scalar/string inputs are parsed via ``_shared.parse_genes``.
+    - Duplicate (term_uid, gene_id) edges are summed into a single row with
+      weight equal to the multiplicity.
     """
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col} (hint: run distill first to add term_uid)")
@@ -154,13 +275,33 @@ def filter_hub_genes(
     max_term_degree: int | None = None,
 ) -> pd.DataFrame:
     """
-    Remove hub genes that connect too many terms (gene term-degree).
+    Remove hub genes that connect too many terms (high gene term-degree).
 
-    Policy:
-      - Remove genes with degree STRICTLY greater than threshold (> max_gene_term_degree).
-      - Threshold is recorded in edges.attrs and should also be exported by caller.
+    Parameters
+    ----------
+    edges
+        Edge table with columns ``term_uid`` and ``gene_id``.
+    max_gene_term_degree
+        Hub threshold. Genes with term-degree strictly greater than this value
+        are removed. If None, no hub filtering is applied.
+    max_term_degree
+        Deprecated alias for ``max_gene_term_degree``. If provided and
+        ``max_gene_term_degree`` is None, it is used as the threshold.
 
-    NOTE: max_term_degree is a deprecated alias kept for backward compatibility.
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered edge table. Hub filter metadata is recorded in
+        ``out.attrs["hub_filter"]``.
+
+    Raises
+    ------
+    ValueError
+        If ``edges`` does not have the required columns.
+
+    Notes
+    -----
+    The filter uses a strict condition: degree > threshold (not >=).
     """
     if max_gene_term_degree is None and max_term_degree is not None:
         max_gene_term_degree = max_term_degree
@@ -195,6 +336,29 @@ def filter_hub_genes(
 # Connected components on bipartite graph (legacy)
 # -------------------------
 def _connected_components_from_bipartite_edges(edges: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute connected components on a bipartite term-gene graph.
+
+    Parameters
+    ----------
+    edges
+        Edge table with columns ``term_uid`` and ``gene_id``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Node table with columns:
+        - node      : str  (prefixed with "T:" or "G:")
+        - kind      : {"term", "gene"}
+        - term_uid  : str or None
+        - gene_id   : str or None
+        - component : int
+
+    Notes
+    -----
+    This is a legacy component finder used as a fallback when term-term
+    pairwise construction would be too expensive.
+    """
     if edges.empty:
         return pd.DataFrame(columns=["node", "kind", "term_uid", "gene_id", "component"])
 
@@ -254,18 +418,30 @@ def _estimate_pair_stats(
     seed: int = 0,
 ) -> dict[str, object]:
     """
-    Estimate pairwise connectivity stats for term-term graph construction.
+    Estimate pairwise sparsity/connectivity statistics for term-term graphs.
 
-    Returns:
-      - n_terms
-      - n_pairs_total
-      - n_pairs_sampled
-      - shared_pos_rate: P(shared>0)
-      - shared_p50/p75/p90/p95/p99 over sampled pairs (shared genes count)
-      - jaccard_p50/p75/p90/p95/p99 over sampled pairs (jaccard)
+    Parameters
+    ----------
+    term_to_genes
+        Mapping from term identifier to a set of genes.
+    pair_sample_max
+        Maximum number of term pairs to sample. If the total number of pairs is
+        below this cap, all pairs are evaluated deterministically.
+    seed
+        Random seed used when sampling a subset of pairs.
+
+    Returns
+    -------
+    dict
+        Summary statistics for pairwise overlap among sampled pairs. Keys include
+        ``n_terms``, ``n_pairs_total``, ``n_pairs_sampled``, and overlap
+        percentiles for shared-gene counts and Jaccard similarity.
+
+    Notes
+    -----
+    The returned stats are intended for tuning heuristics and debugging, not for
+    scientific claims.
     """
-    import random
-
     terms = sorted(term_to_genes.keys())
     n_terms = len(terms)
     n_pairs_total = n_terms * (n_terms - 1) // 2
@@ -368,6 +544,19 @@ def _estimate_pair_stats(
 
 
 def _build_term_gene_sets(edges: pd.DataFrame) -> dict[str, set[str]]:
+    """
+    Convert an edge table into a term-to-genes mapping.
+
+    Parameters
+    ----------
+    edges
+        Edge table with columns ``term_uid`` and ``gene_id``.
+
+    Returns
+    -------
+    dict[str, set[str]]
+        Mapping from term_uid to a set of gene_id values.
+    """
     term_to_genes: dict[str, set[str]] = {}
     if edges.empty:
         return term_to_genes
@@ -383,10 +572,26 @@ def _term_term_components_shared_genes(
     jaccard_min: float = 0.0,
 ) -> dict[str, int]:
     """
-    Deterministic CC on term-term graph where edge exists if:
-      shared_genes >= min_shared_genes AND jaccard >= jaccard_min
+    Compute connected components on a term-term graph defined by shared genes.
 
-    NOTE: O(n^2) in n_terms. Keep max_terms_for_pairwise guard in caller.
+    Parameters
+    ----------
+    term_to_genes
+        Mapping from term identifier to a set of genes.
+    min_shared_genes
+        Minimum number of shared genes required to create an edge.
+    jaccard_min
+        Minimum Jaccard similarity required to create an edge.
+
+    Returns
+    -------
+    dict[str, int]
+        Mapping from term identifier to component id.
+
+    Notes
+    -----
+    This is O(n_terms^2) in the number of terms and should be guarded by a
+    max-terms threshold in the caller.
     """
     terms = sorted(term_to_genes.keys())
     if not terms:
@@ -441,9 +646,27 @@ def _pick_rep_genes_by_degree(
     edges_f: pd.DataFrame, genes: list[str], *, topk: int = 10
 ) -> list[str]:
     """
-    Deterministic representative genes:
-      - prefer genes with high term-degree in the filtered edge graph
-      - tie-break lexicographically
+    Pick representative genes for a module using term-degree in the edge graph.
+
+    Parameters
+    ----------
+    edges_f
+        Filtered edge table with columns ``gene_id`` and ``term_uid``.
+    genes
+        Candidate genes for a module.
+    topk
+        Number of representative genes to return.
+
+    Returns
+    -------
+    list[str]
+        Representative genes sorted by descending term-degree, with
+        lexicographic tie-breaking.
+
+    Notes
+    -----
+    If degree information is unavailable, this falls back to the first ``topk``
+    genes in the input list.
     """
     if not genes:
         return []
@@ -488,19 +711,74 @@ def factorize_modules_connected_components(
     seed: int = 42,
 ) -> ModuleOutputs:
     """
-    Build modules from evidence.
+    Factorize enrichment evidence into stable "evidence modules".
 
-    Methods:
-      - bipartite_cc: connected components on term-gene bipartite graph (legacy)
-      - term_jaccard_cc: connected components on term-term graph built from shared genes
-        (recommended for paper figures; avoids giant-component collapse)
+    This constructs a term-by-gene bipartite graph from an evidence table and
+    groups related terms into modules. Module identity is stable: module_id is
+    derived from a content hash of (terms, genes).
 
-    Returns:
-      modules_df, term_modules_df, edges_df (filtered)
+    Parameters
+    ----------
+    evidence_df
+        Evidence table containing term identifiers and evidence genes.
+    method
+        Module construction method.
+        - "term_jaccard_cc": connected components on a term-term graph derived
+          from shared genes (recommended).
+        - "bipartite_cc": connected components on the bipartite graph (legacy).
+    module_prefix
+        Prefix prepended to the module_id (default "M").
+    max_gene_term_degree
+        If set, removes genes whose term-degree is strictly greater than this
+        threshold before module construction.
+    max_term_degree
+        Deprecated alias for ``max_gene_term_degree``.
+    hub_degree_quantile
+        If not None and explicit thresholds are not given, infer the hub degree
+        threshold from the specified quantile of gene term-degree.
+    min_shared_genes
+        Minimum shared genes for term-term edges (term_jaccard_cc).
+    jaccard_min
+        Minimum Jaccard similarity for term-term edges (term_jaccard_cc).
+    term_id_col
+        Column name in ``evidence_df`` holding the term identifier. The pipeline
+        convention is "term_uid".
+    genes_col
+        Column name in ``evidence_df`` holding evidence genes.
+    sparsity_mode
+        If "auto", relaxes thresholds for sparse graphs and may tighten
+        thresholds to avoid giant-component collapse.
+    shared_pos_target
+        Target lower bound for P(shared_genes > 0) under auto sparsity tuning.
+    sparse_relax_min_shared_genes
+        Relaxed min_shared_genes used when sparsity is detected.
+    sparse_relax_jaccard_min
+        Relaxed jaccard_min used when sparsity is detected.
+    pair_sample_max
+        Maximum number of term pairs sampled for sparsity diagnostics.
+    seed
+        Random seed for sampling-based diagnostics.
 
-    modules_df includes identity hashes:
-      - module_terms_hash12, module_genes_hash12, module_content_hash12
-      - module_id uses module_content_hash12 (prefix + hash)
+    Returns
+    -------
+    ModuleOutputs
+        Object containing:
+        - modules_df: per-module summary table
+        - term_modules_df: term_uid -> module_id assignments (one per term)
+        - edges_df: filtered edge table used to build modules
+
+    Raises
+    ------
+    ValueError
+        If an unknown method is requested, required columns are missing, or the
+        term->module contract is violated.
+
+    Notes
+    -----
+    - Hub filtering and sparsity/giant-component heuristics are recorded in
+      ``edges_df.attrs["modules"]`` for reproducibility and debugging.
+    - module_id is stable and derived from module content, not from component
+      numbering.
     """
     if module_prefix is None:
         module_prefix = "M"
@@ -1005,17 +1283,61 @@ def attach_module_ids(
     term_id_col: str = "term_uid",
     modules_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    """
+    Attach module identifiers to an evidence table by term_uid.
+
+    Parameters
+    ----------
+    evidence_df
+        Evidence table that includes ``term_id_col`` (typically "term_uid").
+    term_modules_df
+        Term-to-module table with columns ``term_id_col`` and ``module_id``.
+    term_id_col
+        Join key column name for term identifiers.
+    modules_df
+        Optional per-module table. If provided, module-level survival fields are
+        joined onto each term row.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of ``evidence_df`` with:
+        - module_id
+        - module_id_missing (bool)
+        and, optionally, module survival columns if ``modules_df`` was provided.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+    """
     if term_id_col not in evidence_df.columns:
         raise ValueError(f"Missing column: {term_id_col} (hint: run distill first)")
-    if term_id_col not in term_modules_df.columns or "module_id" not in term_modules_df.columns:
-        raise ValueError(f"term_modules_df must have columns: {term_id_col}, module_id")
+    if "module_id" not in term_modules_df.columns:
+        raise ValueError("term_modules_df must have column: module_id")
+
+    # Backward/forward compatible join key:
+    # - Prefer the caller-specified term_id_col if present
+    # - Otherwise accept canonical 'term_uid'
+    if term_id_col in term_modules_df.columns:
+        tm_key = term_id_col
+    elif "term_uid" in term_modules_df.columns:
+        tm_key = "term_uid"
+    else:
+        raise ValueError(
+            f"term_modules_df must have a term id column. Expected '{term_id_col}' or 'term_uid'."
+        )
 
     out = evidence_df.merge(
-        term_modules_df,
-        on=term_id_col,
+        term_modules_df[[tm_key, "module_id"]],
+        left_on=term_id_col,
+        right_on=tm_key,
         how="left",
         validate="m:1",
     )
+    if tm_key != term_id_col and tm_key in out.columns:
+        out = out.drop(columns=[tm_key])
+
     out["module_id_missing"] = out["module_id"].isna()
 
     # Optional attach: module_survival (and related columns) onto each term row
@@ -1048,10 +1370,31 @@ def compute_term_module_drift(
     term_id_col: str = "term_uid",
 ) -> pd.DataFrame:
     """
-    Compare baseline vs stressed term->module assignments.
+    Compute per-term drift of module assignment under stress.
 
-    Returns per-term drift table:
-      term_uid, module_id_base, module_id_stress, module_drift (bool)
+    Parameters
+    ----------
+    baseline_term_modules_df
+        Baseline term-to-module assignments.
+    stressed_term_modules_df
+        Stressed term-to-module assignments.
+    term_id_col
+        Term identifier column name (default "term_uid").
+
+    Returns
+    -------
+    pandas.DataFrame
+        Drift table with columns:
+        - term_uid
+        - module_id_base
+        - module_id_stress
+        - module_drift (bool)
+
+    Raises
+    ------
+    ValueError
+        If inputs do not have required columns or violate the one-term-one-module
+        contract.
     """
     for df, name in [
         (baseline_term_modules_df, "baseline"),
@@ -1063,27 +1406,49 @@ def compute_term_module_drift(
     b = baseline_term_modules_df[[term_id_col, "module_id"]].copy()
     s = stressed_term_modules_df[[term_id_col, "module_id"]].copy()
 
-    if b.groupby(term_id_col)["module_id"].nunique().max() > 1:
+    # Canonicalize output key to 'term_uid' to keep downstream stable.
+    if term_id_col != "term_uid":
+        b = b.rename(columns={term_id_col: "term_uid"})
+        s = s.rename(columns={term_id_col: "term_uid"})
+        join_col = "term_uid"
+    else:
+        join_col = term_id_col
+
+    if b.groupby(join_col)["module_id"].nunique().max() > 1:
         raise ValueError(
             "baseline_term_modules_df violates contract (term maps to multiple modules)"
         )
-    if s.groupby(term_id_col)["module_id"].nunique().max() > 1:
+    if s.groupby(join_col)["module_id"].nunique().max() > 1:
         raise ValueError(
             "stressed_term_modules_df violates contract (term maps to multiple modules)"
         )
 
-    out = b.merge(s, on=term_id_col, how="outer", suffixes=("_base", "_stress"))
+    out = b.merge(s, on=join_col, how="outer", suffixes=("_base", "_stress"))
     out["module_id_base"] = out["module_id_base"].astype("string")
     out["module_id_stress"] = out["module_id_stress"].astype("string")
 
     out["module_drift"] = out["module_id_base"].fillna("") != out["module_id_stress"].fillna("")
-    out = out.sort_values([term_id_col], kind="mergesort").reset_index(drop=True)
+    out = out.sort_values([join_col], kind="mergesort").reset_index(drop=True)
     return out
 
 
 def summarize_module_drift(drift_df: pd.DataFrame) -> dict[str, object]:
     """
-    Summarize drift_df from compute_term_module_drift().
+    Summarize module drift statistics.
+
+    Parameters
+    ----------
+    drift_df
+        Output of ``compute_term_module_drift`` with required columns:
+        term_uid, module_id_base, module_id_stress, module_drift.
+
+    Returns
+    -------
+    dict
+        Summary metrics including:
+        - n_terms_total, n_terms_drift, term_drift_rate
+        - n_modules_base, n_modules_stress, n_modules_shared
+        - module_churn_rate
     """
     required = {"term_uid", "module_id_base", "module_id_stress", "module_drift"}
     if not required.issubset(set(drift_df.columns)):
@@ -1121,25 +1486,67 @@ def attach_module_drift_stress_tag(
     tag: str = "module_drift",
 ) -> pd.DataFrame:
     """
-    Add stress_tag=module_drift to distilled_df for terms whose module assignment drifted.
+    Annotate terms with a stress tag when module assignment drifted.
 
-    Contract:
-      - distilled_df must have term_uid
-      - drift_df must have term_uid and module_drift (bool)
-      - does NOT overwrite existing non-empty stress_tag (append with delimiter)
-      - delimiter is normalized to _shared.STRESS_TAG_DELIM (comma),
-        but we tolerate legacy '+' in input
+    Parameters
+    ----------
+    distilled_df
+        Distilled evidence table with ``term_id_col`` and an optional stress tag
+        column.
+    drift_df
+        Drift table containing ``term_id_col`` and ``module_drift`` (bool).
+    term_id_col
+        Term identifier column name (default "term_uid").
+    stress_col
+        Column name used to store stress tags (default "stress_tag").
+    tag
+        Tag value to append when drift is detected (default "module_drift").
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of ``distilled_df`` with updated ``stress_col``. Existing tags are
+        preserved and the new tag is appended if missing.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+
+    Notes
+    -----
+    - Does not overwrite non-empty tags; it appends.
+    - Tag splitting/joining is delegated to ``_shared.split_tags`` and
+      ``_shared.join_tags``.
     """
     if term_id_col not in distilled_df.columns:
         raise ValueError(f"distilled_df missing column: {term_id_col}")
-    if term_id_col not in drift_df.columns or "module_drift" not in drift_df.columns:
-        raise ValueError("drift_df must have columns: term_uid, module_drift")
+    if "module_drift" not in drift_df.columns:
+        raise ValueError("drift_df must have column: module_drift")
 
-    d = drift_df[[term_id_col, "module_drift"]].copy()
+    # Backward/forward compatible join key for drift_df:
+    if term_id_col in drift_df.columns:
+        d_key = term_id_col
+    elif "term_uid" in drift_df.columns:
+        d_key = "term_uid"
+    else:
+        raise ValueError(
+            f"drift_df must have a term id column. Expected '{term_id_col}' or 'term_uid'."
+        )
+
+    d = drift_df[[d_key, "module_drift"]].copy()
     d["module_drift"] = d["module_drift"].astype(bool)
 
     out = distilled_df.copy()
-    out = out.merge(d, on=term_id_col, how="left", validate="m:1")
+    out = out.merge(
+        d,
+        left_on=term_id_col,
+        right_on=d_key,
+        how="left",
+        validate="m:1",
+    )
+    if d_key != term_id_col and d_key in out.columns:
+        out = out.drop(columns=[d_key])
     out["module_drift"] = out["module_drift"].fillna(False).astype(bool)
 
     if stress_col not in out.columns:

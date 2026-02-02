@@ -1,4 +1,24 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/cli.py
+
+"""
+Command-line interface for LLM-PathwayCurator.
+
+This module provides two commands:
+- run: execute distill → modules → claims → audit → report
+- adapt: convert external enrichment outputs into EvidenceTable TSV
+
+Design goals
+------------
+- Fail fast with actionable error messages (SystemExit).
+- Validate EvidenceTable contract early for clear CLI feedback.
+- Keep outputs reproducible via a minimal run config echo.
+
+Notes
+-----
+This CLI is intentionally small and delegates all core logic to pipeline,
+schema, and adapter layers.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,10 +33,44 @@ from .schema import EvidenceTable
 
 
 def _p(path: str | Path) -> Path:
+    """
+    Normalize a filesystem path for CLI usage.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Input path.
+
+    Returns
+    -------
+    pathlib.Path
+        Expanded and resolved absolute path.
+
+    Notes
+    -----
+    This performs:
+    - `expanduser()`
+    - `resolve()`
+    """
     return Path(path).expanduser().resolve()
 
 
 def _require_file(path: Path, label: str) -> None:
+    """
+    Require that a path exists and is a regular file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to validate.
+    label : str
+        Human-readable label used in error messages.
+
+    Raises
+    ------
+    SystemExit
+        If the file does not exist or is not a regular file.
+    """
     if not path.exists():
         raise SystemExit(f"[ERROR] {label} not found: {path}")
     if not path.is_file():
@@ -24,6 +78,27 @@ def _require_file(path: Path, label: str) -> None:
 
 
 def _ensure_outdir(outdir: Path, force: bool) -> None:
+    """
+    Create an output directory and enforce overwrite safety.
+
+    Parameters
+    ----------
+    outdir : pathlib.Path
+        Output directory path.
+    force : bool
+        If True, allow writing into an existing non-empty directory.
+
+    Raises
+    ------
+    SystemExit
+        If `outdir` exists but is not a directory, or if it is non-empty
+        and `force` is False.
+
+    Notes
+    -----
+    The non-empty check is performed by attempting to read one entry from
+    `outdir.iterdir()`.
+    """
     if outdir.exists() and not outdir.is_dir():
         raise SystemExit(f"[ERROR] outdir exists but is not a directory: {outdir}")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +116,21 @@ def _ensure_outdir(outdir: Path, force: bool) -> None:
 def _env_int(name: str) -> int | None:
     """
     Parse an integer environment variable.
-    Returns None if unset or empty. Raises SystemExit if malformed.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+
+    Returns
+    -------
+    int or None
+        Parsed integer value, or None if unset/empty.
+
+    Raises
+    ------
+    SystemExit
+        If the variable is set but cannot be parsed as an integer.
     """
     raw = os.environ.get(name)
     if raw is None:
@@ -57,12 +146,26 @@ def _env_int(name: str) -> int | None:
 
 def _resolve_k_claims(cli_value: int | None) -> tuple[int | None, str]:
     """
-    Resolve k_claims with a clear precedence for debuggability.
+    Resolve k_claims with explicit precedence and provenance.
 
+    Parameters
+    ----------
+    cli_value : int or None
+        Value provided via CLI `--k-claims`.
+
+    Returns
+    -------
+    (int or None, str)
+        Tuple of:
+        - resolved k_claims (or None)
+        - source string in {"cli", "env", "default"}
+
+    Notes
+    -----
     Precedence:
-      1) CLI --k-claims
-      2) env LLMPATH_K_CLAIMS
-      3) None (downstream defaults: sample_card.k_claims() etc.)
+    1) CLI `--k-claims`
+    2) env `LLMPATH_K_CLAIMS`
+    3) None (downstream defaults)
     """
     if cli_value is not None:
         return cli_value, "cli"
@@ -75,6 +178,21 @@ def _resolve_k_claims(cli_value: int | None) -> tuple[int | None, str]:
 
 
 def _validate_positive_int(name: str, value: int | None) -> None:
+    """
+    Validate that an optional integer is positive.
+
+    Parameters
+    ----------
+    name : str
+        Label used in error messages.
+    value : int or None
+        Value to validate.
+
+    Raises
+    ------
+    SystemExit
+        If `value` is not None and is less than 1.
+    """
     if value is None:
         return
     if value < 1:
@@ -82,6 +200,30 @@ def _validate_positive_int(name: str, value: int | None) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    """
+    CLI entrypoint for `run`.
+
+    This command executes the end-to-end pipeline:
+    distill → modules → claims → audit → report.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments. Expected fields include:
+        evidence_table, sample_card, outdir, force, seed, tau, k_claims,
+        run_meta.
+
+    Raises
+    ------
+    SystemExit
+        If inputs are missing, the outdir is unsafe to write, or the
+        EvidenceTable TSV violates the contract.
+
+    Notes
+    -----
+    The EvidenceTable contract is validated before running the pipeline
+    to provide clear CLI errors.
+    """
     evidence_table = _p(args.evidence_table)
     sample_card = _p(args.sample_card)
     outdir = _p(args.outdir)
@@ -125,6 +267,24 @@ AdaptFormat = Literal["metascape", "fgsea"]
 
 
 def cmd_adapt(args: argparse.Namespace) -> None:
+    """
+    CLI entrypoint for `adapt`.
+
+    Convert external enrichment outputs into an EvidenceTable TSV and
+    validate the written TSV against the EvidenceTable contract.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments. Expected fields include:
+        format, input, output, include_summary, source_name.
+
+    Raises
+    ------
+    SystemExit
+        If inputs are missing, output is invalid, or the generated TSV
+        violates the EvidenceTable contract.
+    """
     fmt: AdaptFormat = args.format
     in_path = _p(args.input)
     out_path = _p(args.output)
@@ -156,6 +316,21 @@ def cmd_adapt(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """
+    Build the top-level argument parser.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Configured parser with subcommands:
+        - run
+        - adapt
+
+    Notes
+    -----
+    The subparser is created with `required=True` to ensure a subcommand
+    is always provided.
+    """
     p = argparse.ArgumentParser(prog="llm-pathway-curator")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -216,6 +391,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """
+    Main entrypoint for the `llm-pathway-curator` CLI.
+
+    Parameters
+    ----------
+    argv : list of str or None, optional
+        Argument vector without the program name. If None, argparse uses
+        `sys.argv` implicitly.
+
+    Notes
+    -----
+    This function delegates to the selected subcommand via `args.func`.
+    """
     p = build_parser()
     args = p.parse_args(argv)
     args.func(args)
