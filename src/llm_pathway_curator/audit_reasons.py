@@ -75,16 +75,87 @@ DecisionReasonCode = Literal[
 
 
 def is_fail_reason(code: str) -> bool:
+    """
+    Check whether a reason code is a FAIL reason.
+
+    Parameters
+    ----------
+    code : str
+        Reason code string.
+
+    Returns
+    -------
+    bool
+        True if `code` is in `FAIL_REASONS`, otherwise False.
+
+    Notes
+    -----
+    `FAIL_REASONS` is part of the paper's reproducible output contract and
+    should remain stable.
+    """
     return code in FAIL_REASONS
 
 
 def is_abstain_reason(code: str) -> bool:
+    """
+    Check whether a reason code is an ABSTAIN reason.
+
+    Parameters
+    ----------
+    code : str
+        Reason code string.
+
+    Returns
+    -------
+    bool
+        True if `code` is in `ABSTAIN_REASONS`, otherwise False.
+
+    Notes
+    -----
+    `ABSTAIN_REASONS` is part of the paper's reproducible output contract and
+    should remain stable.
+    """
     return code in ABSTAIN_REASONS
 
 
 def is_known_reason(code: str) -> bool:
+    """
+    Check whether a reason code is known by this module.
+
+    Parameters
+    ----------
+    code : str
+        Reason code string.
+
+    Returns
+    -------
+    bool
+        True if `code` is in `ALL_REASONS`, otherwise False.
+
+    Notes
+    -----
+    `ALL_REASONS` excludes "ok" by design. Use `is_decision_reason()` when
+    you want to accept the "ok" sentinel.
+    """
     return code in ALL_REASONS
 
 
 def is_decision_reason(code: str) -> bool:
+    """
+    Check whether a string is a valid decision reason code.
+
+    This includes the sentinel "ok" as well as all known FAIL/ABSTAIN
+    reason codes.
+
+    Parameters
+    ----------
+    code : str
+        Decision reason code.
+
+    Returns
+    -------
+    bool
+        True if `code` is "ok" or is included in `ALL_REASONS`, otherwise
+        False.
+    """
     return (code == "ok") or (code in ALL_REASONS)

@@ -14,8 +14,27 @@ _ENSG_RE = re.compile(r"^(ENSG\d+)(\.\d+)?$", re.IGNORECASE)
 
 def norm_ensembl_id(x: str) -> str:
     """
-    Normalize Ensembl gene IDs by dropping version suffix (e.g., ENSG.. .15 -> ENSG..)
-    This is intentionally a "convenience" helper (mapping/display), not a spec-level hash policy.
+    Normalize an Ensembl gene ID by dropping an optional version suffix.
+
+    Examples
+    --------
+    "ENSG00000141510.15" -> "ENSG00000141510"
+    "ensg00000141510" -> "ENSG00000141510"
+
+    Parameters
+    ----------
+    x : str
+        Ensembl-like gene identifier, optionally with a version suffix.
+
+    Returns
+    -------
+    str
+        Normalized Ensembl ID (uppercased) if the input matches the ENSG
+        pattern. Otherwise, returns the trimmed input unchanged.
+
+    Notes
+    -----
+    This is a convenience helper for mapping/display, not a spec-level policy.
     """
     s = str(x).strip()
     if not s:
@@ -28,16 +47,38 @@ def norm_ensembl_id(x: str) -> str:
 
 def build_id_to_symbol_from_distilled(distilled: pd.DataFrame) -> dict[str, str]:
     """
-    Build mapping from gene IDs -> symbol if columns exist in distilled.
+    Build an ID-to-symbol mapping from a distilled evidence table.
 
-    Supported ID types:
-      - Entrez-like: gene_id / entrez_id / entrez / geneid
-      - Ensembl-like: ensembl_gene_id / ensembl_id / ensg (version tolerated)
+    The function searches for a symbol column and one of several supported
+    ID columns. It then builds a mapping from gene ID to gene symbol.
 
-    Contract:
-      - NA/empty handling uses _shared.is_na_token (single source of truth)
-      - Leading Excel text prefix (') is stripped via _shared.strip_excel_text_prefix
-      - For Ensembl keys, we apply norm_ensembl_id() (drops version) before storing.
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled table that may contain gene ID and symbol columns.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from gene ID to gene symbol. If required columns are missing
+        or `distilled` is empty, returns an empty dict.
+
+    Notes
+    -----
+    Supported symbol columns (first match is used):
+    - "gene_symbol", "symbol", "hgnc_symbol"
+
+    Supported ID columns:
+    - Entrez-like: "gene_id", "entrez_id", "entrez", "geneid"
+    - Ensembl-like: "ensembl_gene_id", "ensembl_id", "ensg"
+
+    Contract
+    --------
+    - NA/empty filtering uses `_shared.is_na_token`.
+    - Leading Excel text prefix (') is stripped via
+      `_shared.strip_excel_text_prefix`.
+    - Ensembl IDs are normalized with `norm_ensembl_id()` (drops version).
+    - First-seen mapping wins (`dict.setdefault`).
     """
     if distilled is None or distilled.empty:
         return {}
@@ -87,12 +128,37 @@ def build_id_to_symbol_from_distilled(distilled: pd.DataFrame) -> dict[str, str]
 
 def load_id_map_tsv(path: str | Path) -> dict[str, str]:
     """
-    Load user-supplied mapping TSV.
-    Expected columns (any works):
-      - symbol + (entrez_id|gene_id|entrez|geneid) and/or (ensembl_gene_id|ensembl_id|ensg)
+    Load a user-supplied ID-to-symbol mapping from a TSV file.
 
-    Returns:
-      dict mapping from ID -> symbol
+    The file is expected to have a symbol column and one or more ID columns.
+    Gzip-compressed TSV (".gz") is supported.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to a TSV (optionally gzipped).
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from ID to symbol. Returns an empty dict if the file does
+        not exist or required columns are missing.
+
+    Notes
+    -----
+    Recognized symbol columns (first match is used):
+    - "symbol", "gene_symbol", "hgnc_symbol"
+
+    Recognized ID columns:
+    - Entrez-like: "entrez_id", "gene_id", "entrez", "geneid"
+    - Ensembl-like: "ensembl_gene_id", "ensembl_id", "ensg"
+
+    Contract
+    --------
+    - Excel prefix stripping uses `_shared.strip_excel_text_prefix`.
+    - NA filtering uses `_shared.is_na_token`.
+    - Ensembl IDs are normalized via `norm_ensembl_id()`.
+    - First-seen mapping wins (`dict.setdefault`).
     """
     p = Path(path)
     if not p.exists():
@@ -136,11 +202,27 @@ def load_id_map_tsv(path: str | Path) -> dict[str, str]:
 
 def map_ids_to_symbols(ids: Any, id2sym: dict[str, str]) -> list[str]:
     """
-    Map a gene ID list (scalar/list/TSV-style string) to symbols using id2sym.
+    Map gene IDs to symbols using a provided ID-to-symbol mapping.
 
-    Contract:
-      - Parsing is delegated to _shared.parse_id_list (single source of truth).
-      - Excel prefix stripping is already handled by parse_id_list.
+    Parameters
+    ----------
+    ids : Any
+        Gene IDs as a scalar, list-like, or a delimiter-separated string.
+        Parsing is delegated to `_shared.parse_id_list()`.
+    id2sym : dict[str, str]
+        Mapping from gene ID to gene symbol.
+
+    Returns
+    -------
+    list[str]
+        A list of symbols when mappings exist, otherwise original tokens.
+        Tokens not found in `id2sym` are returned unchanged.
+
+    Notes
+    -----
+    Lookup order per token:
+    1) raw token
+    2) Ensembl-normalized token via `norm_ensembl_id()` (drops version)
     """
     gids = _shared.parse_id_list(ids)
     if not id2sym:
@@ -148,7 +230,7 @@ def map_ids_to_symbols(ids: Any, id2sym: dict[str, str]) -> list[str]:
 
     out: list[str] = []
     for g in gids:
-        g0 = str(g).strip()
+        g0 = _shared.strip_excel_text_prefix(str(g)).strip()
 
         # 1) raw
         if g0 in id2sym:

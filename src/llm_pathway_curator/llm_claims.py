@@ -1,4 +1,27 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/llm_claims.py
+
+"""
+LLM-based claim proposal for LLM-PathwayCurator.
+
+This module proposes structured `Claim` objects from distilled evidence using
+an LLM backend. It is designed to be:
+- contract-driven (stable IDs, deterministic evidence linking),
+- robust across heterogeneous backends (OpenAI/Gemini/Ollama/local),
+- audit-grade (persist prompt/candidates/raw/meta artifacts).
+
+Key ideas
+---------
+- Evidence identity is tool-owned (term_uid + gene_set_hash).
+- Context VALUES are prompt-facing; context KEYS are contract-facing.
+- FAIL decisions are never "promoted" by thresholding; gating affects non-FAIL.
+
+Notes
+-----
+This file contains many private helpers. Public entrypoints:
+- propose_claims_llm
+- claims_to_proposed_tsv
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -22,11 +45,44 @@ _NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
-    """Single source of truth: _shared.is_na_scalar."""
+    """
+    Check scalar NA safely (single source of truth).
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+
+    Returns
+    -------
+    bool
+        True if `x` should be treated as scalar NA.
+
+    Notes
+    -----
+    Delegates to `_shared.is_na_scalar` to avoid behavior drift across layers.
+    """
     return _shared.is_na_scalar(x)
 
 
 def _strip_na(s: Any) -> str:
+    """
+    Convert an arbitrary value to a non-NA trimmed string.
+
+    Parameters
+    ----------
+    s : Any
+        Input value.
+
+    Returns
+    -------
+    str
+        Trimmed string, or "" if NA-like.
+
+    Notes
+    -----
+    NA vocabulary follows `_shared.NA_TOKENS_L`.
+    """
     if _is_na_scalar(s):
         return ""
     t = str(s).strip()
@@ -36,6 +92,24 @@ def _strip_na(s: Any) -> str:
 
 
 def _looks_like_12hex(s: Any) -> bool:
+    """
+    Check whether a value is exactly 12 lowercase hex characters.
+
+    Parameters
+    ----------
+    s : Any
+        Input value.
+
+    Returns
+    -------
+    bool
+        True if `s` is a 12-hex token; otherwise False.
+
+    Notes
+    -----
+    This is a local mirror used for lightweight checks. The spec-level
+    equivalent is `_shared.looks_like_12hex`.
+    """
     if _is_na_scalar(s):
         return False
     x = str(s).strip().lower()
@@ -45,25 +119,84 @@ def _looks_like_12hex(s: Any) -> bool:
 
 
 def _sha256_text(s: str) -> str:
+    """
+    Compute a SHA-256 hex digest of a text payload.
+
+    Parameters
+    ----------
+    s : str
+        Input text.
+
+    Returns
+    -------
+    str
+        64-character lowercase hex digest.
+    """
     h = hashlib.sha256()
     h.update((s or "").encode("utf-8"))
     return h.hexdigest()
 
 
 def _stable_json_dumps(obj: Any) -> str:
-    # stable across runs
+    """
+    Serialize an object to deterministic JSON.
+
+    Parameters
+    ----------
+    obj : Any
+        JSON-serializable object.
+
+    Returns
+    -------
+    str
+        Deterministic JSON string.
+
+    Notes
+    -----
+    Uses:
+    - sort_keys=True
+    - separators=(",", ":")
+    - ensure_ascii=False
+    """
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _df_records_sha256(df: pd.DataFrame) -> str:
-    # stable hash for provenance/debugging
+    """
+    Compute a stable SHA-256 fingerprint for a DataFrame (records payload).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input DataFrame.
+
+    Returns
+    -------
+    str
+        SHA-256 hex digest of `df.to_dict(orient="records")` serialized via
+        deterministic JSON.
+
+    Notes
+    -----
+    Intended for provenance/debugging (not a spec-level ID).
+    """
     recs = df.to_dict(orient="records")
     return _sha256_text(_stable_json_dumps(recs))
 
 
 def _parse_soft_error_json(s: str) -> dict[str, Any] | None:
     """
-    Some backends return {"error": {...}} as JSON. Treat it as soft error.
+    Parse standardized soft-error JSON emitted by some backends.
+
+    Parameters
+    ----------
+    s : str
+        Input text.
+
+    Returns
+    -------
+    dict[str, Any] or None
+        Parsed object if it matches {"error": {...}}, otherwise None.
     """
     try:
         obj = json.loads(s)
@@ -75,6 +208,21 @@ def _parse_soft_error_json(s: str) -> dict[str, Any] | None:
 
 
 def _safe_write_json(path: Path, obj: Any) -> None:
+    """
+    Atomically write JSON to disk.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Target file path.
+    obj : Any
+        JSON-serializable payload.
+
+    Notes
+    -----
+    Writes to a temporary file (suffix ".tmp") and then replaces the target
+    to reduce partial-write risk.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -85,8 +233,22 @@ def _safe_write_json(path: Path, obj: Any) -> None:
 
 def _context_dict(card: SampleCard) -> dict[str, str]:
     """
-    Prompt-facing context. Values are for prompting only; NOT used for claim_id identity.
-    Tool-facing neutral key is "condition".
+    Build prompt-facing context dictionary from a SampleCard.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Input sample card.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of context keys to cleaned string values.
+
+    Notes
+    -----
+    Values are for prompting only and MUST NOT be used for claim identity
+    (claim_id / gene_set_hash).
     """
     d = card.context_dict()
     return {k: _strip_na(v) for k, v in d.items()}
@@ -94,8 +256,21 @@ def _context_dict(card: SampleCard) -> dict[str, str]:
 
 def _context_keys(card: SampleCard) -> list[str]:
     """
-    Stable order is part of the contract.
-    Use tool-facing CORE keys: condition/tissue/perturbation/comparison.
+    Return contract-facing context keys in stable order.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Input sample card.
+
+    Returns
+    -------
+    list[str]
+        Ordered subset of ["condition", "tissue", "perturbation", "comparison"].
+
+    Notes
+    -----
+    Stable key order is treated as part of the contract.
     """
     keys: list[str] = []
     d = card.context_dict()
@@ -107,8 +282,21 @@ def _context_keys(card: SampleCard) -> list[str]:
 
 def _norm_gene_id(g: Any) -> str:
     """
-    Canonical gene token normalization.
-    IMPORTANT: must match _shared.clean_gene_token() policy (no forced uppercase).
+    Normalize a gene token using the spec policy.
+
+    Parameters
+    ----------
+    g : Any
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Cleaned token.
+
+    Notes
+    -----
+    Delegates to `_shared.clean_gene_token` (trim-only; no forced uppercase).
     """
     return _shared.clean_gene_token(g)
 
@@ -118,34 +306,109 @@ _BRACKETED_LIST_RE = re.compile(r"^\s*[\[\(\{].*[\]\)\}]\s*$")
 
 def _parse_gene_list(x: Any) -> list[str]:
     """
-    Single source of truth: _shared.parse_genes().
-    - conservative split
-    - no forced uppercase
-    - dedup preserve order
+    Parse a gene field into a cleaned list of gene tokens.
+
+    Parameters
+    ----------
+    x : Any
+        Scalar or list-like gene field.
+
+    Returns
+    -------
+    list[str]
+        Cleaned gene tokens.
+
+    Notes
+    -----
+    Delegates to `_shared.parse_genes` for conservative splitting and
+    deterministic de-duplication.
     """
     return _shared.parse_genes(x)
 
 
 def _hash_gene_set_12hex(genes: list[str]) -> str:
     """
-    Single source of truth: _shared.hash_gene_set_12hex().
-    IMPORTANT: genes must be the SAME list used as evidence payload identity.
+    Fallback fingerprint when gene IDs are unavailable.
+
+    Parameters
+    ----------
+    term_uids : list[str]
+        Term UID tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    Delegates to `_shared.hash_set_12hex`. This is term-driven, not gene-driven.
     """
     return _shared.hash_gene_set_12hex(list(genes or []))
 
 
 def _hash_term_set_fallback_12hex(term_uids: list[str]) -> str:
     """
-    Single source of truth fallback: _shared.hash_set_12hex().
+    Fallback fingerprint when gene IDs are unavailable.
+
+    Parameters
+    ----------
+    term_uids : list[str]
+        Term UID tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    Delegates to `_shared.hash_set_12hex`. This is term-driven, not gene-driven.
     """
     return _shared.hash_set_12hex(list(term_uids or []))
 
 
 def _soft_error_json(message: str, *, err_type: str = "llm_error", retryable: bool = False) -> str:
+    """
+    Create standardized soft-error JSON text.
+
+    Parameters
+    ----------
+    message : str
+        Error message.
+    err_type : str, optional
+        Error type token.
+    retryable : bool, optional
+        Whether the failure is considered retryable.
+
+    Returns
+    -------
+    str
+        JSON string formatted as {"error": {"message": ..., "type": ..., "retryable": ...}}.
+    """
     return json.dumps({"error": {"message": message, "type": err_type, "retryable": retryable}})
 
 
 def _as_bool_env(name: str, default: bool) -> bool:
+    """
+    Parse a boolean environment variable.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : bool
+        Default value if unset/empty.
+
+    Returns
+    -------
+    bool
+        Parsed boolean value.
+
+    Notes
+    -----
+    Truthy values: {"1","true","t","yes","y","on"}.
+    """
     v = str(os.environ.get(name, "")).strip().lower()
     if not v:
         return bool(default)
@@ -153,6 +416,21 @@ def _as_bool_env(name: str, default: bool) -> bool:
 
 
 def _as_int_env(name: str, default: int) -> int:
+    """
+    Parse an integer environment variable with fallback.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : int
+        Default value if unset/empty/malformed.
+
+    Returns
+    -------
+    int
+        Parsed integer value, or `default` on failure.
+    """
     try:
         v = str(os.environ.get(name, "")).strip()
         return int(v) if v else int(default)
@@ -161,6 +439,26 @@ def _as_int_env(name: str, default: int) -> int:
 
 
 def _module_prefix(card: SampleCard) -> str:
+    """
+    Resolve module_id prefix for fallback module IDs.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Input sample card (may provide extra["module_prefix"]).
+
+    Returns
+    -------
+    str
+        Module prefix string.
+
+    Notes
+    -----
+    Precedence:
+    1) env LLMPATH_MODULE_PREFIX
+    2) card.extra["module_prefix"]
+    3) "M"
+    """
     env = str(os.environ.get("LLMPATH_MODULE_PREFIX", "")).strip()
     if env:
         return env
@@ -173,6 +471,26 @@ def _module_prefix(card: SampleCard) -> str:
 
 
 def _max_gene_ids_in_claim(card: SampleCard) -> int:
+    """
+    Determine maximum number of gene IDs to embed in a claim payload.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Input sample card (may provide extra["max_gene_ids_in_claim"]).
+
+    Returns
+    -------
+    int
+        Maximum gene ID count (clamped to [1, 5000]).
+
+    Notes
+    -----
+    Precedence:
+    1) env LLMPATH_MAX_GENE_IDS_IN_CLAIM (default 512)
+    2) card.extra["max_gene_ids_in_claim"]
+    3) 512
+    """
     env = _as_int_env("LLMPATH_MAX_GENE_IDS_IN_CLAIM", 512)
     if env:
         return max(1, min(5000, int(env)))
@@ -188,24 +506,63 @@ def _max_gene_ids_in_claim(card: SampleCard) -> int:
 
 def _module_hash_like_modules_py_12hex(term_uids: list[str], genes: list[str]) -> str:
     """
-    Single source of truth: _shared.module_hash_content12().
-    Matches modules.py / select.py fallback semantics.
+    Compute module content hash consistent with modules.py.
+
+    Parameters
+    ----------
+    term_uids : list[str]
+        Term UID tokens.
+    genes : list[str]
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    Delegates to `_shared.module_hash_content12` for cross-module consistency.
     """
     return _shared.module_hash_content12(terms=list(term_uids or []), genes=list(genes or []))
 
 
 def _strict_k_enabled() -> bool:
     """
-    If enabled, require LLM to return exactly k claims (paper / fig reproducibility).
-    Default: OFF for backward compatibility.
+    Check whether strict-k output is required from the LLM.
+
+    Returns
+    -------
+    bool
+        True if strict-k is enabled.
+
+    Notes
+    -----
+    Controlled by env LLMPATH_LLM_STRICT_K.
+    Default is False for backward compatibility.
     """
     return _as_bool_env("LLMPATH_LLM_STRICT_K", False)
 
 
 def _scalar_int(x: Any, default: int | None = None) -> int | None:
     """
-    Convert x to int if possible.
-    Special-case: (v,) -> v (common trailing-comma/packing bug source).
+    Convert a value to int if possible, with a tuple-unpacking guard.
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+    default : int or None, optional
+        Fallback if conversion fails or input is None.
+
+    Returns
+    -------
+    int or None
+        Parsed integer, or `default`.
+
+    Notes
+    -----
+    Special-case: (v,) -> v to mitigate common trailing-comma packing mistakes.
     """
     if x is None:
         return default
@@ -218,12 +575,39 @@ def _scalar_int(x: Any, default: int | None = None) -> int | None:
 
 
 def _clamp_int(x: int, lo: int, hi: int) -> int:
+    """
+    Clamp an integer to an inclusive range.
+
+    Parameters
+    ----------
+    x : int
+        Input value.
+    lo : int
+        Lower bound.
+    hi : int
+        Upper bound.
+
+    Returns
+    -------
+    int
+        Clamped value.
+    """
     return max(int(lo), min(int(hi), int(x)))
 
 
 def _backend_model_hint(backend: BaseLLMBackend) -> str:
     """
-    Best-effort model name hint for logging / heuristic gating.
+    Get a best-effort model name hint from a backend.
+
+    Parameters
+    ----------
+    backend : BaseLLMBackend
+        LLM backend instance.
+
+    Returns
+    -------
+    str
+        Model hint string, or "" if unavailable.
     """
     for attr in ("model_name", "model", "model_id"):
         v = getattr(backend, attr, None)
@@ -237,10 +621,22 @@ def _backend_model_hint(backend: BaseLLMBackend) -> str:
 
 def _is_small_local_model(backend: BaseLLMBackend) -> bool:
     """
-    Heuristic: treat 7B/8B-ish local models as 'small' for prompt budget.
+    Heuristically detect "small" local models to reduce prompt budget.
 
+    Parameters
+    ----------
+    backend : BaseLLMBackend
+        LLM backend instance.
+
+    Returns
+    -------
+    bool
+        True if treated as small (e.g., 7B/8B).
+
+    Notes
+    -----
     Override:
-      - LLMPATH_LLM_ASSUME_SMALL_MODEL=1 forces 'small' regardless of model hint.
+    - env LLMPATH_LLM_ASSUME_SMALL_MODEL=1 forces True.
     """
     if _as_bool_env("LLMPATH_LLM_ASSUME_SMALL_MODEL", False):
         return True
@@ -254,18 +650,28 @@ def _is_small_local_model(backend: BaseLLMBackend) -> bool:
 
 def _auto_topn_for_k(*, k: int, backend: BaseLLMBackend) -> tuple[int, dict[str, Any]]:
     """
-    Auto-tune top_n from k with a simple, explainable rule.
+    Auto-tune candidate pool size (top_n) from k.
 
+    Parameters
+    ----------
+    k : int
+        Target number of claims to return.
+    backend : BaseLLMBackend
+        Backend instance used to infer small-model heuristics.
+
+    Returns
+    -------
+    (int, dict[str, Any])
+        - top_n : int
+          Auto-tuned candidate budget.
+        - meta : dict[str, Any]
+          Explainable parameters and model hint used for tuning.
+
+    Notes
+    -----
     Rule:
-      top_n = clamp(alpha*k, min_n, max_n)
-      if small model (7B/8B-ish), lower max_n
-
-    Env overrides:
-      - LLMPATH_LLM_TOPN: if set, we do NOT auto-tune (handled by caller)
-      - LLMPATH_LLM_TOPN_ALPHA (default 12)
-      - LLMPATH_LLM_TOPN_MIN (default 15)
-      - LLMPATH_LLM_TOPN_MAX (default 80)
-      - LLMPATH_LLM_TOPN_MAX_SMALL (default 50)
+    - top_n = clamp(alpha*k, min_n, max_n)
+    - if small model, use a smaller effective max
     """
     k0 = max(1, int(k))
 
@@ -294,12 +700,20 @@ def _auto_topn_for_k(*, k: int, backend: BaseLLMBackend) -> tuple[int, dict[str,
 
 def _llm_required_by_contract() -> bool:
     """
-    Treat LLM failures as fatal when the run contract requires LLM.
+    Determine whether LLM failure should be treated as fatal.
 
-    Contract rules (minimal, Nat Biotech-friendly):
-      - If LLMPATH_CLAIM_MODE=llm => LLM is REQUIRED for claim proposal.
-      - Optional override: LLMPATH_LLM_FAIL_FAST=1 forces fail-fast even in non-llm modes.
-      - Optional override: LLMPATH_LLM_FAIL_FAST=0 disables fail-fast (not recommended for paper).
+    Returns
+    -------
+    bool
+        True if LLM is required by the run contract.
+
+    Notes
+    -----
+    Contract rules:
+    - If LLMPATH_CLAIM_MODE=llm => required.
+    - Overrides:
+      * LLMPATH_LLM_FAIL_FAST=1 forces required
+      * LLMPATH_LLM_FAIL_FAST=0 forces not required
     """
     v = str(os.environ.get("LLMPATH_LLM_FAIL_FAST", "")).strip().lower()
     if v in {"0", "false", "f", "no", "n", "off"}:
@@ -313,8 +727,23 @@ def _llm_required_by_contract() -> bool:
 
 def _raise_if_required(notes: str, *, meta: dict[str, Any]) -> None:
     """
-    If LLM is required, raise with a compact message.
-    Artifacts should be written BEFORE calling this.
+    Raise a compact error if the run contract requires an LLM.
+
+    Parameters
+    ----------
+    notes : str
+        Short failure note.
+    meta : dict[str, Any]
+        Metadata for compact error context (backend, k, top_n, etc.).
+
+    Raises
+    ------
+    RuntimeError
+        If LLM is required and a failure occurred.
+
+    Notes
+    -----
+    Intended to be called after artifacts are written.
     """
     if not _llm_required_by_contract():
         return
@@ -330,13 +759,31 @@ def _raise_if_required(notes: str, *, meta: dict[str, Any]) -> None:
 # -------------------------
 def _try_call(fn: Callable[..., Any], **kwargs: Any) -> Any:
     """
-    Try calling a function with a subset of kwargs.
-    This avoids brittle signature coupling across backends/refactors.
+    Call a backend function while avoiding brittle signature coupling.
 
-    IMPORTANT:
-      - Preserve json_mode whenever possible.
-      - Drop seed first (many backends do not accept it).
-      - Avoid positional fallback with seed (2nd positional can be misinterpreted as json_mode).
+    Parameters
+    ----------
+    fn : Callable[..., Any]
+        Callable to invoke.
+    **kwargs : Any
+        Candidate keyword arguments.
+
+    Returns
+    -------
+    Any
+        Backend output.
+
+    Raises
+    ------
+    RuntimeError
+        If all fallback calling strategies fail.
+
+    Notes
+    -----
+    Strategy:
+    - Try kwargs as-is.
+    - Then drop kwargs in a safe order (seed -> json_mode -> prompt).
+    - Finally, fallback to a single positional prompt call when available.
     """
     try:
         return fn(**kwargs)
@@ -373,11 +820,24 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORE
 
 def _extract_json_fragment(text: str) -> str | None:
     """
-    Best-effort extraction of a JSON object/array from free-form text.
+    Extract a JSON object/array from free-form model output.
+
+    Parameters
+    ----------
+    text : str
+        Model output text.
+
+    Returns
+    -------
+    str or None
+        Extracted JSON fragment if found; otherwise None.
+
+    Notes
+    -----
     Handles:
-      - ```json ... ```
-      - leading/trailing commentary
-      - returns the first valid JSON object/array found
+    - fenced blocks: ```json ... ```
+    - full-text JSON
+    - best-effort scan from the first '{' or '[' using JSONDecoder.raw_decode
     """
     s = (text or "").strip()
     if not s:
@@ -419,14 +879,33 @@ def _extract_json_fragment(text: str) -> str | None:
 
 def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None) -> dict[str, Any]:
     """
-    Best-effort JSON call.
+    Perform a best-effort JSON call across heterogeneous backends.
 
-    Preferred path (stable contract):
-      - backend.generate(prompt, json_mode=True) returns either:
-          (a) valid JSON string, or
-          (b) standardized soft error JSON {"error": {...}}
+    Parameters
+    ----------
+    backend : BaseLLMBackend
+        Backend instance.
+    prompt : str
+        Prompt text.
+    seed : int or None
+        Optional seed (best-effort; may be ignored by backends).
 
-    Fallback paths exist only for legacy adapters.
+    Returns
+    -------
+    dict[str, Any]
+        Parsed JSON object returned by the backend.
+
+    Raises
+    ------
+    RuntimeError
+        If no usable backend method is found or JSON decoding fails for all
+        candidates.
+
+    Notes
+    -----
+    Preferred path:
+    - backend.generate(prompt=..., json_mode=True, seed=...) returns JSON text
+      or a standardized {"error": {...}} object.
     """
     # 0) Prefer BaseLLMBackend contract first
     try:
@@ -494,6 +973,23 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
 
 @dataclass(frozen=True)
 class LLMClaimResult:
+    """
+    Container for LLM claim proposal results.
+
+    Attributes
+    ----------
+    claims : list[Claim]
+        Validated and post-processed claims. Empty if failure/fallback.
+    raw_text : str
+        Raw JSON text persisted for audit/debug.
+    used_fallback : bool
+        True if LLM output was unusable or a soft-error occurred.
+    notes : str
+        Compact status note (e.g., "ok", "post_validate_failed: ...").
+    meta : dict[str, Any]
+        Metadata used for reproducibility (k, top_n, hashes, backend class, etc.).
+    """
+
     claims: list[Claim]
     raw_text: str
     used_fallback: bool
@@ -503,11 +999,30 @@ class LLMClaimResult:
 
 def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) -> str:
     """
-    Lightweight prompt while preserving semantics:
-      - keep term_name (semantic)
-      - keep small gene snippet (<=5)
-      - keep direction + term_survival as hints (optional)
-      - use compact line format (not verbose JSON)
+    Build a compact JSON-only prompt for proposing claims.
+
+    Parameters
+    ----------
+    card : SampleCard
+        Sample card providing context values and stable context keys.
+    candidates : pandas.DataFrame
+        Candidate evidence rows (top_n pool) used as the ONLY selectable source.
+        Expected columns include term_uid, term_id, term_name, direction, and
+        optionally term_survival and gene_ids_suggest/evidence_genes.
+    k : int
+        Target number of claims to request from the model.
+
+    Returns
+    -------
+    str
+        Prompt string instructing the model to return valid JSON only.
+
+    Notes
+    -----
+    The prompt enforces copy-exact rules for:
+    - entity == term_id
+    - evidence_ref.term_ids == [term_uid]
+    Context values are prompt-facing only; identity uses context KEYS.
     """
     ctx = _context_dict(card)
     ctx_keys = _context_keys(card)
@@ -613,11 +1128,24 @@ def _coerce_candidate_row_to_claim_dict(
     row: dict[str, Any], *, ctx_keys_resolved: list[str]
 ) -> dict[str, Any] | None:
     """
-    Some models (esp. local) return a single candidate row JSON instead of Claim JSON.
-    Salvage it into a Claim-shaped dict.
+    Salvage a candidate-row JSON into a Claim-shaped dict.
 
-    Expected candidate-ish keys:
-      term_uid, term_id, module_id, gene_set_hash, gene_ids_suggest, direction
+    Parameters
+    ----------
+    row : dict[str, Any]
+        Candidate-like payload (e.g., term_uid/term_id/module_id/...).
+    ctx_keys_resolved : list[str]
+        Resolved context keys to attach to the claim.
+
+    Returns
+    -------
+    dict[str, Any] or None
+        Claim-shaped dict if salvageable; otherwise None.
+
+    Notes
+    -----
+    This handles a common failure mode of some models that return a single
+    candidate row instead of the Claim schema.
     """
     if not isinstance(row, dict):
         return None
@@ -657,16 +1185,37 @@ def _validate_claims_json(
     **_ignored: Any,  # tolerate future/legacy kwargs without breaking
 ) -> list[Claim]:
     """
-    Parse and validate LLM output into list[Claim].
+    Parse and validate LLM output into `list[Claim]`.
 
-    Acceptable inputs:
-      - {"claims":[...]}
-      - [...]
-      - single-claim dict (common model failure mode)
+    Parameters
+    ----------
+    text : str
+        JSON text emitted by the model.
+    ctx_keys_resolved : list[str] or None, optional
+        Context keys to attach when salvaging a candidate-row JSON.
+        (Primary projection happens later in post-validation.)
+    **_ignored : Any
+        Ignored keyword arguments for forward/legacy compatibility.
 
-    NOTE:
-      Some older call sites pass ctx_keys_resolved=...; we accept and ignore it here.
-      Context key projection is handled later by _post_validate_against_candidates().
+    Returns
+    -------
+    list[Claim]
+        Parsed Claim objects (schema-validated).
+
+    Raises
+    ------
+    ValueError
+        If the payload is not a supported shape.
+    pydantic.ValidationError
+        If Claim validation fails.
+
+    Notes
+    -----
+    Accepts:
+    - {"claims":[...]}
+    - [...]
+    - single-claim dict
+    - candidate-row dict (salvaged) when keys look like a candidate
     """
     obj = json.loads(text)
 
@@ -710,19 +1259,40 @@ def _post_validate_against_candidates(
     card: SampleCard,
 ) -> tuple[bool, str, list[Claim]]:
     """
-    Guardrails beyond schema:
-      - term_ids exactly one term_uid existing in candidates
-      - entity matches candidate term_id
-      - tool fills evidence_ref fields deterministically from candidates:
-          module_id, gene_ids (capped for size), gene_set_hash (identity; MUST be stable)
-      - unique term_uid across returned claims
-      - context_keys projected to resolved keys (stable)
-      - claim_id is TOOL-OWNED by Claim schema; do NOT generate or overwrite here
+    Enforce contract guardrails against the candidate pool and normalize payloads.
 
-    IMPORTANT (Nat Biotech-friendly, reproducible):
-      - gene_set_hash is an IDENTITY KEY for evidence linking.
-        It MUST be consistent with candidates / distilled-derived truth.
-      - gene_ids are supportive payload; they MAY be capped for size, and MUST NOT change identity.
+    Parameters
+    ----------
+    claims : list[Claim]
+        Schema-validated claims returned by the model.
+    cand : pandas.DataFrame
+        Candidate pool DataFrame used to constrain selection.
+    require_gene_set_hash : bool
+        If True, require a valid 12-hex gene_set_hash for each candidate.
+    ctx_keys_resolved : list[str]
+        Stable context keys to project onto each claim.
+    card : SampleCard
+        Sample card used for configuration (module prefix, gene cap, etc.).
+
+    Returns
+    -------
+    (bool, str, list[Claim])
+        ok : bool
+            True if validation/normalization succeeded.
+        reason : str
+            "ok" or a short failure reason.
+        claims_norm : list[Claim]
+            Normalized claims with tool-owned evidence_ref fields filled.
+
+    Notes
+    -----
+    Guarantees:
+    - Exactly one term_uid per claim, and it must exist in candidates.
+    - entity must match candidate term_id.
+    - evidence_ref fields are tool-owned:
+      module_id, gene_ids (capped), gene_set_hash (identity).
+    - context_keys are projected to resolved stable keys.
+    - claim_id is tool-owned by Claim schema and is not overridden here.
     """
     cand2 = cand.copy()
 
@@ -854,14 +1424,53 @@ def propose_claims_llm(
     artifact_tag: str | None = None,
 ) -> LLMClaimResult:
     """
-    Propose typed claims via LLM (JSON only) and persist audit-grade artifacts.
+    Propose claims via an LLM and write audit-grade artifacts.
 
-    artifact_tag:
-      - Optional tag to avoid overwriting artifacts when multiple LLM calls happen in a run.
-      - When provided, writes BOTH:
-          llm_claims.<tag>.raw.json / llm_claims.<tag>.meta.json  (stable per-call)
-        and also the legacy:
-          llm_claims.raw.json / llm_claims.meta.json              (backward compatible)
+    Parameters
+    ----------
+    distilled_with_modules : pandas.DataFrame
+        Distilled evidence table with module information (or sufficient columns
+        to derive term_uid). Must contain:
+        - term_uid OR (source, term_id)
+        - term_id, term_name, source
+        Optional:
+        - module_id, gene_set_hash
+        - evidence_genes / evidence_genes_str / gene_ids_suggest
+        - keep_term, term_survival, stat, context_score
+    card : SampleCard
+        Sample card providing prompt context and contract keys.
+    backend : BaseLLMBackend
+        LLM backend adapter.
+    k : int
+        Target number of claims.
+    seed : int or None, optional
+        Optional seed (best-effort; may be ignored).
+    outdir : str or None, optional
+        Output directory for artifacts. If None, no artifacts are written.
+    artifact_tag : str or None, optional
+        Optional tag to avoid overwriting per-call artifacts.
+
+    Returns
+    -------
+    LLMClaimResult
+        Claims and metadata. On failure, `claims` may be empty and
+        `used_fallback` True.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+    RuntimeError
+        If LLM is required by contract and call/validation fails.
+
+    Notes
+    -----
+    Artifacts (when outdir is set):
+    - llm_claims.prompt.json
+    - llm_claims.candidates.json
+    - llm_claims.raw.json
+    - llm_claims.meta.json
+    Plus tagged variants when `artifact_tag` is provided.
     """
     k = _scalar_int(k, 1) or 1
     seed = _scalar_int(seed, None)
@@ -921,7 +1530,7 @@ def propose_claims_llm(
         df["term_survival_sort"] = -1.0
 
     df["stat_sort"] = pd.to_numeric(
-        df.get("stat", pd.Series([0] * len(df))), errors="coerce"
+        df.get("stat", pd.Series(0, index=df.index)), errors="coerce"
     ).fillna(0.0)
 
     # Optional context proxy: if enabled and context_score exists, use it as a tie-breaker.
@@ -932,7 +1541,8 @@ def propose_claims_llm(
 
     if ctx_proxy_on:
         df["context_score_sort"] = pd.to_numeric(
-            df.get("context_score", 0), errors="coerce"
+            df.get("context_score", pd.Series(0, index=df.index)),
+            errors="coerce",
         ).fillna(0.0)
     else:
         df["context_score_sort"] = 0.0
@@ -1143,9 +1753,31 @@ def claims_to_proposed_tsv(
     distilled_with_modules: pd.DataFrame,
     card: SampleCard,
 ) -> pd.DataFrame:
-    # Do NOT bake context values into IDs (tool contract), but do export them as columns.
-    ctx = card.context_dict()
+    """
+    Convert proposed claims into a flat TSV-like DataFrame for export.
 
+    Parameters
+    ----------
+    claims : list[Claim]
+        Proposed claims (typically from `propose_claims_llm`).
+    distilled_with_modules : pandas.DataFrame
+        Distilled evidence table used to enrich exported rows with term metadata.
+    card : SampleCard
+        Sample card providing context values (export columns).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Row-wise export with fields including:
+        claim_id, entity, direction, context_keys, term_uid, module_id,
+        gene_ids, term_ids, gene_set_hash, and serialized claim_json.
+
+    Notes
+    -----
+    Context VALUES are exported as columns for convenience, but MUST NOT be
+    baked into identity (claim_id / gene_set_hash).
+    """
+    ctx = card.context_dict()
     df = distilled_with_modules.copy()
 
     if "term_uid" not in df.columns:

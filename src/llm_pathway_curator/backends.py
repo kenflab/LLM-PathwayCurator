@@ -17,7 +17,25 @@ from typing import Any
 # -------------------------
 def _getenv(*names: str, default: str | None = None) -> str | None:
     """
-    Return the first non-empty env var among names; otherwise default.
+    Return the first non-empty environment variable among candidates.
+
+    Parameters
+    ----------
+    *names
+        Environment variable names to check in order.
+    default
+        Fallback value when none of the candidate variables is set to a non-empty
+        value.
+
+    Returns
+    -------
+    str or None
+        The first non-empty value found (stripped), otherwise `default`.
+
+    Notes
+    -----
+    - Values are stripped; empty strings are treated as missing.
+    - Returned type is always `str` when a value is found.
     """
     for n in names:
         v = os.environ.get(n, None)
@@ -31,6 +49,20 @@ def _getenv(*names: str, default: str | None = None) -> str | None:
 
 
 def _try_parse_float(s: str) -> tuple[bool, float]:
+    """
+    Parse a string as float without raising.
+
+    Parameters
+    ----------
+    s
+        Input string.
+
+    Returns
+    -------
+    tuple[bool, float]
+        `(ok, value)` where `ok` indicates whether parsing succeeded.
+        On failure, `value` is `0.0`.
+    """
     try:
         return True, float(s)
     except Exception:
@@ -38,6 +70,21 @@ def _try_parse_float(s: str) -> tuple[bool, float]:
 
 
 def _getfloat(*names: str, default: float) -> float:
+    """
+    Read a float value from environment variables with fallback.
+
+    Parameters
+    ----------
+    *names
+        Environment variable names to check in order.
+    default
+        Fallback value when not set or not parseable.
+
+    Returns
+    -------
+    float
+        Parsed float value, or `default` when missing/invalid.
+    """
     v = _getenv(*names, default=None)
     if v is None:
         return float(default)
@@ -48,6 +95,21 @@ def _getfloat(*names: str, default: float) -> float:
 
 
 def _getint(*names: str, default: int) -> int:
+    """
+    Read an integer value from environment variables with fallback.
+
+    Parameters
+    ----------
+    *names
+        Environment variable names to check in order.
+    default
+        Fallback value when not set or not parseable.
+
+    Returns
+    -------
+    int
+        Parsed integer value, or `default` when missing/invalid.
+    """
     v = _getenv(*names, default=None)
     if v is None:
         return int(default)
@@ -66,18 +128,40 @@ def _gettimeout_pair(
     default_read: float,
 ) -> tuple[float, float]:
     """
-    Resolve (connect_timeout, read_timeout) from env with backward compatibility.
+    Resolve (connect_timeout, read_timeout) from environment variables.
 
-    Priority:
-      1) explicit connect/read envs
-      2) legacy single timeout envs (applies to both)
-      3) defaults
+    Parameters
+    ----------
+    connect_names
+        Environment variable names for connect timeout.
+    read_names
+        Environment variable names for read timeout.
+    legacy_names
+        Legacy single-timeout variable names. If set and parseable, the value may
+        apply to both connect/read depending on override rules.
+    default_connect
+        Default connect timeout in seconds.
+    default_read
+        Default read timeout in seconds.
+
+    Returns
+    -------
+    tuple[float, float]
+        `(connect_timeout, read_timeout)` in seconds.
+
+    Notes
+    -----
+    Priority order:
+    1) Explicit connect/read envs
+    2) Legacy single timeout env (applies to both, unless explicit connect/read was
+       successfully parsed)
+    3) Defaults
 
     Robustness:
-      - If an explicit connect/read env is present but NOT parseable as float,
-        we treat it as "not explicitly set" for the purpose of legacy override.
+    - If an explicit connect/read env exists but is not parseable as float, it is
+      treated as "not explicitly set" for legacy override purposes.
+    - A lower bound is applied: connect >= 0.5s, read >= 1.0s.
     """
-    # Read raw env strings first (so we can tell "present but invalid").
     c_raw = _getenv(*connect_names, default=None)
     r_raw = _getenv(*read_names, default=None)
 
@@ -115,15 +199,39 @@ def _gettimeout_pair(
 
 def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
     """
-    Create backend based on env.
+    Create an LLM backend based on environment variables.
 
-    Accepted env keys (backward compatible):
-      - BACKEND / LLMPATH_BACKEND / LPC_BACKEND
-        values: openai|gemini|ollama|local|offline
+    Parameters
+    ----------
+    seed
+        Optional seed for backends that support seeded generation.
 
-    Notes:
-      - We accept both LLMPATH_* and LPC_* prefixes for compatibility.
-      - For keys that exist in both, LPC_* takes priority, then standard vendor env, then LLMPATH_*.
+    Returns
+    -------
+    BaseLLMBackend
+        Instantiated backend.
+
+    Raises
+    ------
+    KeyError
+        If a required API key is missing for the selected backend.
+    ValueError
+        If the backend name is unknown.
+
+    Notes
+    -----
+    Backend selection envs (first non-empty wins):
+    - LPC_BACKEND, BACKEND, LLMPATH_BACKEND
+
+    Supported backends:
+    - "openai": uses OpenAI chat completions
+    - "gemini": uses Google Generative AI
+    - "ollama": uses Ollama HTTP API
+    - "local" / "offline": stub backend (no real generation)
+
+    Compatibility:
+    - Both "LLMPATH_*" and "LPC_*" prefixes are accepted for most settings.
+    - For overlapping keys, LPC_* is preferred over vendor env, then LLMPATH_*.
     """
     backend = (
         _getenv(
@@ -193,7 +301,7 @@ def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
         return LocalLLMBackend()
 
     raise ValueError(
-        f"Unknown backend={backend!r} (expected: openai|gemini|ollama|local). "
+        f"Unknown backend={backend!r} (expected: openai|gemini|ollama|local|offline). "
         "Set: LPC_BACKEND or BACKEND or LLMPATH_BACKEND."
     )
 
@@ -202,32 +310,131 @@ class BaseLLMBackend(ABC):
     """
     Backend-agnostic LLM interface.
 
-    Contract:
-      - Input: prompt string
-      - Output:
-          - json_mode=False: a single string (free-form). On error, implementations MAY return
-            a human-readable string or a standardized soft error JSON.
-          - json_mode=True: MUST return either:
-              (a) a valid JSON string parseable by json.loads, OR
-              (b) a standardized soft error JSON string:
-                  {"error": {"message": "...", "type": "...", "retryable": true/false}}
+    This class defines a minimal contract for generating text or JSON strings.
+
+    Contract
+    --------
+    Input
+        prompt : str
+
+    Output
+        json_mode=False
+            Returns a single string (free-form). Implementations may return a
+            human-readable error string on failure.
+        json_mode=True
+            Must return either:
+            (a) a valid JSON string parseable by `json.loads`, or
+            (b) a standardized soft error JSON string:
+                {"error": {"message": "...", "type": "...", "retryable": true/false}}
+
+    Notes
+    -----
+    Convenience aliases are provided (`invoke`, `call`, `complete`, `chat`, and
+    `*_json` helpers). Subclasses should implement `generate`.
     """
 
     @abstractmethod
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        """
+        Generate a completion for a given prompt.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        json_mode
+            If True, the backend must return a JSON string (or a standardized soft
+            error JSON). If False, free-form text is allowed.
+
+        Returns
+        -------
+        str
+            Model output. See class-level contract for json_mode behavior.
+
+        Raises
+        ------
+        NotImplementedError
+            If the backend does not implement this method.
+        """
         raise NotImplementedError
 
     def invoke(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Invoke the backend with a prompt (alias for `generate`).
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments. `json_mode` is recognized.
+
+        Returns
+        -------
+        str
+            Model output string.
+        """
         json_mode = bool(kwargs.get("json_mode", False))
         return self.generate(str(prompt), json_mode=json_mode)
 
     def call(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Alias for `invoke`.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments.
+
+        Returns
+        -------
+        str
+            Model output string.
+        """
         return self.invoke(prompt, **kwargs)
 
     def complete(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Alias for `invoke`.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments.
+
+        Returns
+        -------
+        str
+            Model output string.
+        """
         return self.invoke(prompt, **kwargs)
 
     def chat(self, messages: Any, **kwargs: Any) -> str:
+        """
+        Best-effort chat wrapper.
+
+        Parameters
+        ----------
+        messages
+            Chat-like messages. Typically a list of dicts or strings. If a list is
+            provided, the last element's "content" field (if dict) is used as prompt.
+        **kwargs
+            Optional keyword arguments passed to `invoke`.
+
+        Returns
+        -------
+        str
+            Model output string.
+
+        Notes
+        -----
+        This is intentionally lightweight and is not a full chat protocol
+        implementation. It extracts a prompt and delegates to `invoke`.
+        """
         prompt = ""
         try:
             if isinstance(messages, list) and messages:
@@ -244,24 +451,97 @@ class BaseLLMBackend(ABC):
 
     # JSON helper names (optional)
     def chat_json(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Generate JSON output from a prompt (chat-style helper).
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments (ignored except for future compatibility).
+
+        Returns
+        -------
+        str
+            JSON string or standardized soft error JSON string.
+        """
         return self.generate(str(prompt), json_mode=True)
 
     def complete_json(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Generate JSON output from a prompt (completion-style helper).
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments (ignored except for future compatibility).
+
+        Returns
+        -------
+        str
+            JSON string or standardized soft error JSON string.
+        """
         return self.generate(str(prompt), json_mode=True)
 
     def generate_json(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Generate JSON output from a prompt (explicit helper).
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments (ignored except for future compatibility).
+
+        Returns
+        -------
+        str
+            JSON string or standardized soft error JSON string.
+        """
         return self.generate(str(prompt), json_mode=True)
 
     def json(self, prompt: str, **kwargs: Any) -> str:
+        """
+        Alias for JSON generation helpers.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        **kwargs
+            Optional keyword arguments.
+
+        Returns
+        -------
+        str
+            JSON string or standardized soft error JSON string.
+        """
         return self.generate(str(prompt), json_mode=True)
 
 
 def _is_soft_error_json(s: str) -> bool:
     """
-    Detect a standardized soft error JSON payload.
+    Detect whether a string is a standardized soft error JSON payload.
 
-    Standard:
-      {"error": {"message": "...", "type": "...", "retryable": true/false}}
+    Parameters
+    ----------
+    s
+        Candidate JSON string.
+
+    Returns
+    -------
+    bool
+        True if `s` parses to a dict with key "error" containing at least a
+        string "message" field, otherwise False.
+
+    Notes
+    -----
+    Standard payload shape:
+    {"error": {"message": "...", "type": "...", "retryable": true/false}}
     """
     try:
         obj = json.loads(s)
@@ -280,6 +560,26 @@ def _soft_error_json(
     retryable: bool = False,
     extra: dict[str, Any] | None = None,
 ) -> str:
+    """
+    Build a standardized soft error JSON payload.
+
+    Parameters
+    ----------
+    message
+        Human-readable error message.
+    err_type
+        Error type identifier.
+    retryable
+        Whether the error is considered retryable.
+    extra
+        Optional extra metadata to embed under "error.extra". Caller should keep
+        this small and JSON-serializable.
+
+    Returns
+    -------
+    str
+        JSON string with the standardized error schema.
+    """
     payload: dict[str, Any] = {
         "error": {"message": str(message), "type": str(err_type), "retryable": bool(retryable)}
     }
@@ -291,7 +591,18 @@ def _soft_error_json(
 
 def _extract_retryable_from_soft_error(s: str) -> tuple[bool, str]:
     """
-    Returns (retryable, message) if s is a soft error JSON; otherwise (False, "").
+    Extract retryability and message from a soft error JSON string.
+
+    Parameters
+    ----------
+    s
+        Candidate JSON string.
+
+    Returns
+    -------
+    tuple[bool, str]
+        `(retryable, message)` if `s` matches the standardized soft error schema.
+        Otherwise returns `(False, "")`.
     """
     try:
         obj = json.loads(s)
@@ -309,22 +620,36 @@ def _extract_retryable_from_soft_error(s: str) -> tuple[bool, str]:
 
 def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
     """
-    Exponential backoff retries for backend calls.
+    Decorator factory for exponential backoff retries on backend calls.
 
-    Retries on:
-      - retryable exceptions (heuristics)
-      - plain-text soft errors (legacy): "OpenAI Error: ...", "Gemini Error: ...",
-        "Ollama Error: ..."
-      - standardized soft error JSON payloads: {"error": {...}}
-      - json_mode parse failures (at most one retry)
+    Parameters
+    ----------
+    retries
+        Maximum number of retry attempts (not counting the initial call).
+    backoff_in_seconds
+        Base backoff duration in seconds. Sleep time grows as:
+        `backoff_in_seconds * 2**attempt`, with small jitter.
 
-    Notes:
-      - json_mode is inferred from kwargs OR (self, prompt, json_mode) positional ABI.
-      - In json_mode, we prefer standardized soft error JSON; non-JSON outputs are treated
-        as parse failures and may be retried once.
-      - If a backend returns None (contract violation), we normalize to a standardized soft error.
+    Returns
+    -------
+    callable
+        A decorator that wraps a function and retries under certain conditions.
+
+    Retry conditions
+    ----------------
+    - Retryable exceptions inferred by message heuristics (status/keywords).
+    - Legacy plain-text soft errors:
+      "OpenAI Error: ...", "Gemini Error: ...", "Ollama Error: ..."
+    - Standardized soft error JSON payloads:
+      {"error": {"message": "...", "type": "...", "retryable": ...}}
+    - When json_mode=True: invalid JSON outputs are treated as parse failures
+      and retried at most once.
+
+    Notes
+    -----
+    `json_mode` is inferred from kwargs (`json_mode=`) or from positional ABI:
+    (self, prompt, json_mode=False) when present.
     """
-
     NON_RETRYABLE_PATTERNS = [
         "401",
         "403",
@@ -452,9 +777,44 @@ def retry_with_backoff(retries: int = 3, backoff_in_seconds: float = 1.0):
 
 
 class GeminiBackend(BaseLLMBackend):
+    """
+    Google Gemini backend via `google-generativeai`.
+
+    Parameters
+    ----------
+    api_key
+        Gemini API key.
+    model_name
+        Gemini model identifier (e.g., "models/gemini-2.0-flash").
+    temperature
+        Sampling temperature.
+
+    Notes
+    -----
+    - In json_mode, response is requested with MIME type "application/json" and
+      validated. Non-JSON output is converted to standardized soft error JSON.
+    """
+
     def __init__(
         self, api_key: str, model_name: str = "models/gemini-2.0-flash", temperature: float = 0.0
     ):
+        """
+        Initialize the Gemini backend.
+
+        Parameters
+        ----------
+        api_key
+            Gemini API key.
+        model_name
+            Gemini model identifier.
+        temperature
+            Sampling temperature.
+
+        Raises
+        ------
+        ImportError
+            If `google-generativeai` is not installed.
+        """
         try:
             import google.generativeai as genai
         except ImportError as e:
@@ -466,6 +826,22 @@ class GeminiBackend(BaseLLMBackend):
 
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        """
+        Generate a completion using Gemini.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        json_mode
+            If True, attempts to enforce JSON output and validates with `json.loads`.
+
+        Returns
+        -------
+        str
+            Free-form text (json_mode=False), or a JSON string / standardized soft
+            error JSON (json_mode=True).
+        """
         try:
             if json_mode:
                 generation_config = {
@@ -503,9 +879,49 @@ class GeminiBackend(BaseLLMBackend):
 
 
 class OpenAIBackend(BaseLLMBackend):
+    """
+    OpenAI backend using the `openai` Python SDK (chat completions).
+
+    Parameters
+    ----------
+    api_key
+        OpenAI API key.
+    model_name
+        Model name (e.g., "gpt-4o").
+    temperature
+        Sampling temperature.
+    seed
+        Seed used when supported by the API/model. If seeding fails, a fallback
+        call without seed is attempted.
+
+    Notes
+    -----
+    - In json_mode, `response_format={"type": "json_object"}` is used and output is
+      validated. Non-JSON output is converted to standardized soft error JSON.
+    """
+
     def __init__(
         self, api_key: str, model_name: str = "gpt-4o", temperature: float = 0.0, seed: int = 42
     ):
+        """
+        Initialize the OpenAI backend.
+
+        Parameters
+        ----------
+        api_key
+            OpenAI API key.
+        model_name
+            Model name.
+        temperature
+            Sampling temperature.
+        seed
+            Seed value for deterministic sampling when supported.
+
+        Raises
+        ------
+        ImportError
+            If the `openai` package is not installed.
+        """
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -518,6 +934,27 @@ class OpenAIBackend(BaseLLMBackend):
 
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        """
+        Generate a completion using OpenAI chat completions.
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        json_mode
+            If True, requests JSON object output and validates with `json.loads`.
+
+        Returns
+        -------
+        str
+            Free-form text (json_mode=False), or a JSON string / standardized soft
+            error JSON (json_mode=True).
+
+        Notes
+        -----
+        If the seeded call fails, a second call without seed is attempted.
+        """
+
         def _call(with_seed: bool) -> str:
             kwargs: dict[str, Any] = {
                 "model": self.model_name,
@@ -574,6 +1011,28 @@ class OpenAIBackend(BaseLLMBackend):
 
 
 class OllamaBackend(BaseLLMBackend):
+    """
+    Ollama backend using HTTP API (`/api/generate`) via urllib.
+
+    Parameters
+    ----------
+    host
+        Ollama server base URL (e.g., "http://ollama:11434").
+    model_name
+        Ollama model name (e.g., "llama3.1:8b").
+    temperature
+        Sampling temperature.
+    timeout
+        Legacy single timeout (seconds) applied to both connect/read timeouts.
+
+    Notes
+    -----
+    - urllib accepts a single timeout value. This implementation stores both
+      connect/read timeouts but uses read_timeout for urllib's timeout.
+    - In json_mode, payload includes "format": "json" and output is validated.
+      Non-JSON output is converted to standardized soft error JSON.
+    """
+
     def __init__(
         self,
         host: str | None = None,
@@ -581,6 +1040,29 @@ class OllamaBackend(BaseLLMBackend):
         temperature: float | None = None,
         timeout: float | None = None,
     ):
+        """
+        Initialize the Ollama backend.
+
+        Parameters
+        ----------
+        host
+            Base URL for Ollama server. If None, falls back to env defaults.
+        model_name
+            Model name. If None, falls back to env defaults.
+        temperature
+            Sampling temperature. If None, falls back to env default.
+        timeout
+            Legacy single timeout applied to both connect/read.
+
+        Notes
+        -----
+        Timeout resolution supports:
+        - New envs:
+          LPC_OLLAMA_CONNECT_TIMEOUT / LLMPATH_OLLAMA_CONNECT_TIMEOUT
+          LPC_OLLAMA_READ_TIMEOUT / LLMPATH_OLLAMA_READ_TIMEOUT
+        - Legacy env:
+          LPC_OLLAMA_TIMEOUT / LLMPATH_OLLAMA_TIMEOUT
+        """
         host = (
             host
             if host is not None
@@ -621,16 +1103,27 @@ class OllamaBackend(BaseLLMBackend):
     @retry_with_backoff(retries=3)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
         """
-        Ollama backend call.
+        Generate a completion using Ollama `/api/generate`.
 
-        Contract:
-          - Always returns a string.
-          - If json_mode=True: returns a valid JSON string OR standardized soft error JSON.
-          - If json_mode=False: returns free-form text (best-effort), OR legacy "Ollama Error: ...".
+        Parameters
+        ----------
+        prompt
+            Input prompt string.
+        json_mode
+            If True, requests JSON output and validates with `json.loads`.
 
-        Notes:
-          - urllib timeout is a SINGLE float seconds (cannot separate connect/read).
-          - We keep connect_timeout for documentation/metadata only.
+        Returns
+        -------
+        str
+            Free-form text (json_mode=False), or a JSON string / standardized soft
+            error JSON (json_mode=True).
+
+        Notes
+        -----
+        - Adaptive read-timeout escalation is applied on timeout errors:
+          `read_timeout *= factor` up to a max, for a limited number of escalations.
+        - connect_timeout is stored for metadata/documentation only and is not used by
+          urllib (single-timeout limitation).
         """
         url = f"{self.host}/api/generate"
         payload: dict[str, Any] = {
@@ -733,7 +1226,34 @@ class OllamaBackend(BaseLLMBackend):
 
 
 class LocalLLMBackend(BaseLLMBackend):
+    """
+    Local/offline backend stub.
+
+    This backend does not perform real generation. It exists to support offline
+    workflows and testing paths.
+
+    Notes
+    -----
+    - In json_mode, returns a standardized soft error JSON payload.
+    - In text mode, returns a human-readable placeholder string.
+    """
+
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        """
+        Return a placeholder response (local/offline stub).
+
+        Parameters
+        ----------
+        prompt
+            Input prompt string (ignored).
+        json_mode
+            If True, returns standardized soft error JSON.
+
+        Returns
+        -------
+        str
+            Placeholder text or standardized soft error JSON.
+        """
         if json_mode:
             return _soft_error_json(
                 "Local backend not implemented", err_type="local_pending", retryable=False

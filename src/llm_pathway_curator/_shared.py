@@ -45,8 +45,25 @@ GENE_JOIN_DELIM = ";"
 
 def is_na_token(s: object) -> bool:
     """
-    Spec-level NA token check (case-insensitive).
-    Keep this centralized to avoid contract drift.
+    Check whether a value represents an NA token (case-insensitive).
+
+    This is a spec-level helper used across parsing and TSV round-trips.
+    The NA vocabulary is centralized to prevent contract drift.
+
+    Parameters
+    ----------
+    s : object
+        Input value.
+
+    Returns
+    -------
+    bool
+        True if `s` is None or its trimmed lowercase string form is in the
+        NA token set.
+
+    Notes
+    -----
+    This function treats empty strings as NA.
     """
     if s is None:
         return True
@@ -66,12 +83,27 @@ def join_id_list_tsv(ids: list[object], *, delim: str = ID_JOIN_DELIM) -> str:
     """
     Join generic identifiers into a TSV-friendly string.
 
-    Policy:
-      - strip whitespace
-      - drop empty/NA tokens
-      - preserve order (do NOT sort)
-      - do NOT apply gene-specific cleaning (clean_gene_token), to avoid over-normalization
+    The join is stable and order-preserving. This function is intentionally
+    *not* gene-aware to avoid over-normalization at the spec boundary.
+
+    Parameters
+    ----------
+    ids : list of object
+        Identifiers to join. None/empty/NA-like tokens are dropped.
+    delim : str, optional
+        Delimiter for joining. Default is `ID_JOIN_DELIM`.
+
+    Returns
+    -------
+    str
+        Joined identifier string.
+
+    Notes
+    -----
+    - Preserves input order (no sorting).
+    - Does not apply `clean_gene_token()`.
     """
+
     xs: list[str] = []
     for x in ids or []:
         if x is None:
@@ -85,9 +117,22 @@ def join_id_list_tsv(ids: list[object], *, delim: str = ID_JOIN_DELIM) -> str:
 
 def strip_excel_text_prefix(s: object) -> str:
     """
-    Excel-safe text fields sometimes start with a single quote.
-    Strip it for downstream parsing (e.g., json.loads).
+    Strip the Excel "force text" prefix from a value.
+
+    Excel-safe exports sometimes prefix values with a single quote (').
+    This helper removes one leading quote to support downstream parsing.
+
+    Parameters
+    ----------
+    s : object
+        Input value.
+
+    Returns
+    -------
+    str
+        Cleaned string without a single leading quote.
     """
+
     ss = str(s or "").strip()
     if ss.startswith("'") and len(ss) > 1:
         return ss[1:].strip()
@@ -96,8 +141,19 @@ def strip_excel_text_prefix(s: object) -> str:
 
 def excel_force_text(s: object) -> str:
     """
-    Force Excel to treat a field as Text by prefixing a single quote.
+    Prefix a value with a single quote to force Excel to treat it as text.
+
+    Parameters
+    ----------
+    s : object
+        Input value.
+
+    Returns
+    -------
+    str
+        Excel-safe text representation. Empty input returns "".
     """
+
     txt = str(s or "")
     if not txt:
         return ""
@@ -106,12 +162,25 @@ def excel_force_text(s: object) -> str:
 
 def excel_safe_ids(x: object, *, list_sep: str = ID_JOIN_DELIM) -> str:
     """
-    Make an ID field safe for Excel:
-      - Accept list-like or scalar.
-      - Parse with parse_id_list (spec-level).
-      - Join with list_sep.
-      - Prefix with a single quote to force Text in Excel.
+    Convert an ID field into an Excel-safe, TSV-friendly text string.
+
+    This helper accepts either scalar or list-like inputs, parses them via
+    `parse_id_list()`, joins the IDs with `list_sep`, and prefixes a single
+    quote to force Excel "Text" interpretation.
+
+    Parameters
+    ----------
+    x : object
+        Scalar or list-like ID field.
+    list_sep : str, optional
+        Join delimiter for the ID list. Default is `ID_JOIN_DELIM`.
+
+    Returns
+    -------
+    str
+        Excel-safe text value. Returns "" if the input is NA-like or empty.
     """
+
     if is_na_scalar(x):
         return ""
 
@@ -134,20 +203,48 @@ ALLOWED_STATUSES = {"PASS", "ABSTAIN", "FAIL"}
 
 def normalize_status_str(x: object) -> str:
     """
-    Normalize a status scalar to canonical uppercase string.
-    NOTE:
-      - This function does NOT validate membership in ALLOWED_STATUSES.
-      - Call validate_status_values() after normalization when strictness is required.
+    Normalize a status value into canonical uppercase text.
+
+    Parameters
+    ----------
+    x : object
+        Input scalar.
+
+    Returns
+    -------
+    str
+        Uppercased, trimmed string.
+
+    Notes
+    -----
+    This function does not validate membership in `ALLOWED_STATUSES`.
+    Use `validate_status_values()` for strict checking.
     """
+
     s = str(x or "").strip().upper()
     return s
 
 
 def normalize_status_series(s: pd.Series) -> pd.Series:
     """
-    Normalize a status column to uppercase strings (vectorized).
-    NOTE: pd.NA/NaN become strings after astype(str); validation must catch them.
+    Normalize a pandas Series of statuses to uppercase strings.
+
+    Parameters
+    ----------
+    s : pandas.Series
+        Input series.
+
+    Returns
+    -------
+    pandas.Series
+        Series with string dtype, trimmed and uppercased.
+
+    Notes
+    -----
+    NA values may become strings (e.g., "nan") after `astype(str)`.
+    Always validate with `validate_status_values()` when needed.
     """
+
     return s.astype(str).str.strip().str.upper()
 
 
@@ -170,15 +267,28 @@ ALLOWED_GATE_MODES = {"off", "note", "hard"}
 
 def normalize_gate_mode(x: object, *, default: str = "note") -> str:
     """
-    Normalize gate mode to canonical vocabulary: off|note|hard.
+    Normalize a gate mode to canonical vocabulary: {"off", "note", "hard"}.
 
-    Accepted (synonyms / legacy):
-      - off: off, none, disable, disabled
-      - note: note, warn, warning, soft
-      - hard: hard, strict, abstain, on, enable, enabled
+    Parameters
+    ----------
+    x : object
+        Input value (canonical, synonym, or legacy form).
+    default : str, optional
+        Default to use when `x` is empty. If invalid, falls back to "note".
 
-    Unknown values fall back to normalized default; if default is invalid -> "note".
+    Returns
+    -------
+    str
+        Canonical gate mode: "off", "note", or "hard".
+
+    Notes
+    -----
+    Accepted synonyms include:
+    - off: off, none, disable, disabled
+    - note: note, warn, warning, soft
+    - hard: hard, strict, abstain, on, enable, enabled
     """
+
     s = ("" if x is None else str(x)).strip().lower()
     if not s:
         s = str(default).strip().lower()
@@ -211,8 +321,27 @@ ID_TOKEN_RE = re.compile(ID_TOKEN_RE_STR)
 
 def is_na_scalar(x: object) -> bool:
     """
-    pd.isna is unsafe for list-like; only treat scalars as NA here.
+    Determine whether a value should be treated as NA *as a scalar*.
+
+    This function avoids calling `pandas.isna` on list-like containers
+    because it can return array-like results and break boolean contexts.
+
+    Parameters
+    ----------
+    x : object
+        Input value.
+
+    Returns
+    -------
+    bool
+        True if `x` is a scalar NA value (or None). Containers return False.
+
+    Notes
+    -----
+    Strings like "na"/"nan" are not treated as scalar NA here; use
+    `is_na_token()` for token-level NA checks.
     """
+
     if x is None:
         return True
     if isinstance(x, (list, tuple, set, dict)):
@@ -225,8 +354,23 @@ def is_na_scalar(x: object) -> bool:
 
 def dedup_preserve_order(items: list[str]) -> list[str]:
     """
-    Deterministic de-duplication while preserving first occurrence order.
+    De-duplicate strings while preserving first occurrence order.
+
+    Parameters
+    ----------
+    items : list of str
+        Input tokens.
+
+    Returns
+    -------
+    list of str
+        Deduplicated tokens in first-seen order.
+
+    Notes
+    -----
+    Empty strings are ignored.
     """
+
     seen: set[str] = set()
     out: list[str] = []
     for x in items:
@@ -238,22 +382,33 @@ def dedup_preserve_order(items: list[str]) -> list[str]:
 
 def parse_id_list(x: object) -> list[str]:
     """
-    Parse generic ID fields (term_ids, gene_ids, etc.) into list[str].
+    Parse a generic ID field into a list of strings.
 
+    This is a tolerant parser for ID-like fields (term IDs, module IDs,
+    gene IDs when treated as IDs, etc.). It is intentionally separate from
+    `parse_genes()`, which is more gene-token-aware.
+
+    Parameters
+    ----------
+    x : object
+        Scalar or list-like input.
+
+    Returns
+    -------
+    list of str
+        Parsed IDs in deterministic order.
+
+    Notes
+    -----
     Policy:
-      - NA scalars -> []
-      - list/tuple/set -> preserve order (dedup)
-      - string -> split on strong delimiters first: ',', ';', '|', '\\t', '\\n'
-      - whitespace split ONLY if all tokens look identifier-like (to avoid destructive splits)
-      - normalize whitespace/newlines/tabs
-      - drop NA tokens and empties
-      - deterministic de-duplication (preserve first-seen order)
-
-    NOTE:
-      This is intentionally separate from parse_genes():
-        - parse_genes() is conservative and gene-token-aware
-        - parse_id_list() is generic/tolerant for ID-like fields
+    - NA scalars -> []
+    - list/tuple -> preserve order (dedup)
+    - set -> sorted for determinism (dedup)
+    - string -> split on strong delimiters first: ',', ';', '|'
+    - whitespace split only if all tokens look identifier-like
+    - drop NA tokens and empties
     """
+
     if is_na_scalar(x):
         return []
 
@@ -308,10 +463,21 @@ def clean_gene_token(g: object) -> str:
     """
     Clean a single gene-like token conservatively.
 
-    NOTE: Do NOT force uppercase.
-      - Mouse gene symbols can be case-sensitive (e.g., Trp53).
-      - Ensembl/other IDs may appear in mixed case.
-    Canonicalization beyond trimming should be an explicit, opt-in mapping step.
+    Parameters
+    ----------
+    g : object
+        Gene-like token.
+
+    Returns
+    -------
+    str
+        Cleaned token.
+
+    Notes
+    -----
+    - Trims whitespace and strips simple quote wrappers.
+    - Removes common list/export wrappers (brackets, trailing separators).
+    - Does NOT force uppercase (species/ID-system dependent).
     """
     s = str(g).strip().strip('"').strip("'")
     s = " ".join(s.split())
@@ -326,15 +492,25 @@ def clean_gene_token(g: object) -> str:
 
 def split_gene_string(s: str) -> list[str]:
     """
-    Split a gene string into tokens with conservative rules.
+    Split a gene string into candidate tokens using conservative rules.
 
-    Supports common real-world formats:
-      - "A,B,C"
-      - "A;B;C"
-      - "A|B|C"
-      - "A/B/C" (last-resort, only when no other delimiter present)
-      - "['A', 'B']" / '["A","B"]' / "{A,B}"
-      - whitespace separated (ONLY if all tokens look gene-like)
+    Parameters
+    ----------
+    s : str
+        Input gene string.
+
+    Returns
+    -------
+    list of str
+        Token candidates (not yet fully cleaned).
+
+    Notes
+    -----
+    Supported formats:
+    - Comma/semicolon/pipe separated: "A,B", "A;B", "A|B"
+    - Bracketed lists: "['A','B']", '["A","B"]', "{A,B}"
+    - Slash-separated as a last resort: "A/B/C"
+    - Whitespace-separated only if all tokens look gene-like
     """
     s = str(s).strip()
     if not s:
@@ -381,13 +557,25 @@ def split_gene_string(s: str) -> list[str]:
 
 def parse_genes(x: object) -> list[str]:
     """
-    Parse evidence genes from messy inputs into a list[str].
+    Parse evidence genes from messy inputs into a list of cleaned tokens.
 
+    Parameters
+    ----------
+    x : object
+        Scalar or list-like gene field.
+
+    Returns
+    -------
+    list of str
+        Cleaned gene tokens, deduplicated in first-seen order.
+
+    Notes
+    -----
     Rules:
-      - NA scalars -> []
-      - list/tuple/set -> cleaned tokens
-      - string -> split conservatively -> cleaned tokens
-      - de-duplicate while preserving order
+    - NA scalars -> []
+    - list/tuple -> cleaned per-token
+    - set -> sorted for determinism, then cleaned
+    - string -> split conservatively via `split_gene_string()`
     """
     if is_na_scalar(x):
         return []
@@ -416,8 +604,19 @@ def normalize_direction(x: object) -> str:
     """
     Normalize direction vocabulary across schema/distill/audit/select.
 
-    Output:
-      - "up" / "down" / "na"
+    Parameters
+    ----------
+    x : object
+        Input scalar.
+
+    Returns
+    -------
+    str
+        One of {"up", "down", "na"}.
+
+    Notes
+    -----
+    This is a lightweight normalizer. Unrecognized values map to "na".
     """
     if is_na_scalar(x):
         return "na"
@@ -451,11 +650,29 @@ def normalize_direction(x: object) -> str:
 
 def seed_for_term(seed: int | None, term_uid: str, term_row_id: int | None = None) -> int:
     """
-    Order-invariant deterministic seed derived from (seed, term_uid, term_row_id).
+    Create a deterministic per-term integer seed.
 
-    NOTE:
-      - Using blake2b for stable cross-platform hashing.
-      - term_row_id avoids collisions when term_uid duplicates exist.
+    The seed is derived from `(seed, term_uid, term_row_id)` using a stable
+    hash to keep RNG streams reproducible across platforms.
+
+    Parameters
+    ----------
+    seed : int or None
+        Optional base seed. None maps to 0.
+    term_uid : str
+        Stable term identifier (e.g., "<source>:<term_id>").
+    term_row_id : int or None, optional
+        Optional row identifier to avoid collisions for duplicate term_uids.
+
+    Returns
+    -------
+    int
+        Deterministic unsigned integer seed.
+
+    Raises
+    ------
+    ValueError
+        If `term_row_id` cannot be converted to int (when provided).
     """
     base = 0 if seed is None else int(seed)
     h = hashlib.blake2b(digest_size=8)
@@ -477,14 +694,24 @@ STRESS_TAG_DELIM = ","
 
 def split_tags(s: object, *, delim: str = STRESS_TAG_DELIM) -> list[str]:
     """
-    Split a stress_tag string into normalized tags.
+    Split a stress tag string into normalized tags.
 
-    Spec:
-      - canonical delimiter is comma
-      - tolerate legacy '+' as an additional delimiter
-      - trim whitespace
-      - drop empty tokens
-      - de-duplicate while preserving order
+    Parameters
+    ----------
+    s : object
+        Input scalar tag string.
+    delim : str, optional
+        Canonical delimiter. Default is `STRESS_TAG_DELIM` (comma).
+
+    Returns
+    -------
+    list of str
+        Tags in first-seen order.
+
+    Notes
+    -----
+    - Canonical delimiter is comma.
+    - Legacy '+' is tolerated as an additional delimiter.
     """
     if s is None:
         return []
@@ -502,13 +729,23 @@ def split_tags(s: object, *, delim: str = STRESS_TAG_DELIM) -> list[str]:
 
 def join_tags(tags: list[object], *, delim: str = STRESS_TAG_DELIM) -> str:
     """
-    Join tags into canonical stress_tag string.
+    Join tags into a canonical stress tag string.
 
-    Spec:
-      - trim
-      - drop empties
-      - preserve first-seen order
-      - join with canonical delimiter
+    Parameters
+    ----------
+    tags : list of object
+        Tag tokens.
+    delim : str, optional
+        Join delimiter. Default is `STRESS_TAG_DELIM` (comma).
+
+    Returns
+    -------
+    str
+        Canonical tag string.
+
+    Notes
+    -----
+    Trims whitespace, drops empties, and de-duplicates in first-seen order.
     """
     cleaned: list[str] = []
     for t in tags or []:
@@ -531,8 +768,17 @@ _HEX12_RE = re.compile(r"^[0-9a-f]{12}$")
 
 def looks_like_12hex(x: object) -> bool:
     """
-    True iff x is exactly 12 lowercase hex chars.
-    Used for tool-owned IDs/hashes (sha256[:12]).
+    Check whether a value is exactly 12 lowercase hex characters.
+
+    Parameters
+    ----------
+    x : object
+        Input value.
+
+    Returns
+    -------
+    bool
+        True if `x` matches the 12-hex pattern (lowercase).
     """
     if x is None:
         return False
@@ -542,24 +788,41 @@ def looks_like_12hex(x: object) -> bool:
 
 def sha256_12hex(payload: str) -> str:
     """
-    Deterministic short hash used across layers (sha256[:12]).
-    Payload must be a stable string representation.
+    Compute a deterministic short SHA-256 hash (first 12 hex chars).
+
+    Parameters
+    ----------
+    payload : str
+        Stable string payload.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex digest.
     """
     return hashlib.sha256(str(payload).encode("utf-8")).hexdigest()[:12]
 
 
 def hash_gene_set_12hex(genes: list[object]) -> str:
     """
-    Gene-set fingerprint (12-hex), set-stable and trim-only.
+    Compute a set-stable gene-set fingerprint (12-hex), preserving case.
 
+    Parameters
+    ----------
+    genes : list of object
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
     Policy:
-      - order-invariant
-      - dedup
-      - trim/unwrap via clean_gene_token
-      - NO forced uppercasing (species/ID-system dependent)
-
-    NOTE:
-      This is the "evidence identity" hash and should match distill/modules intent.
+    - order-invariant (set-stable)
+    - `clean_gene_token()` per token
+    - no forced uppercasing (species/ID dependent)
     """
     uniq = sorted({clean_gene_token(g) for g in genes if g is not None and str(g).strip()})
     payload = ",".join([g for g in uniq if g])
@@ -568,20 +831,43 @@ def hash_gene_set_12hex(genes: list[object]) -> str:
 
 def norm_gene_id_upper(g: object) -> str:
     """
-    Explicit uppercase normalization for gene IDs/symbols.
+    Normalize a gene token by applying conservative cleaning and uppercasing.
 
-    IMPORTANT:
-      - This is an opt-in policy for legacy compatibility in layers that already case-fold.
-      - Default parsing/hash helpers in _shared remain "preserve-case" by default.
+    Parameters
+    ----------
+    g : object
+        Gene token.
+
+    Returns
+    -------
+    str
+        Cleaned and uppercased token.
+
+    Notes
+    -----
+    This is opt-in for legacy compatibility. The default spec policy in this
+    module is to preserve case.
     """
     return clean_gene_token(g).upper()
 
 
 def hash_gene_set_12hex_upper(genes: list[object]) -> str:
     """
-    Legacy-compatible gene-set fingerprint (12-hex), set-stable and UPPERCASE-normalized.
+    Compute a legacy-compatible gene-set fingerprint (12-hex), uppercasing IDs.
 
-    Use this ONLY when you must match older outputs that case-folded gene IDs.
+    Parameters
+    ----------
+    genes : list of object
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    Use only when you must match older outputs that case-folded gene IDs.
     """
     uniq = sorted({norm_gene_id_upper(g) for g in genes if g is not None and str(g).strip()})
     payload = ",".join([g for g in uniq if g])
@@ -590,11 +876,17 @@ def hash_gene_set_12hex_upper(genes: list[object]) -> str:
 
 def canonical_sorted_unique(xs: list[object]) -> list[str]:
     """
-    Stable canonicalization for ID payloads:
-      - strip
-      - drop empty/NA tokens
-      - dedup
-      - sort
+    Canonicalize a list of values into sorted unique strings.
+
+    Parameters
+    ----------
+    xs : list of object
+        Input values.
+
+    Returns
+    -------
+    list of str
+        Sorted unique tokens after trimming and NA filtering.
     """
     out = []
     for x in xs:
@@ -609,12 +901,19 @@ def canonical_sorted_unique(xs: list[object]) -> list[str]:
 
 def make_term_uid(source: object, term_id: object) -> str:
     """
-    Single source of truth for term_uid construction.
+    Construct a stable `term_uid` from `(source, term_id)`.
 
-    Contract:
-      term_uid := "<source>:<term_id>" with conservative trimming.
-      - empty source -> "unknown"
-      - term_id is required (caller should ensure non-empty)
+    Parameters
+    ----------
+    source : object
+        Term source (e.g., "fgsea", "metascape"). Empty maps to "unknown".
+    term_id : object
+        Term identifier. Caller should ensure it is non-empty.
+
+    Returns
+    -------
+    str
+        Term UID formatted as "<source>:<term_id>".
     """
     s = "" if source is None else str(source).strip()
     if not s or is_na_token(s):
@@ -625,13 +924,21 @@ def make_term_uid(source: object, term_id: object) -> str:
 
 def hash_set_12hex(items: list[object]) -> str:
     """
-    Generic set fingerprint (12-hex), set-stable and trim-only.
+    Compute a generic set-stable fingerprint (12-hex) from a list of items.
 
-    Policy:
-      - order-invariant
-      - dedup
-      - strip
-      - drop empty/NA-like tokens (shared NA_TOKENS)
+    Parameters
+    ----------
+    items : list of object
+        Input items.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    Trims tokens, drops NA-like values, de-duplicates, sorts, then hashes.
     """
     uniq = canonical_sorted_unique(items)
     payload = ",".join(uniq)
@@ -640,13 +947,25 @@ def hash_set_12hex(items: list[object]) -> str:
 
 def module_hash_content12(terms: list[object], genes: list[object]) -> str:
     """
-    Module content hash binds module identity to BOTH term set and gene set (12-hex).
+    Compute a module content hash binding both term set and gene set (12-hex).
 
-    Spec:
-      - terms: canonical_sorted_unique (no uppercasing)
-      - genes: same canonicalization policy as hash_gene_set_12hex
-              (clean_gene_token + drop empties/NA + sort/dedup; NO uppercasing)
-      - payload format is stable and explicit
+    Parameters
+    ----------
+    terms : list of object
+        Term identifiers.
+    genes : list of object
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        12-character lowercase hex fingerprint.
+
+    Notes
+    -----
+    - Terms: `canonical_sorted_unique()` (no uppercasing)
+    - Genes: `clean_gene_token()` + drop NA/empty + sort/dedup (no uppercasing)
+    - Payload format is stable and explicit to prevent ambiguity.
     """
     t = canonical_sorted_unique(terms)
 
@@ -672,25 +991,54 @@ def module_hash_content12(terms: list[object], genes: list[object]) -> str:
 
 def stable_json_dumps(obj: object) -> str:
     """
-    Deterministic JSON serialization for hashing/provenance.
-    - sort_keys=True for stable dict ordering
-    - separators to avoid whitespace instability
+    Serialize an object to deterministic JSON for hashing/provenance.
+
+    Parameters
+    ----------
+    obj : object
+        JSON-serializable object.
+
+    Returns
+    -------
+    str
+        Deterministic JSON string.
+
+    Notes
+    -----
+    Uses:
+    - sort_keys=True
+    - separators=(",", ":")
+    - ensure_ascii=False
     """
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def sha256_short(obj: object, n: int = 12) -> str:
     """
-    Deterministic short hash for arbitrary payloads (dict/list/str).
+    Compute a deterministic SHA-256 short hash from an arbitrary payload.
 
-    Contract:
-      - n can be any positive integer.
-      - For n <= 64: return sha256 hexdigest truncated to n chars.
-      - For n == 12: preserve legacy behavior (sha256[:12]).
+    Parameters
+    ----------
+    obj : object
+        Payload to hash. It is serialized via `stable_json_dumps()`.
+    n : int, optional
+        Number of hex characters to return. Default is 12.
 
-    Rationale:
-      - Previous implementation silently could not produce >12 chars because it was
-        based on sha256_12hex. This fixes that while keeping n=12 identical.
+    Returns
+    -------
+    str
+        Lowercase hex digest prefix.
+
+    Raises
+    ------
+    ValueError
+        If `n` is not positive.
+
+    Notes
+    -----
+    - For n == 12, this matches the legacy behavior (`sha256_12hex`).
+    - SHA-256 hex digests have length 64; if n > 64, the output length is
+      effectively capped at 64 by Python slicing.
     """
     nn = 12 if n is None else int(n)
     if nn <= 0:
@@ -709,8 +1057,23 @@ def sha256_short(obj: object, n: int = 12) -> str:
 
 def seed_int_from_payload(payload: object, *, mod: int = 2**31 - 1) -> int:
     """
-    Deterministic integer seed from an arbitrary payload.
-    Useful for per-term RNG streams that must be stable across runs.
+    Derive a deterministic integer seed from an arbitrary payload.
+
+    Parameters
+    ----------
+    payload : object
+        Any JSON-serializable payload.
+    mod : int, optional
+        Modulus for the resulting seed. Default is 2**31 - 1.
+
+    Returns
+    -------
+    int
+        Deterministic integer seed in [0, mod).
+
+    Notes
+    -----
+    Uses `sha256_short(..., n=12)` to keep stability aligned with other IDs.
     """
     h = sha256_short(payload, n=12)
     return int(h, 16) % int(mod)
@@ -718,8 +1081,22 @@ def seed_int_from_payload(payload: object, *, mod: int = 2**31 - 1) -> int:
 
 def join_genes_tsv(genes: list[object]) -> str:
     """
-    Join genes into a TSV-friendly string using GENE_JOIN_DELIM.
-    Applies clean_gene_token() per token and drops empties/NA tokens.
+    Join gene tokens into a TSV-friendly string.
+
+    Parameters
+    ----------
+    genes : list of object
+        Gene tokens.
+
+    Returns
+    -------
+    str
+        Genes joined by `GENE_JOIN_DELIM`.
+
+    Notes
+    -----
+    Applies `clean_gene_token()` and drops empty/NA tokens. Does not sort;
+    preserves input order.
     """
     xs: list[str] = []
     for g in genes or []:

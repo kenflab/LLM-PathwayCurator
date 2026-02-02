@@ -1,4 +1,23 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/masking.py
+
+"""
+Result container for gene masking / evidence stress.
+
+Attributes
+----------
+masked_distilled : pandas.DataFrame
+    Copy of the input `distilled` with `genes_col` updated to the new
+    evidence gene list per term. Also includes helper columns such as
+    `evidence_genes_str`, `masked_genes_count`, `stress_tag`, etc.,
+    depending on the operation.
+gene_reasons : dict[str, str]
+    Best-effort mapping from a gene token to a short reason string.
+    Reasons are token-space labels (no network), e.g. "Module_X",
+    "stress_dropout", "stress_noise_inject".
+term_events : pandas.DataFrame
+    Audit-grade per-term event log (drop/inject counts, hashes, tags).
+"""
+
 from __future__ import annotations
 
 import os
@@ -35,12 +54,26 @@ class MaskResult:
 # -------------------------
 def _as_gene_list(x: Any) -> list[str]:
     """
-    Single source of truth: _shared.parse_genes()
+    Parse a gene field into a deterministic list of tokens.
 
-    Policy:
-      - conservative splitting (aligns with distill/modules/select/audit)
-      - NA handling via _shared.NA_TOKENS
-      - deterministic dedup preserving order
+    Parameters
+    ----------
+    x : Any
+        Input scalar or list-like gene field.
+
+    Returns
+    -------
+    list[str]
+        Parsed gene tokens with:
+        - conservative splitting (spec-aligned),
+        - NA handling via `_shared` vocabulary,
+        - deterministic de-duplication preserving order.
+
+    Notes
+    -----
+    This function delegates parsing policy to `_shared.parse_genes()` and then
+    applies trim + order-preserving de-duplication to keep behavior consistent
+    across distill/modules/select/audit layers.
     """
     genes = _shared.parse_genes(x)
     genes = [str(g).strip() for g in genes if str(g).strip()]
@@ -48,6 +81,26 @@ def _as_gene_list(x: Any) -> list[str]:
 
 
 def _validate_frac(name: str, x: float) -> float:
+    """
+    Validate a fraction parameter in the inclusive range [0, 1].
+
+    Parameters
+    ----------
+    name : str
+        Parameter name (for error messages).
+    x : float
+        Candidate value.
+
+    Returns
+    -------
+    float
+        Validated float in [0, 1].
+
+    Raises
+    ------
+    ValueError
+        If `x` is not convertible to float or is outside [0, 1].
+    """
     try:
         v = float(x)
     except Exception as e:
@@ -58,6 +111,21 @@ def _validate_frac(name: str, x: float) -> float:
 
 
 def _safe_int(x: Any, default: int) -> int:
+    """
+    Convert a value to int with a default fallback.
+
+    Parameters
+    ----------
+    x : Any
+        Candidate value.
+    default : int
+        Value returned if conversion fails.
+
+    Returns
+    -------
+    int
+        Parsed integer or `default` on failure.
+    """
     try:
         return int(x)
     except Exception:
@@ -66,16 +134,26 @@ def _safe_int(x: Any, default: int) -> int:
 
 def _load_gene_id_map_from_env() -> tuple[dict[str, str], str]:
     """
-    Reproducible, no network.
+    Load a gene ID -> symbol mapping from local resources (no network).
 
-    Priority:
-      1) env LLMPATH_GENE_ID_MAP_TSV (explicit user-supplied)
-      2) repo-local defaults (union):
-           - resources/gene_id_maps/id_map.tsv(.gz)
-           - resources/gene_id_maps/ensembl_id_map.tsv(.gz)
+    Returns
+    -------
+    (tuple[dict[str, str], str])
+        (id2sym, source_label)
+        - id2sym : dict[str, str]
+          Mapping from gene IDs to symbols.
+        - source_label : str
+          Short provenance label ("env:...", "default:...", "none").
 
-    Returns:
-      (map, source_label)
+    Notes
+    -----
+    Priority
+    1) Environment variable LLMPATH_GENE_ID_MAP_TSV (single user-supplied file)
+    2) Repo-local defaults (union, first-hit wins per key):
+       - resources/gene_id_maps/id_map.tsv(.gz)
+       - resources/gene_id_maps/ensembl_id_map.tsv(.gz)
+
+    The merge is deterministic: the first mapping for a given key is kept.
     """
     # 1) explicit env (single file)
     try:
@@ -130,15 +208,27 @@ def _resolve_id2sym(
     user_id2sym: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], str]:
     """
-    Best-effort, reproducible, no network.
+    Resolve an ID->symbol mapping for symbol-view matching (reproducible, no network).
 
-    Priority (same spirit as audit_log/report):
-      1) distilled-derived mapping (if columns exist)
-      2) env LLMPATH_GENE_ID_MAP_TSV OR repo-local default (entrez+ensembl union)
-      3) user-provided override (function arg)  <-- wins
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table. If recognizable columns exist, an ID->symbol
+        mapping can be inferred from the DataFrame itself.
+    user_id2sym : dict[str, str] or None, optional
+        Explicit caller-supplied mapping that overrides all other sources.
 
-    Returns:
-      (id2sym, source_label)
+    Returns
+    -------
+    (tuple[dict[str, str], str])
+        (id2sym, source_label) where `source_label` describes the provenance.
+
+    Notes
+    -----
+    This function builds a best-effort mapping with deterministic precedence:
+    - base mapping from `distilled` (when possible),
+    - extra mapping from env/repo-local maps (fills gaps),
+    - optional `user_id2sym` overrides all keys (explicit wins).
     """
     base: dict[str, str] = {}
     try:
@@ -170,10 +260,12 @@ def _resolve_id2sym(
                 merged[kk] = vv
         src = "user_override"
     else:
-        if extra:
-            src = extra_src
+        if base and extra:
+            src = f"distilled+{extra_src}"
         elif base:
             src = "distilled"
+        elif extra:
+            src = extra_src
         else:
             src = "none"
 
@@ -184,8 +276,28 @@ def _expand_whitelist(
     *, whitelist: list[str] | None, id2sym: dict[str, str], sym2id: dict[str, str]
 ) -> set[str]:
     """
-    Allow whitelist entries to be either IDs or symbols.
-    If user passes a symbol, we also allow its mapped ID when known (and vice versa).
+    Expand a whitelist so entries may be treated as IDs or symbols.
+
+    Parameters
+    ----------
+    whitelist : list[str] or None
+        Raw whitelist entries (IDs and/or symbols).
+    id2sym : dict[str, str]
+        Mapping from IDs to symbols.
+    sym2id : dict[str, str]
+        Mapping from symbols to representative IDs.
+
+    Returns
+    -------
+    set[str]
+        Expanded whitelist tokens including:
+        - the original entries,
+        - mapped symbols for whitelisted IDs (if known),
+        - mapped IDs for whitelisted symbols (if known).
+
+    Notes
+    -----
+    This is a best-effort convenience for mixed token spaces.
     """
     wl_raw = [str(g).strip() for g in (whitelist or []) if str(g).strip()]
     wl: set[str] = set(wl_raw)
@@ -207,9 +319,23 @@ def _expand_whitelist(
 
 def _build_sym2id(id2sym: dict[str, str]) -> dict[str, str]:
     """
-    Best-effort reverse map.
-    If multiple IDs map to the same symbol, keep the first encountered
-    (deterministic by insertion order).
+    Build a best-effort reverse mapping (symbol -> representative ID).
+
+    Parameters
+    ----------
+    id2sym : dict[str, str]
+        ID -> symbol mapping.
+
+    Returns
+    -------
+    dict[str, str]
+        Symbol -> ID mapping.
+
+    Notes
+    -----
+    If multiple IDs map to the same symbol, the first encountered mapping is kept.
+    In Python 3.7+, dict insertion order is stable, so this is deterministic given
+    a deterministic `id2sym` construction.
     """
     sym2id: dict[str, str] = {}
     for i, s in id2sym.items():
@@ -220,8 +346,23 @@ def _build_sym2id(id2sym: dict[str, str]) -> dict[str, str]:
 
 def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str, str]:
     """
-    Noise dictionaries are symbol-centric.
-    Keep them as-is (trim-only), and do symbol-view matching upstream.
+    Construct a symbol-centric noise gene reason dictionary.
+
+    Parameters
+    ----------
+    whitelist : list[str] or None, optional
+        Tokens to exclude from the noise dictionary. Entries are treated as
+        literal keys to remove from the symbol-centric reason map.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping {gene_symbol: reason} where reason is "Module_<module_name>".
+
+    Notes
+    -----
+    `NOISE_LISTS` are symbol-centric by design. Mixed ID/symbol handling is done
+    upstream (e.g., by symbol-view matching) rather than rewriting the noise lists.
     """
     if whitelist is None:
         whitelist = []
@@ -239,10 +380,22 @@ def build_noise_gene_reasons(*, whitelist: list[str] | None = None) -> dict[str,
 
 def _build_noise_pool(*, whitelist: set[str]) -> list[str]:
     """
-    Pool for noise injection.
-    Keep it simple + deterministic:
-      - all genes from NOISE_LISTS (symbol tokens)
-      - exclude whitelist (accepts IDs/symbols)
+    Build a deterministic pool of noise genes for injection stress.
+
+    Parameters
+    ----------
+    whitelist : set[str]
+        Tokens to exclude from the pool (IDs and/or symbols).
+
+    Returns
+    -------
+    list[str]
+        De-duplicated list of symbol tokens from `NOISE_LISTS` excluding whitelist.
+
+    Notes
+    -----
+    The pool is used for adversarial perturbation (stress), not for biological
+    interpretation.
     """
     pool: list[str] = []
     for _module, genes in NOISE_LISTS.items():
@@ -254,6 +407,24 @@ def _build_noise_pool(*, whitelist: set[str]) -> list[str]:
 
 
 def _pick_k(rng: random.Random, xs: list[str], k: int) -> list[str]:
+    """
+    Pick k items from a list using a provided RNG.
+
+    Parameters
+    ----------
+    rng : random.Random
+        RNG instance (caller-owned).
+    xs : list[str]
+        Candidate list.
+    k : int
+        Number of items to pick.
+
+    Returns
+    -------
+    list[str]
+        If k >= len(xs), returns a shuffled copy of xs.
+        Otherwise returns rng.sample(xs, k).
+    """
     if k <= 0 or not xs:
         return []
     if k >= len(xs):
@@ -265,9 +436,24 @@ def _pick_k(rng: random.Random, xs: list[str], k: int) -> list[str]:
 
 def _row_id_for_events(row: pd.Series, idx: Any) -> int:
     """
-    Prefer stable provenance if upstream provided it.
-    - distill.py creates raw_index; keep that if present.
-    Fallback: current DataFrame index.
+    Determine a stable row identifier for event logging.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Current row.
+    idx : Any
+        DataFrame index value.
+
+    Returns
+    -------
+    int
+        Preferred stable row id for audit logs.
+
+    Notes
+    -----
+    If `raw_index` exists (often produced by distill.py), it is preferred.
+    Otherwise, falls back to the current DataFrame index when it can be cast to int.
     """
     if "raw_index" in row.index:
         try:
@@ -282,15 +468,27 @@ def _row_id_for_events(row: pd.Series, idx: Any) -> int:
 
 def _match_key(token: str, *, id2sym: dict[str, str], use_symbol_view: bool) -> str:
     """
-    Key used for matching against NOISE_LISTS/NOISE_PATTERNS.
+    Compute the match key for NOISE_LISTS/NOISE_PATTERNS.
 
-    Policy (audit-safe):
-      - Matching is performed in "symbol-view" when enabled (best-effort ID->symbol).
-      - Removal always targets the ORIGINAL token (ID) to preserve evidence identity.
+    Parameters
+    ----------
+    token : str
+        Original gene token from evidence (often an ID).
+    id2sym : dict[str, str]
+        ID -> symbol mapping used for symbol-view matching.
+    use_symbol_view : bool
+        If True, attempt to map the token to a symbol for matching.
 
-    Implementation:
-      - Use utils.map_ids_to_symbols() as the single source of truth
-        (same behavior as report/audit_log symbol rendering).
+    Returns
+    -------
+    str
+        Match key used for list/pattern matching.
+
+    Notes
+    -----
+    Audit-safe policy:
+    - Matching may occur in "symbol-view" when enabled (best-effort ID->symbol).
+    - Removal always targets the ORIGINAL token to preserve evidence identity.
     """
     t = str(token).strip()
     if not t:
@@ -324,16 +522,55 @@ def apply_gene_masking(
     use_symbol_view: bool = True,
 ) -> MaskResult:
     """
-    behavior: deterministic "noise gene" masking by lists/patterns.
+    Deterministic masking of noise genes using lists and regex patterns.
 
-    NOTE:
-      - seed is accepted for CLI plumbing; v0 masking is deterministic (seed ignored).
-      - For Fig2 v4 stress (dropout/noise/contradiction), use apply_evidence_stress().
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table.
+    genes_col : str, optional
+        Column name containing per-term evidence genes (list-like or scalar).
+    rescue_modules : tuple[str, ...] or None, optional
+        Module names for "rescue" behavior in pattern masking:
+        if multiple matches are found, keep one sentinel and drop redundants.
+    whitelist : list[str] or None, optional
+        Tokens to protect from masking (supports IDs and symbols when symbol-view
+        matching is enabled).
+    seed : int or None, optional
+        Accepted for CLI plumbing; masking is deterministic and seed is ignored.
+    pattern_mode : str, optional
+        Regex mode for patterns:
+        - "match" : prefix-style match (rx.match)
+        - "search": substring match (rx.search)
+    id2sym : dict[str, str] or None, optional
+        Optional ID -> symbol mapping override for symbol-view matching.
+    use_symbol_view : bool, optional
+        If True, perform matching against noise lists/patterns on symbol-view keys
+        (best-effort ID->symbol mapping) while removing ORIGINAL tokens.
 
-    Mixed token policy (important):
-      - NOISE_LISTS/NOISE_PATTERNS are symbol-centric.
-      - If use_symbol_view=True, masking matches on symbol-view keys (best-effort mapping),
-        but always removes the ORIGINAL token from evidence_genes (audit identity preserved).
+    Returns
+    -------
+    MaskResult
+        Result container including:
+        - updated DataFrame,
+        - global gene->reason map,
+        - per-term audit event table.
+
+    Raises
+    ------
+    ValueError
+        If `genes_col` is missing or `pattern_mode` is invalid.
+
+    Notes
+    -----
+    Mixed token policy
+    - `NOISE_LISTS` and `NOISE_PATTERNS` are symbol-centric.
+    - When `use_symbol_view=True`, this function matches on symbol-view keys,
+      but removes the original token to preserve evidence identity and hashes.
+
+    Side effects
+    ------------
+    None. This function does not write files; use `write_masking_artifacts()`.
     """
     _ = seed  # intentionally unused in v0
 
@@ -560,7 +797,7 @@ def apply_gene_masking(
 
 
 # -------------------------
-# v4: evidence identity stress (dropout/noise/contradiction tags)
+# Evidence identity stress (dropout/noise/contradiction tags)
 # -------------------------
 def apply_evidence_stress(
     distilled: pd.DataFrame,
@@ -583,18 +820,54 @@ def apply_evidence_stress(
     max_inject_k: int | None = None,
 ) -> MaskResult:
     """
-    Fig2 v4: stress that targets evidence identity.
+    Apply seeded evidence-identity stress (dropout / noise / contradiction tags).
 
-    What it does:
-      1) gene dropout: remove a fraction of evidence genes per term (seeded; per-term RNG)
-      2) gene noise injection: add a fraction of "noise" genes per term (seeded; per-term RNG)
-      3) contradiction tag: mark some terms for direction flip downstream (seeded)
-         - does NOT modify claim_json here (keep layers separated)
-         - emits stress_tag/contradiction_flip columns + term_events log
+    Parameters
+    ----------
+    distilled : pandas.DataFrame
+        Distilled evidence table.
+    genes_col : str, optional
+        Column name containing per-term evidence genes.
+    term_uid_col : str, optional
+        Column name for term UID. If missing, it will be derived from
+        (source, term_id) when available, otherwise from term_id.
+    direction_col : str, optional
+        Direction column name. If missing, it is created as "na".
+    seed : int, optional
+        Global stress seed. A deterministic per-term seed is derived from
+        (seed, term_uid, row_id) for stable, per-term perturbations.
+    dropout_frac : float, optional
+        Fraction of genes to drop per term in [0, 1].
+    noise_frac : float, optional
+        Fraction of genes to inject per term in [0, 1].
+    contradiction_frac : float, optional
+        Fraction of terms to tag for downstream direction flip (tag only).
+    min_genes_after : int, optional
+        Lower bound on genes remaining after dropout (clamped by term size).
+    whitelist : list[str] or None, optional
+        Tokens to exclude from injection candidates and preserve when possible.
+    dropout_min_k : int, optional
+        Minimum number of genes to drop when dropout is enabled (default 0).
+    noise_min_k : int, optional
+        Minimum number of genes to inject when noise is enabled (default 0).
+    max_inject_k : int or None, optional
+        Optional cap on injected genes per term.
 
-    Notes:
-      - noise injection pool is symbol-centric (NOISE_LISTS). This is acceptable
-        because stress is an adversarial perturbation; it is not a biological claim.
+    Returns
+    -------
+    MaskResult
+        Updated DataFrame plus audit-grade term event logs.
+
+    Raises
+    ------
+    ValueError
+        If required columns cannot be derived or if parameters are invalid.
+
+    Notes
+    -----
+    - Noise injection uses a symbol-centric pool (`NOISE_LISTS`). This is acceptable
+      because stress is adversarial perturbation, not biological interpretation.
+    - Contradiction is emitted as tags/flags only; it does not mutate claim JSON here.
     """
     if genes_col not in distilled.columns:
         raise ValueError(f"apply_evidence_stress: missing column {genes_col}")
@@ -775,11 +1048,27 @@ def write_masking_artifacts(
     prefix: str = "masking",
 ) -> None:
     """
-    Persist masking artifacts as TSV.
+    Write masking/stress artifacts to disk as TSV files.
 
-    - Explicit call only (no hidden side effects in apply_gene_masking).
-    - Token space only (symbols/IDs); no mapping; no network.
-    - Minimal outputs: events + compact summary.
+    Parameters
+    ----------
+    masked : MaskResult
+        Output from `apply_gene_masking()` or `apply_evidence_stress()`.
+    outdir : str
+        Output directory path. Created if missing.
+    prefix : str, optional
+        Filename prefix (default "masking").
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - This function is an explicit I/O step (no hidden file writes in masking).
+    - Outputs:
+      - <prefix>_events.tsv  : full audit-grade per-term event log
+      - <prefix>_summary.tsv : compact per-term summary (subset of columns)
     """
     out_path = Path(outdir)
     out_path.mkdir(parents=True, exist_ok=True)

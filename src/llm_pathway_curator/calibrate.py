@@ -9,7 +9,6 @@ import pandas as pd
 
 from . import _shared
 
-Status = Literal["PASS", "ABSTAIN", "FAIL"]
 CalibMethod = Literal["none", "temperature", "isotonic"]
 
 
@@ -19,6 +18,21 @@ CalibMethod = Literal["none", "temperature", "isotonic"]
 def compute_counts(status: pd.Series) -> dict[str, int]:
     """
     Count PASS/FAIL/ABSTAIN/TOTAL from a status series (strict validation).
+
+    Parameters
+    ----------
+    status : pandas.Series
+        Status values. Must normalize into {"PASS", "ABSTAIN", "FAIL"}.
+
+    Returns
+    -------
+    dict[str, int]
+        Counts with keys: {"PASS", "FAIL", "ABSTAIN", "TOTAL"}.
+
+    Raises
+    ------
+    ValueError
+        If unknown status values are present (strict spec validation).
     """
     s = _shared.normalize_status_series(status)
     _shared.validate_status_values(s)
@@ -32,25 +46,36 @@ def compute_counts(status: pd.Series) -> dict[str, int]:
 
 def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
     """
-    Spec-safe metrics with explicit denominators.
+    Compute spec-safe Risk/Coverage metrics from a status series.
 
-    Coverage (tool-facing default):
-      - coverage_pass_total = PASS / TOTAL
-        (ABSTAIN is included in TOTAL)
+    Parameters
+    ----------
+    status : pandas.Series
+        Status values in {"PASS", "ABSTAIN", "FAIL"}.
 
-    Coverage (decided subset size; ABSTAIN excluded):
-      - coverage_decided_total = (PASS + FAIL) / TOTAL
+    Returns
+    -------
+    dict[str, float]
+        Metrics with explicit denominators:
 
-    Risk (answered-subset risk; ABSTAIN excluded):
-      - risk_fail_given_decided = FAIL / (PASS + FAIL)
+        - coverage_pass_total
+            PASS / TOTAL
+        - coverage_decided_total
+            (PASS + FAIL) / TOTAL
+        - risk_fail_given_decided
+            FAIL / (PASS + FAIL)
+        - risk_fail_total
+            FAIL / TOTAL
+        - fail_rate_total
+            Alias of FAIL / TOTAL (kept for backward compatibility)
 
-    Also provide audit-failure-over-all:
-      - risk_fail_total = FAIL / TOTAL
-      - fail_rate_total = FAIL / TOTAL  (alias; stable for backward compat)
+        Also includes count fields as floats:
+        n_pass, n_fail, n_abstain, n_decided, n_total
 
-    Notes:
-      - "decided" = PASS ∪ FAIL (ABSTAIN excluded).
-      - FAIL is an explicit negative decision produced by mechanical audits.
+    Notes
+    -----
+    "decided" = PASS ∪ FAIL (ABSTAIN excluded).
+    FAIL is a negative decision produced by mechanical audits.
     """
     c = compute_counts(status)
     total = c["TOTAL"]
@@ -77,8 +102,24 @@ def risk_coverage_from_status(status: pd.Series) -> dict[str, float]:
 
 def _validate_numeric_series(x: pd.Series, *, name: str) -> pd.Series:
     """
-    Strict numeric validation for curve inputs.
-    Raises with actionable messages (count + example indices).
+    Validate that a pandas Series is fully numeric and finite.
+
+    Parameters
+    ----------
+    x : pandas.Series
+        Input series.
+    name : str
+        Name used in error messages.
+
+    Returns
+    -------
+    pandas.Series
+        Numeric series (float-coercible) with the original index.
+
+    Raises
+    ------
+    ValueError
+        If non-numeric or non-finite values are detected.
     """
     v = pd.to_numeric(x, errors="coerce")
     if v.isna().any():
@@ -103,11 +144,25 @@ def _default_thresholds_from_scores(
     max_thresholds: int = 200,
 ) -> list[float]:
     """
-    Build a stable set of thresholds from the *score distribution* (not unique values).
+    Build a stable set of thresholds from a score distribution.
 
+    Parameters
+    ----------
+    scores : numpy.ndarray
+        1D score array.
+    max_thresholds : int, optional
+        Maximum number of thresholds to return.
+
+    Returns
+    -------
+    list of float
+        Sorted unique thresholds.
+
+    Notes
+    -----
     Policy:
-      - If unique values are small, use all unique values (stable).
-      - Otherwise use quantiles over the full score distribution.
+    - If the number of unique score values is small, return all unique values.
+    - Otherwise, return quantile-based thresholds over the full distribution.
     """
     if scores.size == 0:
         raise ValueError("risk_coverage_curve: empty score array")
@@ -138,25 +193,44 @@ def risk_coverage_curve(
     """
     Build a Risk–Coverage curve by sweeping a PASS threshold.
 
-    Intended semantics (selective prediction / abstention):
-      - FAIL stays FAIL always (safety).
-      - If promote_abstain=True:
-          Among non-FAIL items, assign:
-            PASS if score passes threshold else ABSTAIN.
-        (This reassigns BOTH preexisting PASS and ABSTAIN among non-FAIL,
-         avoiding the pitfall: "only already-PASS can be gated".)
-      - If promote_abstain=False:
-          Only gate existing PASS -> ABSTAIN when below threshold;
-          ABSTAIN stays ABSTAIN; FAIL stays FAIL.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table containing score and status columns.
+    score_col : str
+        Column name of probability-like or score values.
+    status_col : str, optional
+        Column name of base status. Default is "status".
+    decision_thresholds : list of float or None, optional
+        Thresholds to sweep. If None, thresholds are derived from scores.
+    pass_if_score_ge : bool, optional
+        If True, PASS when score >= threshold; else PASS when score <= threshold.
+    promote_abstain : bool, optional
+        If True, among non-FAIL items reassign:
+        PASS if threshold satisfied else ABSTAIN.
+        If False, gate only existing PASS -> ABSTAIN below threshold.
+    fail_on_degenerate : bool, optional
+        If True, raise on degenerate score distributions (<=1 unique value).
+    max_thresholds : int, optional
+        Max thresholds when auto-deriving. Must be >= 10.
 
-    Guardrails:
-      - ABSTAIN must NOT enter risk denominator (handled by risk_coverage_from_status).
-      - score must be finite numeric.
-      - status must be in {PASS, ABSTAIN, FAIL}.
+    Returns
+    -------
+    pandas.DataFrame
+        One row per threshold with risk/coverage metrics and metadata fields:
+        threshold, score_col, status_col, pass_if_score_ge, promote_abstain.
 
-    Output (stable + interpretable):
-      - includes coverage_decided_total and n_decided to expose denominators
-      - includes promote_abstain flag per threshold row
+    Raises
+    ------
+    ValueError
+        If required columns are missing, scores are invalid, statuses are invalid,
+        or thresholds are empty/invalid.
+
+    Notes
+    -----
+    Safety semantics:
+    - FAIL is never changed.
+    - ABSTAIN never enters the risk denominator.
     """
     if score_col not in df.columns:
         raise ValueError(f"risk_coverage_curve: missing score_col={score_col}")
@@ -234,10 +308,38 @@ def risk_coverage_curve(
 # Calibration (Stage 2)
 # -----------------------------
 def _clip01(p: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """
+    Clip probabilities into (0, 1) with an epsilon margin.
+
+    Parameters
+    ----------
+    p : numpy.ndarray
+        Probability array.
+    eps : float, optional
+        Clipping epsilon. Default is 1e-6.
+
+    Returns
+    -------
+    numpy.ndarray
+        Clipped array.
+    """
     return np.clip(p, eps, 1.0 - eps)
 
 
 def _is_binary_labels(y: np.ndarray) -> bool:
+    """
+    Check whether labels are binary {0, 1}.
+
+    Parameters
+    ----------
+    y : numpy.ndarray
+        Label array.
+
+    Returns
+    -------
+    bool
+        True if unique values are a subset of {0, 1}.
+    """
     uniq = np.unique(y)
     return set(uniq.tolist()).issubset({0, 1})
 
@@ -248,6 +350,24 @@ def _validate_calibration_inputs(
     *,
     allow_unlabeled: bool,
 ) -> None:
+    """
+    Validate calibration inputs (probabilities and optional binary labels).
+
+    Parameters
+    ----------
+    probs : numpy.ndarray
+        1D probability-like array in [0, 1].
+    y : numpy.ndarray or None
+        Optional label array.
+    allow_unlabeled : bool
+        Whether to allow y=None for non-fitting modes.
+
+    Raises
+    ------
+    ValueError
+        If shapes/values are invalid, or if fitting is requested without labels,
+        or if labels are not binary {0,1}, or if only one class is present.
+    """
     if probs.ndim != 1:
         raise ValueError("calibrate: probs must be 1D array")
     if not np.isfinite(probs).all():
@@ -276,11 +396,37 @@ def _validate_calibration_inputs(
 
 
 def _logit(p: np.ndarray) -> np.ndarray:
+    """
+    Compute logit(p) with internal clipping.
+
+    Parameters
+    ----------
+    p : numpy.ndarray
+        Probability array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Logit-transformed array.
+    """
     p = _clip01(p)
     return np.log(p / (1.0 - p))
 
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
+    """
+    Compute sigmoid(z).
+
+    Parameters
+    ----------
+    z : numpy.ndarray
+        Input array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sigmoid-transformed array.
+    """
     return 1.0 / (1.0 + np.exp(-z))
 
 
@@ -291,11 +437,34 @@ def fit_temperature_scaling(
     grid: tuple[float, float, int] = (0.25, 10.0, 80),
 ) -> float:
     """
-    Fit a single temperature T > 0 on probabilities (binary) using NLL.
-    Model: p' = sigmoid(logit(p) / T)
+    Fit a single temperature T > 0 by minimizing NLL (binary labels).
 
-    Stable v0 approach (no scipy):
-      - coarse log-space grid search over T
+    Model
+    -----
+    p' = sigmoid(logit(p) / T)
+
+    Parameters
+    ----------
+    probs : numpy.ndarray
+        1D probability-like array in [0, 1].
+    y_true : numpy.ndarray
+        1D binary labels in {0, 1}.
+    grid : tuple[float, float, int], optional
+        (t_min, t_max, n_grid). Search is performed in log-space.
+
+    Returns
+    -------
+    float
+        Best temperature T, clipped to a conservative range [0.25, 10.0].
+
+    Raises
+    ------
+    ValueError
+        If inputs are invalid or the grid is invalid.
+
+    Notes
+    -----
+    No scipy dependency: uses deterministic grid search.
     """
     _validate_calibration_inputs(probs, y_true, allow_unlabeled=False)
     p = _clip01(np.asarray(probs, dtype=float))
@@ -326,7 +495,24 @@ def fit_temperature_scaling(
 
 def apply_temperature_scaling(probs: np.ndarray, T: float) -> np.ndarray:
     """
-    Apply temperature scaling to probability-like scores in [0,1].
+    Apply temperature scaling to probability-like scores in [0, 1].
+
+    Parameters
+    ----------
+    probs : numpy.ndarray
+        1D probability-like array.
+    T : float
+        Temperature parameter (must be finite and > 0).
+
+    Returns
+    -------
+    numpy.ndarray
+        Calibrated probabilities clipped to (0, 1).
+
+    Raises
+    ------
+    ValueError
+        If T is invalid.
     """
     if not np.isfinite(T) or T <= 0:
         raise ValueError("apply_temperature_scaling: T must be finite and > 0")
@@ -340,7 +526,25 @@ def fit_isotonic_regression(
 ) -> Any:
     """
     Fit isotonic regression mapping probs -> calibrated probs.
-    Uses scikit-learn if available.
+
+    Parameters
+    ----------
+    probs : numpy.ndarray
+        1D probability-like array in [0, 1].
+    y_true : numpy.ndarray
+        1D binary labels in {0, 1}.
+
+    Returns
+    -------
+    Any
+        Fitted isotonic regression model (scikit-learn object).
+
+    Raises
+    ------
+    ImportError
+        If scikit-learn is not available.
+    ValueError
+        If inputs are invalid.
     """
     _validate_calibration_inputs(probs, y_true, allow_unlabeled=False)
     try:
@@ -357,15 +561,67 @@ def fit_isotonic_regression(
 
 
 def apply_isotonic(model: Any, probs: np.ndarray) -> np.ndarray:
+    """
+    Apply a fitted isotonic regression model to probabilities.
+
+    Parameters
+    ----------
+    model : Any
+        Fitted isotonic regression model with `predict`.
+    probs : numpy.ndarray
+        Probability array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Calibrated probabilities (float array).
+    """
     return np.asarray(model.predict(np.asarray(probs, dtype=float)), dtype=float)
 
 
 @dataclass(frozen=True)
 class CalibrationResult:
+    """
+    Calibration result object.
+
+    Attributes
+    ----------
+    method : {"none", "temperature", "isotonic"}
+        Calibration method identifier.
+    params : dict[str, Any]
+        Method parameters:
+        - temperature: {"T": float}
+        - isotonic: {"model": fitted_model}
+        - none: {}
+
+    Notes
+    -----
+    This object is serializable only when params are JSON-safe.
+    (isotonic model objects are not JSON-serializable by default.)
+    """
+
     method: CalibMethod
     params: dict[str, Any]
 
     def apply(self, probs: np.ndarray) -> np.ndarray:
+        """
+        Apply the calibration mapping to probability-like scores.
+
+        Parameters
+        ----------
+        probs : numpy.ndarray
+            Probability array.
+
+        Returns
+        -------
+        numpy.ndarray
+            Calibrated probabilities clipped to (0, 1).
+
+        Raises
+        ------
+        ValueError
+            If `method` is unknown or required params are missing.
+        """
         p = np.asarray(probs, dtype=float)
         if self.method == "none":
             return _clip01(p)
@@ -386,14 +642,35 @@ def calibrate_probs(
     allow_unlabeled: bool = False,
 ) -> CalibrationResult:
     """
-    Stage 2 calibration:
-      - If y_true is None and allow_unlabeled is False => refuse to fit
-      - If y_true is None and allow_unlabeled is True => return method="none"
-      - Otherwise fit requested method.
+    Stage-2 calibration entry point.
 
+    Parameters
+    ----------
+    probs : numpy.ndarray
+        1D probability-like array in [0, 1].
+    y_true : numpy.ndarray or None
+        Optional binary labels in {0, 1}.
+    method : {"none", "temperature", "isotonic"}, optional
+        Calibration method. Default is "temperature".
+    allow_unlabeled : bool, optional
+        If True and y_true is None, returns a no-op calibration ("none").
+        If False and y_true is None, refuses to fit.
+
+    Returns
+    -------
+    CalibrationResult
+        Calibration mapping object.
+
+    Raises
+    ------
+    ValueError
+        If inputs are invalid or fitting is requested without labels.
+
+    Notes
+    -----
     Design intent:
-      - Keep dependencies optional (no scipy).
-      - Provide deterministic fitting for temperature scaling.
+    - Keep dependencies optional (no scipy).
+    - Temperature scaling uses deterministic grid search.
     """
     p = np.asarray(probs, dtype=float)
 
@@ -429,9 +706,27 @@ def extract_probs_and_labels(
     label_col: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """
-    Extract probability-like scores + optional binary labels.
+    Extract probability-like scores and optional strict binary labels.
 
-    Labels are STRICT: only exact {0,1} accepted (no rounding).
+    Parameters
+    ----------
+    audit_log : pandas.DataFrame
+        Audit log table.
+    prob_col : str
+        Column name containing probabilities/scores.
+    label_col : str or None, optional
+        Column name containing labels. Only exact {0,1} accepted.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray or None]
+        (probs, labels). Labels are returned as int array when provided.
+
+    Raises
+    ------
+    ValueError
+        If columns are missing or values are non-numeric/non-finite, or labels
+        are not exactly binary {0,1}.
     """
     if prob_col not in audit_log.columns:
         raise ValueError(f"extract_probs_and_labels: missing prob_col={prob_col}")

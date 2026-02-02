@@ -1,39 +1,48 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/noise_lists.py
 
 """
-Noise module definitions for LLM-scCurator.
+Noise module definitions (shared asset; conservative by default).
 
-This module centralizes regex patterns and curated gene lists that represent
-biological/technical programs which commonly dominate naive marker rankings and
-confuse LLM-based interpretation (e.g., ribosomal/mitochondrial, stress, cell cycle,
-TCR/Ig clonotypes, uninformative locus IDs).
+Rationale (paper-facing)
+------------------------
+Marker rankings and enrichment evidence often contain ubiquitous programs
+(e.g., clonotypes, uninformative locus IDs) that can dominate prompts and
+confuse LLM interpretation. This module centralizes *symbol-centric* noise
+definitions that can be applied in prompt-facing layers while preserving
+evidence identity in PathwayCurator.
 
-These definitions are used by the masking/distillation stage to:
-- suppress ubiquitous programs in prompt marker lists, and
-- optionally rescue sentinel markers (e.g., proliferation) to avoid over-filtering.
+Policy (PathwayCurator)
+-----------------------
+LLM-PathwayCurator evaluates enrichment interpretations as audited decisions.
+Therefore, we do *not* pre-emptively remove broad biological programs
+(cell cycle, interferon, ribosome/mitochondria, HLA, Ig constants) from
+evidence by default, because they can be true biology and removing them can
+inflate ABSTAIN via missing/unstable evidence.
 
-Notes
------
-- Patterns are written to be Human/Mouse compatible when possible (case-aware).
-- This file is intentionally dependency-free and safe to import.
-- Edit conservatively: changes may affect benchmarking reproducibility.
+Reproducibility
+---------------
+Edit conservatively: changes may affect benchmark comparability.
+This file is dependency-free and safe to import.
 """
 
-# Regex patterns for biological noise modules (Human & Mouse compatible)
+# -----------------------------------------------------------------------------
+# Regex patterns for noise-like tokens (symbol-centric; human/mouse-aware)
+# -----------------------------------------------------------------------------
+
+#: Regex patterns used for optional masking.
+#:
+#: Design intent:
+#: - Keep patterns *symbol-centric* and conservative.
+#: - Avoid collapsing evidence identity in PathwayCurator defaults.
+#: - Prefer enabling aggressive patterns only in prompt hygiene contexts
+#:   (e.g., LLM-scCurator), not in enrichment-evidence QA.
+#:
+#: Note:
+#: - Ensembl IDs (ENSG/ENSMUSG...) are often meaningless for LLM prompting,
+#:   but they are critical evidence identifiers for PathwayCurator audits.
+#:   Therefore, Ensembl-ID masking is intentionally disabled here.
 NOISE_PATTERNS = {
     # --- Technical / Mapping Artifacts ---
-    # NOTE (PathwayCurator):
-    # Ensembl IDs (ENSG/ENSMUSG) are *meaningless for LLM prompting*,
-    # but they are *essential evidence identifiers* for distill/audit/modules
-    # in LLM-PathwayCurator (e.g., survival, Jaccard modules).
-    #
-    # Masking them here would collapse evidence_genes to empty lists
-    # (e.g., fgsea_msigdb_H_ensembl inputs), breaking downstream logic.
-    #
-    # Therefore, Ensembl_ID masking is intentionally DISABLED at this layer.
-    # If needed, handle Ensembl→symbol conversion or masking only
-    # in prompt-facing / LLM-scCurator layers.
-    #
     # "Ensembl_ID": r"^(ENSG|ENSMUSG)\d+", # Meaningless IDs for LLMs
     "LINC_Noise": r"^(LINC|linc)\d+$",  # Human LINC#### / linc####
     "Mouse_Predicted_Gm": r"^Gm\d+$",  # Mouse predicted genes
@@ -45,13 +54,9 @@ NOISE_PATTERNS = {
     "Ig_Clone": r"^IG[HKL][VDJ]",  # Immunoglobulins (Human)
     "Ig_Clone_Mouse": r"^Ig[hkl][vdj]",  # Immunoglobulins (Mouse)
     # IMPORTANT (PathwayCurator):
-    #   Do NOT treat Ig constant regions as removable "noise" for enrichment evidence.
-    #   They are core biology for B cell / plasma cell states
-    #   (e.g., class switching, antibody production),
-    #   and masking them can systematically bias pathway support and inflate abstention.
-    #
-    #   If a marker-centric suppression is desired (LLM-scCurator prompt hygiene),
-    #   enable these patterns only in that context (not in PathwayCurator default).
+    # Do not treat Ig constant regions as removable "noise" for enrichment
+    # evidence by default; they are core biology for B/plasma programs.
+    # Enable only in marker-centric prompt hygiene if desired.
     # --- Ig Constant Regions (Human) ---
     # "Ig_Constant_Heavy": r"^IGH[-_]?((M|D)|G[1-4]|A[1-2]|E)$",  # IGHM/IGHD/IGHG1–4/IGHA1–2/IGHE
     # "Ig_Constant_Light_Kappa": r"^IGKC$",  # IGKC
@@ -80,9 +85,12 @@ NOISE_PATTERNS = {
 }
 
 
-# Full Cell Cycle Genes from Tirosh et al. (Science 2016)
-# Combined G1/S, G2/M, and Melanoma Core Cycling Genes
-# Defined in Human format (All Caps)
+# -----------------------------------------------------------------------------
+# Cell-cycle gene sets (shared reference asset; not enabled by default here)
+# -----------------------------------------------------------------------------
+
+#: Full cell-cycle gene set (human uppercase) derived from published marker sets
+#: (e.g., Tirosh et al., Science 2016). Kept as a shared reference asset.
 _HUMAN_CC_GENES = {
     # G1/S
     "MCM5",
@@ -262,44 +270,27 @@ PROLIFERATION_SENTINELS = {
     "Birc5",
 }
 
-# Automatically generate Mouse format (Title Case: Mki67, Pcna)
-# This makes the tool universal without manual listing.
+#: Cell-cycle genes excluding proliferation sentinels.
+#: Also includes a simple mouse-friendly capitalization variant.
 _CELL_CYCLE_ALL = _HUMAN_CC_GENES.union({g.capitalize() for g in _HUMAN_CC_GENES})
 CELL_CYCLE_GENES = _CELL_CYCLE_ALL.difference(PROLIFERATION_SENTINELS)
 
 # -----------------------------------------------------------------------------
 # Noise list profiles
 # -----------------------------------------------------------------------------
-# IMPORTANT (PathwayCurator):
-#   LLM-PathwayCurator is an interpretation QA layer for enrichment outputs.
-#   For pathway interpretation, many "dominant" programs (e.g., cell cycle,
-#   interferon, ribosome/mitochondria) can be the *true biology* and must NOT be
-#   pre-emptively removed from evidence_genes. Removing them upstream can:
-#     - collapse evidence for legitimate pathways,
-#     - inflate ABSTAIN via missing/unstable evidence,
-#     - bias benchmarks toward "secondary" pathways.
-#
-#   Therefore, we keep cell-cycle definitions here (shared asset with LLM-scCurator),
-#   but we DO NOT enable them in the default noise masking list for PathwayCurator.
-#
-# Reviewer note:
-#   - Cell-cycle genes are *not* treated as removable "noise" for enrichment evidence.
-#   - If users want a marker-centric suppression behavior, they can use the
-#     NOISE_LISTS_CELLTYPE profile explicitly in LLM-scCurator contexts.
-# -----------------------------------------------------------------------------
 
-# Cell-type / marker-centric suppression profile (LLM-scCurator legacy behavior).
+#: Marker-centric suppression profile (opt-in).
+#: Intended for prompt hygiene / LLM-scCurator-style usage.
 NOISE_LISTS_CELLTYPE = {
     "CellCycle_State": CELL_CYCLE_GENES,
 }
 
-# -----------------------------------------------------------------------------
-# PathwayCurator policy
-# -----------------------------------------------------------------------------
-# LLM-PathwayCurator is an interpretation QA layer for enrichment outputs.
-# For pathway interpretation, cell-cycle programs are often true biology and
-# must NOT be pre-emptively removed from evidence_genes.
-#
-# Therefore: keep the cell-cycle gene set defined here for reference/documentation,
-# but DO NOT activate it as a masking list in this repository.
+#: PathwayCurator default profile (conservative).
+#:
+#: Rationale:
+#: - PathwayCurator audits enrichment evidence; broad programs can be true biology.
+#: - Pre-emptive removal can bias evidence support and inflate ABSTAIN.
+#:
+#: Users who want marker-centric suppression should explicitly opt-in to
+#: `NOISE_LISTS_CELLTYPE` (or a custom profile) in the prompt-facing layer.
 NOISE_LISTS: dict[str, set[str]] = {}

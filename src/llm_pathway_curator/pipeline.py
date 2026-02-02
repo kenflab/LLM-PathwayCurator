@@ -29,6 +29,42 @@ from .select import select_claims
 
 @dataclass(frozen=True)
 class RunConfig:
+    """
+    Pipeline run configuration.
+
+    Parameters
+    ----------
+    evidence_table
+        Path to the input EvidenceTable TSV.
+    sample_card
+        Path to the SampleCard JSON.
+    outdir
+        Output directory path.
+    force
+        If True, allow writing into a non-empty outdir.
+    seed
+        Random seed used for deterministic steps.
+    run_meta_name
+        File name for run metadata JSON written under outdir.
+    tau
+        Optional override for audit threshold tau. If None, uses
+        ``card.audit_tau()``.
+    k_claims
+        Optional override for number of claims to propose.
+    stress_evidence_dropout_p
+        Probability for evidence gene dropout stress test.
+    stress_evidence_dropout_min_keep
+        Minimum number of genes to keep per term under dropout stress.
+    stress_contradictory_p
+        Probability to inject contradictory direction claims.
+    stress_contradictory_max_extra
+        Cap for number of injected contradictory rows.
+
+    Notes
+    -----
+    This config is designed to be JSON-serializable via ``dataclasses.asdict``.
+    """
+
     evidence_table: str
     sample_card: str
     outdir: str
@@ -45,6 +81,21 @@ class RunConfig:
 
 @dataclass(frozen=True)
 class RunResult:
+    """
+    Pipeline run result summary.
+
+    Attributes
+    ----------
+    run_id
+        Unique run identifier.
+    outdir
+        Output directory path (string).
+    artifacts
+        Mapping from artifact keys to file paths.
+    meta_path
+        Path to the run metadata JSON file.
+    """
+
     run_id: str
     outdir: str
     artifacts: dict[str, str]
@@ -52,9 +103,26 @@ class RunResult:
 
 
 def _norm_gate_mode(x: Any, *, default: str = "note") -> str:
-    # Spec-level single source of truth
-    # NOTE: default should be canonical ("off"|"note"|"hard");
-    # synonyms like "note" are accepted only as input.
+    """
+    Normalize gate mode to canonical values.
+
+    Parameters
+    ----------
+    x
+        Input gate mode (string-like or None).
+    default
+        Canonical default gate mode when input is invalid.
+
+    Returns
+    -------
+    str
+        Canonical gate mode in {"off", "note", "hard"}.
+
+    Notes
+    -----
+    This delegates to the spec-level single source of truth:
+    ``_shared.normalize_gate_mode``.
+    """
     return _shared.normalize_gate_mode(x, default=default)
 
 
@@ -65,6 +133,25 @@ _ALLOWED_REVIEW_MODES = {"off", "proxy", "llm"}
 
 
 def _norm_review_mode(x: Any, *, default: str = "proxy") -> str:
+    """
+    Normalize review mode to canonical values.
+
+    Parameters
+    ----------
+    x
+        Input review mode (string-like or None).
+    default
+        Default review mode when input is invalid.
+
+    Returns
+    -------
+    str
+        Canonical review mode in {"off", "proxy", "llm"}.
+
+    Notes
+    -----
+    Common falsy strings like "none"/"false"/"0" are treated as "off".
+    """
     s = ("" if x is None else str(x)).strip().lower()
     if s in _ALLOWED_REVIEW_MODES:
         return s
@@ -75,6 +162,28 @@ def _norm_review_mode(x: Any, *, default: str = "proxy") -> str:
 
 
 def _require_file(path: str, label: str) -> Path:
+    """
+    Validate that a path exists and is a file.
+
+    Parameters
+    ----------
+    path
+        File path to validate.
+    label
+        Human-readable label used in exception messages.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved Path object (not necessarily absolute).
+
+    Raises
+    ------
+    FileNotFoundError
+        If the path does not exist.
+    IsADirectoryError
+        If the path exists but is not a file.
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{label} not found: {path}")
@@ -84,12 +193,42 @@ def _require_file(path: str, label: str) -> Path:
 
 
 def _file_fingerprint(path: str) -> dict[str, Any]:
+    """
+    Collect lightweight file fingerprint metadata.
+
+    Parameters
+    ----------
+    path
+        Path to an existing file.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys: path, size_bytes, mtime_epoch.
+    """
     p = Path(path)
     st = p.stat()
     return {"path": str(p), "size_bytes": int(st.st_size), "mtime_epoch": float(st.st_mtime)}
 
 
 def _safe_mkdir_outdir(outdir: str, force: bool) -> None:
+    """
+    Create (or validate) output directory with safety checks.
+
+    Parameters
+    ----------
+    outdir
+        Output directory path.
+    force
+        If False, raises when outdir exists and is non-empty.
+
+    Raises
+    ------
+    NotADirectoryError
+        If outdir exists but is not a directory.
+    FileExistsError
+        If outdir exists, is a directory, and is non-empty while force=False.
+    """
     p = Path(outdir)
     if p.exists():
         if not p.is_dir():
@@ -101,7 +240,22 @@ def _safe_mkdir_outdir(outdir: str, force: bool) -> None:
 
 def _dump_model(obj: Any) -> Any:
     """
-    pydantic v2/v1 + 素のdict を吸収して JSON-able にする。
+    Convert an object into a JSON-serializable structure.
+
+    Parameters
+    ----------
+    obj
+        Object that may be pydantic v2/v1 model, dict, or arbitrary object.
+
+    Returns
+    -------
+    Any
+        JSON-serializable representation (best-effort).
+
+    Notes
+    -----
+    - Supports pydantic v2 ``model_dump()`` and v1 ``dict()``.
+    - Falls back to ``json.dumps(..., default=str)`` then ``json.loads``.
     """
     if obj is None:
         return None
@@ -128,7 +282,20 @@ def _dump_model(obj: Any) -> Any:
 
 
 def _write_json(path: str | Path, obj: Any) -> None:
-    """Atomic-ish JSON write: write temp then replace."""
+    """
+    Write JSON file in an atomic-ish manner.
+
+    Parameters
+    ----------
+    path
+        Destination path.
+    obj
+        JSON-serializable object.
+
+    Notes
+    -----
+    Writes to a temporary file then replaces the destination.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -139,18 +306,59 @@ def _write_json(path: str | Path, obj: Any) -> None:
 
 
 def _write_tsv(df: pd.DataFrame, path: Path) -> None:
+    """
+    Write a DataFrame to TSV.
+
+    Parameters
+    ----------
+    df
+        DataFrame to write.
+    path
+        Destination path.
+
+    Notes
+    -----
+    Parent directories are created if missing. Index is not written.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, sep="\t", index=False)
 
 
 def _sha256_text(s: str) -> str:
+    """
+    Compute sha256 hex digest for text.
+
+    Parameters
+    ----------
+    s
+        Input string.
+
+    Returns
+    -------
+    str
+        Lowercase hex digest.
+    """
     h = hashlib.sha256()
     h.update(s.encode("utf-8"))
     return h.hexdigest()
 
 
 def _sha256_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
-    """Streaming sha256 for large files."""
+    """
+    Compute sha256 hex digest for a file (streaming).
+
+    Parameters
+    ----------
+    path
+        Path to file.
+    chunk_size
+        Read chunk size in bytes.
+
+    Returns
+    -------
+    str
+        Lowercase hex digest.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while True:
@@ -163,8 +371,16 @@ def _sha256_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 def _tool_version() -> str:
     """
-    Best-effort tool version string for run_meta.
-    Avoid hard dependency.
+    Best-effort tool version string for run metadata.
+
+    Returns
+    -------
+    str
+        Installed distribution version or "unknown".
+
+    Notes
+    -----
+    This avoids introducing a hard dependency and is guarded by try/except.
     """
     try:  # pragma: no cover
         import importlib.metadata as _ilm
@@ -175,6 +391,14 @@ def _tool_version() -> str:
 
 
 def _env_fingerprint() -> dict[str, Any]:
+    """
+    Collect environment fingerprint metadata for run_meta.
+
+    Returns
+    -------
+    dict
+        Keys include python, platform, pandas, tool_version.
+    """
     return {
         "python": sys.version.replace("\n", " "),
         "platform": platform.platform(),
@@ -184,16 +408,48 @@ def _env_fingerprint() -> dict[str, Any]:
 
 
 def _make_run_id(cfg: RunConfig) -> str:
+    """
+    Create a run identifier from config and current time.
+
+    Parameters
+    ----------
+    cfg
+        Run configuration.
+
+    Returns
+    -------
+    str
+        Run id in the form "<epoch>_<hash10>".
+
+    Notes
+    -----
+    Hash is derived from a stable JSON dump of ``asdict(cfg)``.
+    """
     payload = json.dumps(asdict(cfg), sort_keys=True, ensure_ascii=False)
     return f"{int(time.time())}_{_sha256_text(payload)[:10]}"
 
 
 def _resolve_tau(cfg_tau: float | None, card: SampleCard) -> float:
     """
-    Single source-of-truth for tau used by mechanical audit + report contract.
+    Resolve effective tau for mechanical audit.
+
+    Parameters
+    ----------
+    cfg_tau
+        Explicit override tau from config, if provided.
+    card
+        SampleCard providing default audit tau.
+
+    Returns
+    -------
+    float
+        Effective tau used by audit and report.
+
+    Notes
+    -----
     Priority:
-      1) cfg.tau if provided (explicit run override)
-      2) card.audit_tau() (contract boundary)
+    1) cfg.tau if convertible to float
+    2) ``card.audit_tau()``
     """
     if cfg_tau is not None:
         try:
@@ -205,8 +461,22 @@ def _resolve_tau(cfg_tau: float | None, card: SampleCard) -> float:
 
 def _env_int_strict(name: str) -> int | None:
     """
-    Parse env var as int.
-    Returns None if unset/empty. Raises ValueError if malformed.
+    Parse an environment variable as int (strict).
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+
+    Returns
+    -------
+    int or None
+        Parsed int value, or None if unset/empty.
+
+    Raises
+    ------
+    ValueError
+        If the variable is set but cannot be parsed as int.
     """
     s = (os.environ.get(name, "") or "").strip()
     if not s:
@@ -216,15 +486,29 @@ def _env_int_strict(name: str) -> int | None:
 
 def _resolve_k_claims(cfg: RunConfig, card: SampleCard) -> tuple[int, dict[str, Any]]:
     """
-    Single source-of-truth for k_claims used by claim selection.
-    Priority:
-      1) cfg.k_claims (explicit run override; Fig2/CLI should set this)
-      2) env LLMPATH_K_CLAIMS
-      3) card.k_claims() if available
-      4) fallback 3
+    Resolve effective number of claims (k) for selection.
 
-    Returns:
-      (k_effective, meta_dict)
+    Parameters
+    ----------
+    cfg
+        Run configuration (may provide explicit override).
+    card
+        SampleCard that may provide default k via ``card.k_claims()``.
+
+    Returns
+    -------
+    k_effective : int
+        Effective k used by claim selection.
+    meta : dict
+        Provenance metadata indicating which source was used.
+
+    Notes
+    -----
+    Priority:
+    1) cfg.k_claims
+    2) env ``LLMPATH_K_CLAIMS``
+    3) ``card.k_claims()`` if available
+    4) fallback 3
     """
     if cfg.k_claims is not None:
         k = int(cfg.k_claims)
@@ -267,27 +551,112 @@ _NA_TOKENS_L = _shared.NA_TOKENS_L
 
 
 def _is_na_scalar(x: Any) -> bool:
+    """
+    Check whether a value should be treated as NA.
+
+    Parameters
+    ----------
+    x
+        Value to test.
+
+    Returns
+    -------
+    bool
+        True if NA-like.
+
+    Notes
+    -----
+    Delegates to ``_shared.is_na_scalar`` (single source of truth).
+    """
     return _shared.is_na_scalar(x)
 
 
 def _parse_ids(x: Any) -> list[str]:
+    """
+    Parse an ID list from flexible inputs.
+
+    Parameters
+    ----------
+    x
+        Input that may be a list, delimited string, or NA.
+
+    Returns
+    -------
+    list of str
+        Parsed identifiers.
+
+    Notes
+    -----
+    Delegates to ``_shared.parse_id_list``.
+    """
     return _shared.parse_id_list(x)
 
 
 def _norm_gene_id(g: Any) -> str:
+    """
+    Normalize gene identifier.
+
+    Parameters
+    ----------
+    g
+        Gene token (string-like).
+
+    Returns
+    -------
+    str
+        Normalized gene token.
+
+    Notes
+    -----
+    Delegates to ``_shared.norm_gene_id_upper`` (uppercase policy).
+    """
     return _shared.norm_gene_id_upper(g)
 
 
 def _hash_gene_set_12(genes: list[str]) -> str:
+    """
+    Compute a short stable hash for a gene set.
+
+    Parameters
+    ----------
+    genes
+        List of gene identifiers.
+
+    Returns
+    -------
+    str
+        12-hex digest (lowercase) under the uppercase normalization policy.
+
+    Notes
+    -----
+    Delegates to ``_shared.hash_gene_set_12hex_upper``.
+    """
     return _shared.hash_gene_set_12hex_upper(genes)
 
 
 def _extract_claim_evidence(cj: str) -> tuple[list[str], str, str]:
     """
-    Returns (term_ids, gene_set_hash, direction) from claim_json.
-    Backward-tolerant but expects schema-ish structure:
-      - obj.evidence_ref or obj.claim.evidence_ref
-      - obj.direction or obj.claim.direction
+    Extract evidence reference fields from claim JSON.
+
+    Parameters
+    ----------
+    cj
+        Claim JSON string.
+
+    Returns
+    -------
+    term_ids : list of str
+        Term identifiers (possibly empty on failure).
+    gene_set_hash : str
+        Gene set hash (empty string if missing).
+    direction : str
+        "up", "down", or "na".
+
+    Notes
+    -----
+    Backward-tolerant for schema variants:
+    - evidence_ref may be at top-level or under "claim".
+    - direction may be at top-level or under "claim".
     """
     try:
         obj = json.loads(cj)
@@ -320,8 +689,22 @@ def _extract_claim_evidence(cj: str) -> tuple[list[str], str, str]:
 
 def _flip_claim_direction_json(cj: str) -> str:
     """
-    Flip direction in claim_json (up<->down). If missing/na, leave as-is.
-    Writes back without pretty-print to keep stable-ish.
+    Flip direction fields in claim JSON (up <-> down).
+
+    Parameters
+    ----------
+    cj
+        Claim JSON string.
+
+    Returns
+    -------
+    str
+        Updated compact JSON string if parse succeeds, else original string.
+
+    Notes
+    -----
+    - If direction is missing or not "up"/"down", it is left unchanged.
+    - This preserves compact separators to reduce diff noise.
     """
     try:
         obj = json.loads(cj)
@@ -350,6 +733,21 @@ def _flip_claim_direction_json(cj: str) -> str:
 
 
 def _env_float(name: str, default: float) -> float:
+    """
+    Read an environment variable as float (lenient).
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    default
+        Default value when unset or malformed.
+
+    Returns
+    -------
+    float
+        Parsed float or default.
+    """
     s = (os.environ.get(name, "") or "").strip()
     if not s:
         return float(default)
@@ -360,6 +758,21 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _env_int(name: str, default: int) -> int:
+    """
+    Read an environment variable as int (lenient).
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    default
+        Default value when unset or malformed.
+
+    Returns
+    -------
+    int
+        Parsed int or default.
+    """
     s = (os.environ.get(name, "") or "").strip()
     if not s:
         return int(default)
@@ -370,10 +783,38 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_str(name: str, default: str = "") -> str:
+    """
+    Read an environment variable as stripped string.
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    default
+        Default value when unset.
+
+    Returns
+    -------
+    str
+        Stripped string value.
+    """
     return (os.environ.get(name, default) or "").strip()
 
 
 def _get_card_extra(card: SampleCard) -> dict[str, Any]:
+    """
+    Safely access ``card.extra`` as a dict.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+
+    Returns
+    -------
+    dict
+        ``card.extra`` if it is a dict; otherwise empty dict.
+    """
     try:
         ex = getattr(card, "extra", {}) or {}
         return ex if isinstance(ex, dict) else {}
@@ -382,6 +823,22 @@ def _get_card_extra(card: SampleCard) -> dict[str, Any]:
 
 
 def _set_card_extra(card: SampleCard, key: str, value: Any) -> None:
+    """
+    Set a key in ``card.extra`` if it is a mutable dict.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+    key
+        Key to write.
+    value
+        Value to write.
+
+    Notes
+    -----
+    This is best-effort and intentionally silent on failure.
+    """
     try:
         ex = getattr(card, "extra", None)
         if isinstance(ex, dict):
@@ -392,12 +849,29 @@ def _set_card_extra(card: SampleCard, key: str, value: Any) -> None:
 
 def _card_condition(card: SampleCard) -> str:
     """
-    Tool-facing neutral label used as the first field of context identity.
+    Derive the intrinsic condition label from a SampleCard.
 
-    IMPORTANT:
-      - This function must return the *intrinsic/original* condition.
-      - Do NOT read context-swap keys here; swap is handled separately
-        by _context_swap_info() / _ctx_ids_from_card().
+    Parameters
+    ----------
+    card
+        SampleCard object.
+
+    Returns
+    -------
+    str
+        Condition label (may be empty).
+
+    Notes
+    -----
+    Priority:
+    1) ``card.condition`` if present
+    2) ``card.extra["condition"]`` or ``card.extra["cancer"]``
+    3) ``card.disease`` if present
+
+    IMPORTANT
+    ---------
+    This must return the original/intrinsic condition.
+    Context swap keys are handled elsewhere.
     """
 
     def _s(x: Any) -> str:
@@ -437,6 +911,28 @@ def _card_condition(card: SampleCard) -> str:
 # Gate/review mode resolution (pipeline-owned; normalized)
 # -------------------------
 def _resolve_context_gate_mode(card: SampleCard, *, default: str = "note") -> str:
+    """
+    Resolve context gate mode from env and card.extra.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+    default
+        Default gate mode.
+
+    Returns
+    -------
+    str
+        Canonical gate mode.
+
+    Notes
+    -----
+    Priority:
+    1) env ``LLMPATH_CONTEXT_GATE_MODE``
+    2) ``card.extra["context_gate_mode"]``
+    3) default
+    """
     env_v = _env_str("LLMPATH_CONTEXT_GATE_MODE", "").strip().lower()
     if env_v:
         return _norm_gate_mode(env_v, default=default)
@@ -446,6 +942,28 @@ def _resolve_context_gate_mode(card: SampleCard, *, default: str = "note") -> st
 
 
 def _resolve_context_review_mode(card: SampleCard, *, default: str = "proxy") -> str:
+    """
+    Resolve context review mode from env and card.extra.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+    default
+        Default review mode.
+
+    Returns
+    -------
+    str
+        Canonical review mode.
+
+    Notes
+    -----
+    Priority:
+    1) env ``LLMPATH_CONTEXT_REVIEW_MODE``
+    2) ``card.extra["context_review_mode"]``
+    3) default
+    """
     env_v = _env_str("LLMPATH_CONTEXT_REVIEW_MODE", "").strip().lower()
     if env_v:
         return _norm_review_mode(env_v, default=default)
@@ -456,13 +974,28 @@ def _resolve_context_review_mode(card: SampleCard, *, default: str = "proxy") ->
 
 def _enforce_gate_review_compat_effective(card, gate_mode: str, review_mode: str) -> dict:
     """
-    Enforce safe compatibility between gate/review modes.
+    Enforce safe compatibility constraints between gate and review modes.
 
-    Contract (paper + tool):
-      - If gate_mode is "hard", we MUST have a deterministic review signal
-        unless the user explicitly accepts that everything becomes UNEVALUATED.
-      - Therefore, (gate=hard, review=off) is disallowed and we force review=proxy.
-      - We NEVER silently relax hard->note, because that breaks user intent and Fig2 comparability.
+    Parameters
+    ----------
+    card
+        SampleCard-like object (must provide ``extra`` optionally).
+    gate_mode
+        Canonical gate mode.
+    review_mode
+        Canonical review mode.
+
+    Returns
+    -------
+    dict
+        Compatibility result with possibly updated effective modes and
+        reasons for any forced changes.
+
+    Notes
+    -----
+    Contract:
+    - (gate="hard", review="off") is disallowed; review is forced to "proxy".
+    - hard -> note is never applied silently.
     """
     gate_mode_in = gate_mode
     review_mode_in = review_mode
@@ -505,6 +1038,19 @@ def _enforce_gate_review_compat_effective(card, gate_mode: str, review_mode: str
 # Claim payload contract enforcement (pipeline-owned)
 # -------------------------
 def _pick_claim_payload_col(df: pd.DataFrame) -> str | None:
+    """
+    Choose the claim payload column name from known candidates.
+
+    Parameters
+    ----------
+    df
+        Proposed/audited DataFrame.
+
+    Returns
+    -------
+    str or None
+        One of {"claim_json", "claim_json_str", "claim_json_raw"} if present.
+    """
     for c in ["claim_json", "claim_json_str", "claim_json_raw"]:
         if c in df.columns:
             return c
@@ -519,6 +1065,27 @@ def _stable_claim_id_from_fields(
     gene_set_hash: str,
     term_ids: list[str],
 ) -> str:
+    """
+    Build a stable claim id from core claim identity fields.
+
+    Parameters
+    ----------
+    entity
+        Claim entity name.
+    direction
+        "up", "down", or "na".
+    module_id
+        Module identifier.
+    gene_set_hash
+        Short hash of the evidence gene union.
+    term_ids
+        Term identifiers supporting the claim.
+
+    Returns
+    -------
+    str
+        16-hex digest (sha256 prefix).
+    """
     payload = json.dumps(
         {
             "entity": entity,
@@ -535,8 +1102,24 @@ def _stable_claim_id_from_fields(
 
 def _synthesize_claim_json_row(row: pd.Series, card: SampleCard) -> str:
     """
-    Synthesize a minimal claim JSON payload if upstream didn't provide one.
-    This is tool robustness (contract enforcement), not paper logic.
+    Synthesize a minimal claim JSON payload from a proposed row.
+
+    Parameters
+    ----------
+    row
+        Row from proposed claim DataFrame.
+    card
+        SampleCard providing context fields.
+
+    Returns
+    -------
+    str
+        Compact single-line JSON string.
+
+    Notes
+    -----
+    This is contract enforcement for robustness when upstream did not
+    provide claim_json. It does not change paper logic.
     """
     entity = str(row.get("entity", "") or "").strip()
     direction = str(row.get("direction", "") or "").strip().lower()
@@ -606,10 +1189,17 @@ def _synthesize_claim_json_row(row: pd.Series, card: SampleCard) -> str:
 
 def _canonicalize_claim_json_value(s: str) -> str:
     """
-    Make claim_json TSV-safe and deterministic:
-      - parse JSON dict
-      - dump compact single-line canonical JSON
-    If parsing fails, return original.
+    Canonicalize a claim JSON string to compact single-line form.
+
+    Parameters
+    ----------
+    s
+        JSON string.
+
+    Returns
+    -------
+    str
+        Compact JSON with stable separators, or original on parse failure.
     """
     try:
         obj = json.loads(s)
@@ -622,7 +1212,17 @@ def _canonicalize_claim_json_value(s: str) -> str:
 
 def _canonicalize_claim_json_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Enforce canonical single-line claim_json across the dataframe.
+    Enforce canonical compact claim_json across a DataFrame.
+
+    Parameters
+    ----------
+    df
+        Input DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with canonicalized ``claim_json`` if present.
     """
     out = df.copy()
     if "claim_json" not in out.columns:
@@ -635,15 +1235,27 @@ def _canonicalize_claim_json_column(df: pd.DataFrame) -> pd.DataFrame:
 
 def _ensure_claim_payload_and_id(proposed: pd.DataFrame, card: SampleCard) -> pd.DataFrame:
     """
-    Enforce the pipeline contract:
-      - proposed MUST have a string payload column among claim_json/claim_json_str/claim_json_raw
-      - proposed MUST have claim_id
-      - normalize to canonical claim_json (string) for downstream stress/audit/report
+    Enforce claim payload and id contract on proposed claims.
 
-    CRITICAL:
-      - If a payload column exists but claim_json is empty for some rows,
-        synthesize minimal claim_json for those rows.
-        (Otherwise context review cannot write back into claim_json.)
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    card
+        SampleCard used to synthesize missing payload.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Updated DataFrame with:
+        - claim_id present
+        - claim_json present and non-empty
+        - canonical single-line claim_json
+
+    Notes
+    -----
+    If a payload column exists but contains empty rows, a minimal claim_json
+    is synthesized so that context review can write back into claim_json.
     """
     out = proposed.copy()
 
@@ -738,8 +1350,26 @@ def _restore_claim_payload_into_audit_log(
     audited: pd.DataFrame, proposed: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    If audit_claims dropped claim_json payload columns, restore them from proposed.
-    Preference: merge on claim_id. Fallback: restore by row order if necessary.
+    Restore claim payload columns into audit log if missing.
+
+    Parameters
+    ----------
+    audited
+        Output DataFrame from ``audit_claims``.
+    proposed
+        Proposed claims DataFrame (source of truth for payload).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Audit log with payload columns restored when possible.
+
+    Notes
+    -----
+    Preference:
+    - Merge on claim_id (deduplicated)
+    Fallback:
+    - Restore by row order for first N rows
     """
     out = audited.copy()
     if _pick_claim_payload_col(out) is not None:
@@ -788,8 +1418,28 @@ def _apply_evidence_gene_dropout(
     min_keep: int = 1,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Drop genes from evidence lists to induce identity collapse.
-    Deterministic given seed.
+    Apply deterministic gene dropout to evidence gene lists.
+
+    Parameters
+    ----------
+    distilled
+        Distilled evidence DataFrame.
+    p_drop
+        Drop probability per gene.
+    seed
+        Random seed (deterministic).
+    genes_col
+        Column holding evidence gene lists or delimited strings.
+    min_keep
+        Minimum number of genes to keep after dropout (rescues from dropped).
+
+    Returns
+    -------
+    stressed : pandas.DataFrame
+        DataFrame with modified evidence lists and helper columns:
+        ``stress_drop_count`` and ``evidence_genes_str``.
+    meta : dict
+        Summary stats for dropout application.
     """
     p = float(p_drop)
     if p <= 0.0:
@@ -869,11 +1519,26 @@ def _apply_evidence_gene_dropout(
 
 def _build_term_uid_maps(dist: pd.DataFrame) -> tuple[set[str], dict[str, str], set[str]]:
     """
-    Build mapping for resolving term_ids to term_uids.
+    Build maps for resolving raw term identifiers to term_uid.
 
-    Safer policy:
-      - Prefer using explicit term_id/source columns when available.
-      - Avoid parsing term_uid by splitting on ':' (term_id may contain ':').
+    Parameters
+    ----------
+    dist
+        Distilled evidence DataFrame containing term identifiers.
+
+    Returns
+    -------
+    known : set of str
+        Known canonical term_uid values.
+    raw_unique : dict
+        Map raw identifier -> unique term_uid when unambiguous.
+    raw_ambiguous : set of str
+        Raw identifiers that map to multiple term_uids.
+
+    Notes
+    -----
+    Prefers explicit ``term_id`` and optional ``source``. Avoids parsing
+    term_uid by naive splitting because term_id may contain ':'.
     """
     # Known term_uids
     if "term_uid" not in dist.columns:
@@ -929,13 +1594,31 @@ def _resolve_term_ids_to_uids(
     raw_ambiguous: set[str],
 ) -> tuple[list[str], list[str], list[str]]:
     """
-    Resolve input term identifiers to canonical term_uid strings.
+    Resolve input term identifiers to canonical term_uid values.
 
-    Policy:
-      - Accept exact term_uid matches.
-      - Accept raw term_id matches (if uniquely mappable).
-      - Accept source-qualified "source:term_id" matches when uniquely mappable.
-      - If ambiguous, ABSTAIN with explicit reason.
+    Parameters
+    ----------
+    term_ids
+        Input identifiers from claim evidence_ref.
+    known
+        Known term_uid set.
+    raw_unique
+        Unique raw->uid mapping.
+    raw_ambiguous
+        Ambiguous raw identifiers.
+
+    Returns
+    -------
+    resolved : list of str
+        Resolved term_uids.
+    unknown : list of str
+        Identifiers that could not be resolved.
+    ambiguous : list of str
+        Identifiers that were detected as ambiguous.
+
+    Notes
+    -----
+    If ambiguous identifiers are present, caller should ABSTAIN.
     """
     resolved: list[str] = []
     unknown: list[str] = []
@@ -979,7 +1662,30 @@ def _score_dropout_stress_on_claims(
     genes_col: str = "evidence_genes",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Add stress_* columns based on gene_set_hash drift under stressed_distilled.
+    Evaluate evidence dropout stress by gene_set_hash drift.
+
+    Parameters
+    ----------
+    proposed
+        Proposed claims with claim_json evidence_ref.
+    stressed_distilled
+        Distilled evidence after gene dropout.
+    genes_col
+        Evidence genes column name in stressed_distilled.
+
+    Returns
+    -------
+    out : pandas.DataFrame
+        Proposed claims with ``stress_status``, ``stress_reason``,
+        ``stress_notes`` populated.
+    stats : dict
+        Evaluation summary counts.
+
+    Notes
+    -----
+    Hash drift is computed from union evidence genes for resolved terms.
+    Both UPPER and preserve-case policies are attempted to avoid false FAIL
+    across legacy/new hashing policies.
     """
     out = proposed.copy()
 
@@ -1152,8 +1858,30 @@ def _inject_contradictory_direction(
     max_extra: int = 0,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Duplicate a subset of rows and flip direction in claim_json to force intra-run contradiction.
-    Keeps evidence_ref identical.
+    Inject contradictory direction rows by duplicating and flipping direction.
+
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    p_inject
+        Injection probability per original row.
+    seed
+        Random seed (deterministic).
+    max_extra
+        Max number of injected rows (0 means unlimited until rows exhausted).
+
+    Returns
+    -------
+    out : pandas.DataFrame
+        DataFrame with injected rows appended and ``is_contradict_injected``.
+    meta : dict
+        Injection summary stats.
+
+    Notes
+    -----
+    Evidence_ref is kept identical; direction is flipped in claim_json and
+    (if present) in the direction column.
     """
     p = float(p_inject)
     if p <= 0.0 or proposed.empty:
@@ -1191,7 +1919,20 @@ def _inject_contradictory_direction(
             continue
 
         row2 = row.copy()
-        row2["claim_json"] = _flip_claim_direction_json(str(cj))
+        cj2 = _flip_claim_direction_json(str(cj))
+        # Make injected row a distinct claim_id to avoid collisions.
+        old_id = str(row.get("claim_id", "") or "").strip()
+        new_id = (old_id + "__contra") if old_id else ""
+        if new_id:
+            try:
+                obj2 = json.loads(cj2)
+                if isinstance(obj2, dict):
+                    obj2["claim_id"] = new_id
+                    cj2 = json.dumps(obj2, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                pass
+        row2["claim_id"] = new_id if new_id else old_id
+        row2["claim_json"] = cj2
 
         if "direction" in out.columns:
             d = str(row.get("direction", "")).strip().lower()
@@ -1215,6 +1956,23 @@ def _inject_contradictory_direction(
 # Context weights (module×context) learning + context_score_proxy (pipeline-owned)
 # -------------------------
 def _norm_ctx_piece(x: Any) -> str:
+    """
+    Normalize a context-id piece for stable ctx_id construction.
+
+    Parameters
+    ----------
+    x
+        Raw value.
+
+    Returns
+    -------
+    str
+        Normalized value, or "NA" if empty/NA-like.
+
+    Notes
+    -----
+    The delimiter '|' is removed to prevent ctx_id corruption.
+    """
     s = "" if _is_na_scalar(x) else str(x)
     s = s.strip()
     if not s or s.lower() in _NA_TOKENS_L:
@@ -1228,11 +1986,24 @@ def _norm_ctx_piece(x: Any) -> str:
 
 def _context_swap_info(card: SampleCard) -> dict[str, str]:
     """
-    Read swap hints from card.extra in a backward-tolerant way.
-    Keys supported:
-      - context_swap_from
-      - context_swap_to
-      - context_swap_to_cancer (legacy-ish)
+    Read context swap hints from SampleCard.extra.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+
+    Returns
+    -------
+    dict
+        Keys: swap_from, swap_to.
+
+    Notes
+    -----
+    Supports keys:
+    - context_swap_from
+    - context_swap_to
+    - context_swap_to_cancer (legacy)
     """
     ex = _get_card_extra(card)
 
@@ -1252,6 +2023,19 @@ def _context_swap_info(card: SampleCard) -> dict[str, str]:
 
 
 def _ctx_id_from_fields(*, condition: str, tissue: Any, perturbation: Any, comparison: Any) -> str:
+    """
+    Build a context id string from fields.
+
+    Parameters
+    ----------
+    condition, tissue, perturbation, comparison
+        Context fields.
+
+    Returns
+    -------
+    str
+        ctx_id built as "condition|tissue|perturbation|comparison".
+    """
     parts = [
         _norm_ctx_piece(condition),
         _norm_ctx_piece(tissue),
@@ -1263,12 +2047,26 @@ def _ctx_id_from_fields(*, condition: str, tissue: Any, perturbation: Any, compa
 
 def _ctx_ids_from_card(card: SampleCard) -> dict[str, str]:
     """
-    Paper contract:
-      - ctx_id_original: derived from "original" condition
-        (swap_from if present else card condition)
-      - ctx_id_effective: derived from "effective" condition
-        (swap_to if present else original)
-    We keep tissue/perturbation/comparison unchanged.
+    Compute original and effective ctx_id from a SampleCard.
+
+    Parameters
+    ----------
+    card
+        SampleCard object.
+
+    Returns
+    -------
+    dict
+        Keys include:
+        - ctx_id_original
+        - ctx_id_effective
+        - swap_from
+        - swap_to
+
+    Notes
+    -----
+    Original uses swap_from if present, else intrinsic condition.
+    Effective uses swap_to if present, else original.
     """
     swap = _context_swap_info(card)
     base_condition = str(_card_condition(card) or "").strip()
@@ -1295,6 +2093,19 @@ def _ctx_ids_from_card(card: SampleCard) -> dict[str, str]:
 
 
 def _read_json_quiet(path: str | Path) -> dict[str, Any]:
+    """
+    Read a JSON file and return dict or empty dict on failure.
+
+    Parameters
+    ----------
+    path
+        JSON path.
+
+    Returns
+    -------
+    dict
+        Parsed dict, or {} if read/parse fails or root is not a dict.
+    """
     try:
         with open(path, encoding="utf-8") as f:
             obj = json.load(f)
@@ -1304,6 +2115,19 @@ def _read_json_quiet(path: str | Path) -> dict[str, Any]:
 
 
 def _infer_ctx_id_from_run_meta(meta: dict[str, Any]) -> str:
+    """
+    Infer ctx_id from run_meta inputs.sample block.
+
+    Parameters
+    ----------
+    meta
+        Parsed run_meta dict.
+
+    Returns
+    -------
+    str
+        "condition|tissue|perturbation|comparison" with NA normalization.
+    """
     sample = meta.get("inputs", {}).get("sample", {})
     if not isinstance(sample, dict):
         sample = {}
@@ -1316,19 +2140,21 @@ def _infer_ctx_id_from_run_meta(meta: dict[str, Any]) -> str:
 
 def _load_context_corpus_index() -> pd.DataFrame:
     """
-    Load corpus index either from explicit TSV or from meta_glob/dist_glob.
+    Load context corpus index for module-context weight learning.
 
-    Returns df with columns: path, ctx_id
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with columns: path, ctx_id.
 
+    Notes
+    -----
     Priority:
-      1) LLMPATH_CONTEXT_CORPUS_INDEX_TSV (explicit)
-      2) LLMPATH_CONTEXT_CORPUS_META_GLOB (run_meta.json files; preferred)
-      3) LLMPATH_CONTEXT_CORPUS_GLOB (distilled.with_modules.tsv files)
-         + sibling run_meta.json inference
+    1) LLMPATH_CONTEXT_CORPUS_INDEX_TSV
+    2) LLMPATH_CONTEXT_CORPUS_META_GLOB (run_meta.json files)
+    3) LLMPATH_CONTEXT_CORPUS_GLOB (distilled.with_modules.tsv files)
 
-    Notes:
-      - We do NOT invent ctx_id if it cannot be inferred.
-      - For dist_glob-only mode, we infer ctx_id from a sibling run_meta.json when available.
+    The function avoids inventing ctx_id when it cannot be inferred.
     """
     idx_path = _env_str("LLMPATH_CONTEXT_CORPUS_INDEX_TSV", "")
     if idx_path:
@@ -1400,6 +2226,19 @@ def _load_context_corpus_index() -> pd.DataFrame:
 
 
 def _entropy_from_probs(ps: list[float]) -> float:
+    """
+    Compute Shannon entropy (natural log) from probabilities.
+
+    Parameters
+    ----------
+    ps
+        Probability list.
+
+    Returns
+    -------
+    float
+        Entropy value.
+    """
     h = 0.0
     for p in ps:
         if p > 0:
@@ -1415,13 +2254,30 @@ def _learn_module_context_weights(
     min_module_n: int = 3,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Learn weights from corpus with RUN-based probabilities.
+    Learn module×context association weights from a corpus of runs.
 
-    Treat each file as one run.
-    For each run:
-      - read distilled.with_modules.tsv
-      - collect unique module_ids present in that run
-      - record (run_key, module_id, ctx_id)
+    Parameters
+    ----------
+    corpus_index
+        DataFrame with columns path and ctx_id.
+    module_col
+        Module id column name inside corpus files.
+    eps
+        Numerical epsilon for stability in ratios/logs.
+    min_module_n
+        Minimum number of runs a module must appear in to be kept.
+
+    Returns
+    -------
+    weights : pandas.DataFrame
+        Learned weights per (module_id, ctx_id).
+    meta : dict
+        Learning summary and reasons when degraded.
+
+    Notes
+    -----
+    Each file is treated as one run; presence/absence of module_id is used
+    to estimate p(ctx|module) and derived weights (log-odds, MI-like).
     """
     meta: dict[str, Any] = {
         "evaluated": True,
@@ -1566,11 +2422,32 @@ def _attach_context_score_proxy(
     weight_col: str = "weight_log_odds",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Attach context_score_proxy (module×context weight) to proposed claims.
+    Attach module×context proxy score to proposed claims.
 
-    IMPORTANT:
-      - This proxy is *not* the u01 hash proxy.
-      - Do NOT overwrite it later with another proxy.
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    ctx_id
+        Effective context id used for scoring.
+    weights
+        Learned weights DataFrame from corpus.
+    weight_col
+        Column name to use as weight (e.g., weight_log_odds or weight_mi).
+
+    Returns
+    -------
+    out : pandas.DataFrame
+        Proposed claims with context proxy columns added.
+    meta : dict
+        Summary and reasons for fallbacks.
+
+    Notes
+    -----
+    Writes:
+    - context_score_proxy (raw log-odds-like weight)
+    - context_score_proxy_norm (sigmoid-normalized)
+    - module_context_weight, context_proxy_method, etc.
     """
     out = proposed.copy()
     reason = "OK"
@@ -1677,7 +2554,24 @@ def _maybe_rerank_with_context_proxy(
     lam: float,
 ) -> pd.DataFrame:
     """
-    Conservative deterministic re-rank using module×context weight proxy.
+    Rerank proposed claims using context proxy (deterministic).
+
+    Parameters
+    ----------
+    proposed
+        Proposed claims.
+    lam
+        Strength of context term in rank key.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Reranked claims (stable mergesort with original index tiebreak).
+
+    Notes
+    -----
+    Ranking key:
+    survival_score * (1 + lam * context_score_proxy_norm)
     """
     if proposed is None or proposed.empty:
         return proposed
@@ -1707,15 +2601,24 @@ def _maybe_rerank_with_context_score(
     lam: float,
 ) -> pd.DataFrame:
     """
-    Conservative deterministic re-rank using FINAL context_score.
+    Rerank proposed claims using final context_score (deterministic).
 
-    Contract:
-      - Use context_score (0..1) which already reflects:
-          review confidence > module-weight proxy > hash-u01 proxy
-      - Must be executed AFTER context_score is materialized.
+    Parameters
+    ----------
+    proposed
+        Proposed claims.
+    lam
+        Strength of context term in rank key.
 
+    Returns
+    -------
+    pandas.DataFrame
+        Reranked claims (stable mergesort with original index tiebreak).
+
+    Notes
+    -----
     Ranking key:
-      survival_score * (1 + lam * context_score)
+    survival_score * (1 + lam * context_score)
     """
     if proposed is None or proposed.empty:
         return proposed
@@ -1749,6 +2652,23 @@ def _maybe_rerank_with_context_score(
 # Context review (pipeline-owned)
 # -------------------------
 def _extract_context_fields_from_claim_json(claim_json: Any) -> dict[str, Any]:
+    """
+    Extract context review fields from claim_json.
+
+    Parameters
+    ----------
+    claim_json
+        JSON string or dict-like structure.
+
+    Returns
+    -------
+    dict
+        Extracted fields with missing values as pandas.NA.
+
+    Notes
+    -----
+    This is tolerant: returns NA fields when parsing fails.
+    """
     out = {
         "context_status": pd.NA,
         "context_reason": pd.NA,
@@ -1794,8 +2714,22 @@ def _extract_context_fields_from_claim_json(claim_json: Any) -> dict[str, Any]:
 
 def _normalize_context_confidence_for_gating(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Fill missing context_confidence only.
-    IMPORTANT: do NOT overwrite existing numeric confidences.
+    Fill missing context_confidence values for gating.
+
+    Parameters
+    ----------
+    df
+        DataFrame containing context_status and context_confidence.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with missing confidence filled and clamped to [0, 1].
+
+    Notes
+    -----
+    - Only fills NA confidence values.
+    - PASS -> 1.0, non-PASS -> 0.0 when confidence is missing.
     """
     if df is None or df.empty:
         return df
@@ -1824,6 +2758,23 @@ def _normalize_context_confidence_for_gating(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Synchronize context_* columns from claim_json when present.
+
+    Parameters
+    ----------
+    df
+        DataFrame containing claim_json and/or context_* columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with context_* columns updated from claim_json for non-NA fields.
+
+    Notes
+    -----
+    This avoids losing evaluated context results that were written into JSON.
+    """
     if df is None or df.empty:
         return df
     if "claim_json" not in df.columns:
@@ -1851,6 +2802,27 @@ def _sync_context_columns_from_claim_json(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _ensure_context_review_fields(proposed: pd.DataFrame, *, gate_mode: str) -> pd.DataFrame:
+    """
+    Ensure context review columns exist with safe defaults.
+
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    gate_mode
+        Gate mode used to fill context_gate_mode.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with required context columns present and initialized.
+
+    Notes
+    -----
+    Unevaluated rows get:
+    - context_status="UNEVALUATED"
+    - context_reason="NOT_EVALUATED"
+    """
     out = proposed.copy()
     gate_mode = _norm_gate_mode(gate_mode, default="note")
 
@@ -1893,6 +2865,23 @@ def _ensure_context_review_fields(proposed: pd.DataFrame, *, gate_mode: str) -> 
 
 
 def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge context review columns back into claim_json.
+
+    Parameters
+    ----------
+    df
+        DataFrame with claim_json and context review columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with claim_json updated to include context review fields.
+
+    Notes
+    -----
+    JSON is written in compact single-line form to be TSV-safe.
+    """
     out = df.copy()
     if "claim_json" not in out.columns:
         return out
@@ -1950,7 +2939,21 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
 
 def _tokenize_context_text(s: str) -> list[str]:
     """
-    Deterministic tokenization for context proxy.
+    Tokenize free-text context deterministically.
+
+    Parameters
+    ----------
+    s
+        Input text.
+
+    Returns
+    -------
+    list of str
+        Unique tokens (first-seen order), filtered by stopwords and length.
+
+    Notes
+    -----
+    Tokens are lowercase alphanumeric segments with length >= 3.
     """
     s = str(s or "").strip().lower()
     if not s or s in _NA_TOKENS_L:
@@ -2000,11 +3003,21 @@ def _build_context_tokens(
     comparison: str,
 ) -> list[str]:
     """
-    Context Tokens
-    - Source fields: condition, tissue, perturbation, comparison
-    - Tokenization: _tokenize_context_text (deterministic)
-    - Tokens are key-prefixed to preserve provenance, e.g. "tissue:oral"
-    - Global uniqueness is enforced while preserving first-seen order.
+    Build key-prefixed context tokens from context fields.
+
+    Parameters
+    ----------
+    condition, tissue, perturbation, comparison
+        Context fields.
+
+    Returns
+    -------
+    list of str
+        Tokens with prefixes like "tissue:oral" in stable order.
+
+    Notes
+    -----
+    Global uniqueness is enforced while preserving first-seen order.
     """
     fields = {
         "condition": str(condition or "").strip(),
@@ -2030,9 +3043,23 @@ def _build_context_tokens(
 
 def _context_signature_b12(*, ctx_id: str, ctx_tokens: list[str]) -> str:
     """
-    Deterministic short signature (12 hex) for tokens.
-    Signature is derived from (ctx_id + tokens), so audits can be reproduced
-    as long as the B方式 token spec is stable.
+    Compute a deterministic short signature for context tokens.
+
+    Parameters
+    ----------
+    ctx_id
+        Context id string.
+    ctx_tokens
+        Token list (deterministic spec).
+
+    Returns
+    -------
+    str
+        12-hex signature (sha256 prefix).
+
+    Notes
+    -----
+    Signature depends on both ctx_id and tokens, enabling reproducibility.
     """
     ctx_id = str(ctx_id or "").strip()
     payload = (ctx_id + "|" + ";".join([str(t) for t in (ctx_tokens or [])])).encode("utf-8")
@@ -2041,7 +3068,25 @@ def _context_signature_b12(*, ctx_id: str, ctx_tokens: list[str]) -> str:
 
 def _proxy_context_v2_u01(*, ctx_id: str, context_keys: list[str], term_uid: str) -> float:
     """
-    Deterministic proxy context score u in [0,1).
+    Compute deterministic hash-based proxy context score in [0, 1).
+
+    Parameters
+    ----------
+    ctx_id
+        Context id string.
+    context_keys
+        Keys included in the payload (for traceability).
+    term_uid
+        Canonical term identifier.
+
+    Returns
+    -------
+    float
+        Pseudo-random but deterministic value in [0, 1).
+
+    Notes
+    -----
+    Uses 52 bits from sha256 hex to create a stable u01 score.
     """
     ctx_id = str(ctx_id or "").strip()
     term_uid = str(term_uid or "").strip()
@@ -2060,16 +3105,27 @@ def _ensure_proxy_context_score_columns(
     proposed: pd.DataFrame, card: SampleCard, *, ctx_id_override: str | None = None
 ) -> pd.DataFrame:
     """
-    Ensure proxy context scores are materialized deterministically.
+    Ensure proxy context score columns are materialized deterministically.
 
-    Context Tokens:
-      - Write context_tokens (string) and context_tokens_n
-      - Write context_signature (12 hex) derived from ctx_id + ctx_tokens
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    card
+        SampleCard providing deterministic context tokens.
+    ctx_id_override
+        Optional override for effective ctx_id.
 
-    IMPORTANT:
-      - If module×context weights already produced context_score_proxy, keep it.
-      - Always add hash-u01 proxy into separate columns:
-          context_score_proxy_u01 / context_score_proxy_u01_norm
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with token and proxy columns ensured.
+
+    Notes
+    -----
+    - Writes context_tokens, context_tokens_n, context_signature.
+    - Writes u01 proxy into context_score_proxy_u01 and *_norm.
+    - Does not overwrite module-weight proxy if already present.
     """
     if proposed is None or proposed.empty:
         return proposed
@@ -2114,7 +3170,12 @@ def _ensure_proxy_context_score_columns(
     # -------------------------
     # Context Tokens
     # -------------------------
-    ctx_tokens = card.context_tokens()
+    try:
+        ctx_tokens = card.context_tokens()
+    except Exception:
+        ctx_tokens = _build_context_tokens(
+            condition=condition, tissue=tissue, perturbation=perturb, comparison=comp
+        )
     tok_n = int(len(ctx_tokens))
     sig12 = _context_signature_b12(ctx_id=ctx_id, ctx_tokens=ctx_tokens)
 
@@ -2190,11 +3251,24 @@ def _ensure_proxy_context_score_columns(
 
 def _ensure_context_score_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Contract:
-      - context_score is ALWAYS materialized (float in [0,1]) for downstream audit/report.
-      - Prefer context_confidence (review output).
-      - Fallback to context_score_proxy_norm (module×context proxy) if confidence missing.
-      - Final fallback to context_score_proxy_u01_norm (hash-u01 proxy).
+    Materialize final context_score in [0, 1] with a stable precedence.
+
+    Parameters
+    ----------
+    df
+        DataFrame containing some of context_confidence and proxy columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with context_score column populated.
+
+    Notes
+    -----
+    Precedence:
+    1) context_confidence (review output)
+    2) context_score_proxy_norm (module-weight proxy)
+    3) context_score_proxy_u01_norm (hash proxy)
     """
     if df is None or df.empty:
         return df
@@ -2234,6 +3308,25 @@ def _ensure_context_score_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _build_anchor_modules_from_distilled(
     distilled: pd.DataFrame, card: SampleCard
 ) -> dict[str, Any]:
+    """
+    Build anchor modules by matching context tokens to term text.
+
+    Parameters
+    ----------
+    distilled
+        Distilled evidence with module ids and term text columns.
+    card
+        SampleCard providing deterministic tokens.
+
+    Returns
+    -------
+    dict
+        Summary including anchor_modules and diagnostic fields.
+
+    Notes
+    -----
+    "No anchors" is a soft outcome (ok=True, has_anchors=False).
+    """
     # 0) Input guard
     if distilled is None or not isinstance(distilled, pd.DataFrame) or distilled.empty:
         return {
@@ -2380,17 +3473,33 @@ def _proxy_context_review(
     distilled_for_proxy: pd.DataFrame | None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Proxy context review (review-grade; deterministic).
+    Deterministic proxy context review (review-grade).
 
-    - Primary: hash-u01 proxy_context_v2 (always defined if term_uid exists)
-    - Optional: anchor-module sanity check (if anchors found)
-        - If u01 says PASS but module is not anchored, downgrade PASS -> ABSTAIN (conservative).
-    - Writes: context_status/reason/notes/confidence as *consistent* values.
+    Parameters
+    ----------
+    proposed
+        Proposed claims.
+    card
+        SampleCard providing context.
+    gate_mode
+        Gate mode ("off", "note", "hard").
+    review_mode
+        Review mode (should be "proxy" here).
+    distilled_for_proxy
+        Distilled evidence used for optional anchor-module sanity checks.
 
-    Env knobs:
-      - LLMPATH_PROXY_CONTEXT_P_FAIL (default 0.05)
-      - LLMPATH_PROXY_CONTEXT_P_WARN (default 0.20)
-        (Interpretation: u < p_fail => FAIL; p_fail <= u < p_warn => ABSTAIN; u >= p_warn => PASS)
+    Returns
+    -------
+    out : pandas.DataFrame
+        Proposed claims with context_* fields filled and written into claim_json.
+    meta : dict
+        Summary stats and thresholds.
+
+    Notes
+    -----
+    Thresholds are controlled by:
+    - LLMPATH_PROXY_CONTEXT_P_FAIL
+    - LLMPATH_PROXY_CONTEXT_P_WARN
     """
     out = proposed.copy()
     gm = _norm_gate_mode(gate_mode, default="note")
@@ -2598,17 +3707,37 @@ def _apply_context_review(
     distilled_for_proxy: pd.DataFrame | None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Apply context review based on selected mode.
+    Apply context review based on selected review mode.
 
-    CONTRACT:
-      - If review_mode != off, we must NOT leave context evaluation "empty".
-      - If review_mode=llm is requested but no evaluated results are present
-        (or backend missing), we MUST fall back to proxy and record it.
+    Parameters
+    ----------
+    proposed
+        Proposed claims.
+    card
+        SampleCard providing context.
+    gate_mode
+        Gate mode ("off", "note", "hard").
+    review_mode
+        Review mode ("off", "proxy", "llm").
+    backend
+        LLM backend instance when review_mode="llm".
+    seed
+        Seed used for deterministic fallback behavior.
+    distilled_for_proxy
+        Distilled evidence for proxy anchor sanity checks.
 
-    Notes:
-      - Pipeline itself does not run LLM prompts here.
-      - If select.py already wrote evaluated context into claim_json/columns, we keep it.
-      - Otherwise: proxy fallback (never leave unevaluated).
+    Returns
+    -------
+    out : pandas.DataFrame
+        Proposed claims with context evaluation populated.
+    meta : dict
+        Execution summary including fallbacks.
+
+    Notes
+    -----
+    Contract:
+    - If review is requested (proxy/llm), evaluation must not remain empty.
+    - If "llm" is requested but cannot be executed, falls back to proxy.
     """
     rm = _norm_review_mode(review_mode, default="proxy")
     gm = _norm_gate_mode(gate_mode, default="note")
@@ -2758,8 +3887,19 @@ def _restore_context_scores_into_audit_log(
     audited: pd.DataFrame, proposed: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Ensure audit_log.tsv always contains context_score
-    (and key proxy fields) if they exist in proposed.
+    Restore context score and proxy fields into audit log.
+
+    Parameters
+    ----------
+    audited
+        Audit log DataFrame.
+    proposed
+        Proposed claims DataFrame (source of truth).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Audit log merged with selected context-related fields when possible.
     """
     out = audited.copy()
     if out is None or out.empty:
@@ -2818,21 +3958,27 @@ def _apply_context_gate_to_proposed(
     gate_mode: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    Pre-audit context gate.
+    Apply pre-audit context gate to proposed claims.
 
-    Goal (paper-facing):
-      - hard gate must affect the *input* to audit_claims, not only post-hoc logs.
-      - single source of truth is context_status + context_evaluated.
+    Parameters
+    ----------
+    proposed
+        Proposed claims DataFrame.
+    gate_mode
+        Gate mode ("off", "note", "hard").
 
-    Policy:
-      - if gate_mode != hard: no change
-      - if hard:
-          * if context_status != PASS -> mark as ineligible (when eligible column exists)
-          * also set preselect_tau_gate to 0 if such column exists (defensive)
-          * never delete rows (keep for transparency); audit can still log them
+    Returns
+    -------
+    out : pandas.DataFrame
+        Updated DataFrame (rows are not deleted).
+    meta : dict
+        Summary including number of blocked rows.
 
-    Returns:
-      (updated_df, meta)
+    Notes
+    -----
+    In hard gate:
+    - context_status != PASS marks rows ineligible when possible.
+    - Rows are retained for transparency and logging.
     """
     gm = _norm_gate_mode(gate_mode, default="note")
     meta: dict[str, Any] = {
@@ -2910,6 +4056,28 @@ def _apply_context_gate_to_audited(
     *,
     gate_mode: str,
 ) -> pd.DataFrame:
+    """
+    Apply hard context gate to audited results (post-hoc safety).
+
+    Parameters
+    ----------
+    audited
+        Audit log DataFrame.
+    proposed
+        Proposed claims DataFrame containing source-of-truth context_status.
+    gate_mode
+        Gate mode.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Updated audit log where PASS may be downgraded to ABSTAIN under hard gate.
+
+    Notes
+    -----
+    This enforces that hard gating affects reported decisions even if
+    audit_claims returned PASS for gated-out rows.
+    """
     gm = _norm_gate_mode(gate_mode, default="note")
     if gm != "hard":
         return audited
@@ -2983,11 +4151,23 @@ def _apply_context_gate_to_audited(
 
 def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
     """
-    Pipeline wrapper for spec-level Excel-safe ID serialization.
+    Serialize IDs into an Excel-safe string representation.
 
-    IMPORTANT:
-      - Delegate to _shared.excel_safe_ids to avoid contract drift.
-      - Keep list_sep default aligned with _shared.ID_JOIN_DELIM (";").
+    Parameters
+    ----------
+    x
+        Input IDs (list-like or delimited string).
+    list_sep
+        Separator to use for list serialization.
+
+    Returns
+    -------
+    str
+        Excel-safe string.
+
+    Notes
+    -----
+    Delegates to ``_shared.excel_safe_ids`` to avoid contract drift.
     """
     try:
         return _shared.excel_safe_ids(x, list_sep=str(list_sep))
@@ -2996,14 +4176,72 @@ def _excel_safe_ids(x: Any, *, list_sep: str = ";") -> str:
 
 
 def _fail_if_empty(df: pd.DataFrame, *, step: str, outdir: Path) -> None:
+    """
+    Raise a RuntimeError if a step produced an empty DataFrame.
+
+    Parameters
+    ----------
+    df
+        DataFrame to check.
+    step
+        Step name for error context.
+    outdir
+        Output directory for error context.
+
+    Raises
+    ------
+    RuntimeError
+        If df has zero rows.
+    """
     if df is None or getattr(df, "shape", (0,))[0] == 0:
         raise RuntimeError(f"[{step}] produced 0 rows (outdir={outdir}).")
 
 
 def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     """
-    Run the tool pipeline:
-      distill → modules → claims → (context_review) → stress → audit → report (+report.jsonl).
+    Run the full LLM-PathwayCurator pipeline.
+
+    Parameters
+    ----------
+    cfg
+        Run configuration.
+    run_id
+        Optional explicit run id. If None, a run id is generated.
+
+    Returns
+    -------
+    RunResult
+        Summary of the run, including artifact paths and meta_path.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required input files are missing.
+    IsADirectoryError
+        If a required input path is a directory.
+    FileExistsError
+        If outdir is non-empty and cfg.force is False.
+    RuntimeError
+        If a required step produces zero rows.
+    Exception
+        Any exception raised by underlying steps is propagated after writing
+        run_meta status="error".
+
+    Notes
+    -----
+    Step order:
+    distill -> modules -> select_claims -> context_review -> stress -> audit
+    -> report -> report_jsonl.
+
+    Artifacts and run metadata are written into cfg.outdir. The run_meta.json
+    is updated at each step to support reproducibility and debugging.
+
+    Environment variables
+    ---------------------
+    Many behaviors can be controlled via env vars, including:
+    - Backend and modes: LLMPATH_BACKEND, LLMPATH_CLAIM_MODE
+    - Context: LLMPATH_CONTEXT_* (gate/review/corpus/weights/rerank)
+    - Stress: LLMPATH_STRESS_* (dropout/contradictory)
     """
     _require_file(cfg.evidence_table, "evidence_table")
     _require_file(cfg.sample_card, "sample_card")
