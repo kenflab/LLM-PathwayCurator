@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769984173_a871ce3273",
+  "run_id": "1770001042_a871ce3273",
   "status": "ok",
-  "started_epoch": 1769984173.9575505,
+  "started_epoch": 1770001042.8313363,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.C2_CP_REACTOME.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
@@ -371,5 +371,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_REACTOME/SKCM/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769984182.1172197
+  "finished_epoch": 1770001055.8005273
 }

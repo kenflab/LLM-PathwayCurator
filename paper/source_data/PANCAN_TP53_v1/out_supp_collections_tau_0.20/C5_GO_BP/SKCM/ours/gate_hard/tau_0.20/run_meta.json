@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769985299_dd6ca41474",
-  "status": "aborted",
-  "started_epoch": 1769985299.4394543,
+  "run_id": "1770000889_dd6ca41474",
+  "status": "ok",
+  "started_epoch": 1770000889.725679,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.C5_GO_BP.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
@@ -124,13 +124,249 @@
       "tau_card": 0.8,
       "tau_effective": 0.2,
       "min_gene_overlap": 1
+    },
+    "modules": {
+      "requested_method": "term_jaccard_cc",
+      "effective_method": "term_jaccard_cc",
+      "min_shared_genes": 3,
+      "jaccard_min": 0.1,
+      "term_id_col": "term_uid",
+      "genes_col": "evidence_genes",
+      "pair_stats_raw": {
+        "n_terms": 3386,
+        "n_pairs_total": 5730805,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.145425,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 1.0,
+        "shared_p95": 2.0,
+        "shared_p99": 5.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.02127659574468085,
+        "jaccard_p95": 0.04,
+        "jaccard_p99": 0.09090909090909091
+      },
+      "pair_stats_filtered": {
+        "n_terms": 3384,
+        "n_pairs_total": 5724036,
+        "n_pairs_sampled": 200000,
+        "shared_pos_rate": 0.11737,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 1.0,
+        "shared_p95": 1.0,
+        "shared_p99": 4.0,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.014285714285714285,
+        "jaccard_p95": 0.03333333333333333,
+        "jaccard_p99": 0.08333333333333333
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.145425,
+      "sparsity_detected": false,
+      "n_terms": 3384,
+      "n_pairs_est": 5724036,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.8491228070175438,
+      "did_tune": false,
+      "effective_min_shared_genes": 4,
+      "effective_jaccard_min": 0.12000000000000001,
+      "largest_component_frac": 0.6548463356973995,
+      "giant_frac_threshold": 0.6,
+      "tighten_iter_1": {
+        "min_shared_genes": 4,
+        "jaccard_min": 0.12000000000000001,
+        "largest_component_frac": 0.5972222222222222,
+        "n_components": 603
+      },
+      "giant_detected": true,
+      "giant_tighten_applied": true
+    },
+    "modules_stats": {
+      "n_modules": 603,
+      "n_terms_median": 1.0,
+      "n_genes_median": 4.0,
+      "n_terms_max": 2021,
+      "n_genes_max": 2379
+    },
+    "claims": {
+      "context_gate_review_compat_final": {
+        "gate_mode": "hard",
+        "review_mode": "proxy",
+        "changed": false,
+        "updates": {},
+        "reasons": [],
+        "inputs": {
+          "gate_mode": "hard",
+          "review_mode": "proxy",
+          "swap_active": false
+        }
+      },
+      "k_source": "cfg",
+      "k_cfg": 50,
+      "k_env": "",
+      "k_card": "",
+      "k_effective": 50,
+      "k_env_raw": "",
+      "context_gate_mode": "hard",
+      "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
+      "context_ctx_id_original": "SKCM|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_ctx_id_effective": "SKCM|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_swap_from": "",
+      "context_swap_to": "",
+      "context_weight_learning": {
+        "evaluated": false,
+        "reason": "disabled"
+      },
+      "context_score_proxy": {
+        "evaluated": true,
+        "ctx_id": "SKCM|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "weight_col": "weight_log_odds",
+        "reason": "EMPTY_WEIGHTS"
+      },
+      "context_rerank": {
+        "enabled": false,
+        "lambda": 0.25,
+        "timing": "post_review_context_score",
+        "rank_key": "survival_score*(1+lambda*context_score)"
+      },
+      "context_score_source": "proxy_review_confidence",
+      "n_proposed_rows": 50,
+      "n_proposed_cols": 72,
+      "claim_payload_col": "claim_json",
+      "claim_json_present": true,
+      "context_review_runtime": {
+        "evaluated": true,
+        "mode": "proxy_context_v2",
+        "gate_mode": "hard",
+        "ctx_id": "SKCM|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "thresholds": {
+          "p_fail": 0.05,
+          "p_warn": 0.2
+        },
+        "anchor_used": false,
+        "anchor_info": {
+          "ok": true,
+          "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
+          "tokens": [
+            "skcm",
+            "tumor",
+            "genotype",
+            "tp53",
+            "mut"
+          ],
+          "tokens_signature": "633a044f9f50",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "skcm",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "633a044f9f50",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
+          "module_col": "module_id",
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
+        },
+        "n_eval": 50,
+        "n_pass": 44,
+        "n_fail": 1,
+        "n_abstain": 5,
+        "n_anchor_downgrade": 0
+      },
+      "context_gate_pre_audit": {
+        "evaluated": true,
+        "gate_mode": "hard",
+        "reason": "OK",
+        "n_rows": 50,
+        "n_blocked": 6,
+        "eligible_written": true,
+        "preselect_tau_gate_written": true
+      }
+    },
+    "llm": {
+      "claim": {
+        "enabled": false,
+        "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "review": {
+        "enabled": false,
+        "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "select_entrypoint": {
+        "backend_attached": false,
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
+      }
+    },
+    "stress": {
+      "evidence_dropout_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "contradictory_p": 0.0,
+      "contradictory_max_extra": 0,
+      "seed": 42
+    },
+    "stress_runtime": {
+      "dropout": {
+        "evaluated": true,
+        "enabled": false,
+        "p_drop": 0.0,
+        "min_keep": 1
+      },
+      "dropout_scoring": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "evidence_dropout_p==0"
+      },
+      "contradictory": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "contradictory_p==0",
+        "n_injected": 0
+      }
     }
   },
   "artifacts": {
     "evidence_normalized_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/evidence.normalized.tsv",
     "sample_card_raw_json": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/sample_card.raw.json",
-    "sample_card_normalized_json": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/sample_card.normalized.json"
+    "sample_card_normalized_json": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/sample_card.normalized.json",
+    "distilled_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/distilled.tsv",
+    "modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/modules.tsv",
+    "term_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/term_modules.tsv",
+    "term_gene_edges_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/term_gene_edges.tsv",
+    "distilled_with_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/distilled.with_modules.tsv",
+    "claims_proposed_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/claims.proposed.tsv",
+    "audit_log_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/audit_log.tsv",
+    "report_dir": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20",
+    "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C5_GO_BP/SKCM/ours/gate_hard/tau_0.20/report.jsonl"
   },
-  "step": "distill",
-  "finished_epoch": 1769985311.9712985
+  "step": "report_jsonl",
+  "finished_epoch": 1770000955.4396863
 }

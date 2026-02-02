@@ -1,9 +1,9 @@
 {
   "tool": "llm-pathway-curator",
   "cmd": "run",
-  "run_id": "1769984188_4493b14a92",
+  "run_id": "1770001065_4493b14a92",
   "status": "ok",
-  "started_epoch": 1769984188.2615757,
+  "started_epoch": 1770001065.0714695,
   "config": {
     "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/UCEC.C2_CP_KEGG_MEDICUS.evidence_table.tsv",
     "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/UCEC.hard.sample_card.json",
@@ -363,5 +363,5 @@
     "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out_supp_collections_tau_0.20/C2_CP_KEGG_MEDICUS/UCEC/ours/gate_hard/tau_0.20/report.jsonl"
   },
   "step": "report_jsonl",
-  "finished_epoch": 1769984189.4870198
+  "finished_epoch": 1770001066.8903475
 }
