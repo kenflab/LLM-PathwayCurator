@@ -9,7 +9,7 @@
   "stress_ok": false,
   "tau_used": 0.8,
   "term_survival_agg": 1.0,
-  "stability_scope": "module",
+  "stability_scope": "term",
   "evidence_key": "1b912bf139ec",
   "gene_set_hash_effective": "1b912bf139ec",
   "gene_set_hash_match_mode": "trim",
