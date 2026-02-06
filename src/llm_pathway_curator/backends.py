@@ -286,6 +286,13 @@ def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
         )
 
     if backend == "ollama":
+        timeout_raw = _getenv("LPC_OLLAMA_TIMEOUT", "LLMPATH_OLLAMA_TIMEOUT", default=None)
+        timeout_val = None
+        if timeout_raw is not None:
+            try:
+                timeout_val = float(timeout_raw)
+            except Exception:
+                timeout_val = None
         return OllamaBackend(
             host=_getenv("LPC_OLLAMA_HOST", "OLLAMA_HOST", "LLMPATH_OLLAMA_HOST", default=None),
             model_name=_getenv(
@@ -294,7 +301,7 @@ def get_backend_from_env(seed: int | None = None) -> BaseLLMBackend:
             temperature=_getfloat(
                 "LPC_OLLAMA_TEMPERATURE", "LLMPATH_OLLAMA_TEMPERATURE", default=0.0
             ),
-            timeout=_getfloat("LPC_OLLAMA_TIMEOUT", "LLMPATH_OLLAMA_TIMEOUT", default=120.0),
+            timeout=timeout_val,
         )
 
     if backend in {"local", "offline"}:
@@ -1100,7 +1107,7 @@ class OllamaBackend(BaseLLMBackend):
         self.connect_timeout = float(connect_timeout)
         self.read_timeout = float(read_timeout)
 
-    @retry_with_backoff(retries=3)
+    @retry_with_backoff(retries=5)
     def generate(self, prompt: str, json_mode: bool = False) -> str:
         """
         Generate a completion using Ollama `/api/generate`.

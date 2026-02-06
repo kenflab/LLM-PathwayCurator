@@ -2,75 +2,44 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
-METASCAPE_COLS = [
+from .. import _shared
+
+# Columns commonly present in Metascape "Enrichment" sheet.
+# NOTE: Genes/Symbols are not both guaranteed; we accept either.
+REQUIRED_CORE_COLS = [
     "GroupID",
     "Category",
     "Term",
     "Description",
     "LogP",
     "Log(q-value)",
-    "Genes",
-    "Symbols",
     "InTerm_InList",
 ]
-
-
-def _is_na(x: Any) -> bool:
-    try:
-        if x is None:
-            return True
-        if isinstance(x, float) and math.isnan(x):
-            return True
-    except Exception:
-        pass
-    s = str(x).strip().lower()
-    return s in {"", "na", "nan", "none"}
-
-
-def _clean_str(x: Any) -> str:
-    return "" if _is_na(x) else str(x).strip()
+EVIDENCE_COLS = ["Symbols", "Genes"]
 
 
 def _to_float(x: Any) -> float | None:
-    if _is_na(x):
+    if _shared.is_na_scalar(x) or _shared.is_na_token(x):
         return None
     try:
         v = float(x)
-        if not math.isfinite(v):
-            return None
-        return v
     except Exception:
         return None
+    if not math.isfinite(v):
+        return None
+    return v
 
 
-def _clean_gene_symbol(g: str) -> str:
-    s = g.strip().strip('"').strip("'")
-    s = " ".join(s.split())
-    s = s.strip(",;|")
-    return s
-
-
-def _split_genes(x: Any) -> list[str]:
-    if _is_na(x):
-        return []
-    if isinstance(x, (list, tuple, set)):
-        parts = [_clean_gene_symbol(str(g)) for g in x]
-        parts = [p for p in parts if p]
-    else:
-        s = str(x).strip()
-        if not s or s.lower() in {"na", "nan", "none"}:
-            return []
-        s = s.replace(";", ",").replace("|", ",")
-        parts = [_clean_gene_symbol(p) for p in s.split(",")]
-        parts = [p for p in parts if p]
-
-    # deterministic + unique
-    return sorted(set(parts))
+def _clean_str(x: Any) -> str:
+    if _shared.is_na_scalar(x) or _shared.is_na_token(x):
+        return ""
+    return str(x).strip()
 
 
 def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
@@ -78,6 +47,8 @@ def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
     if not s or "/" not in s:
         return (None, None)
     a, b = s.split("/", 1)
+    a = a.strip()
+    b = b.strip()
     try:
         return (int(a), int(b))
     except Exception:
@@ -87,24 +58,6 @@ def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
 def _is_summary_groupid(gid: str) -> bool:
     s = (gid or "").strip()
     return s.endswith("_Summary")
-
-
-@dataclass(frozen=True)
-class MetascapeAdapterConfig:
-    source_name: str = "metascape"
-    include_summary: bool = False  # IMPORTANT default
-    prefer_symbols: bool = True  # Symbols preferred over Genes
-    strict_qval: bool = False  # if True: error on invalid qval, else set NA
-
-
-def read_metascape_table(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t")
-    if df.shape[1] > 1:
-        return df
-    df2 = pd.read_csv(path, sep=None, engine="python")
-    if df2.shape[1] > 1:
-        return df2
-    return pd.read_csv(path, sep=r"\s+", engine="python")
 
 
 def _normalize_term_id(term: Any) -> str:
@@ -119,6 +72,58 @@ def _normalize_term_id(term: Any) -> str:
     return s
 
 
+def _infer_q_from_logq(logq_val: Any) -> float | None:
+    """
+    Metascape 'Log(q-value)' is observed in the wild as either:
+      - log10(q)    (negative for q<1), or
+      - -log10(q)   (positive for q<1)
+    We infer convention by sign and reconstruct q in (0, 1].
+    """
+    vv = _to_float(logq_val)
+    if vv is None:
+        return None
+
+    # If vv <= 0, likely log10(q): q = 10^(vv)
+    # If vv > 0, likely -log10(q): q = 10^(-vv)
+    if vv <= 0:
+        q = float(10**vv)
+    else:
+        q = float(10 ** (-vv))
+
+    if not (q > 0.0 and q <= 1.0):
+        return None
+    return q
+
+
+@dataclass(frozen=True)
+class MetascapeAdapterConfig:
+    source_name: str = "metascape"
+    sheet_name: str = "Enrichment"  # use Enrichment sheet by default
+    include_summary: bool = False  # IMPORTANT default: exclude *_Summary rows
+    prefer_symbols: bool = True  # prefer Symbols over numeric Genes
+    strict_qval: bool = False  # if True: error when Log(q-value) exists but cannot reconstruct
+    drop_na_qval: bool = True  # if True: drop rows where qval is NA
+
+
+def read_metascape_table(path: str, *, sheet_name: str = "Enrichment") -> pd.DataFrame:
+    """
+    Read Metascape export as either Excel (.xlsx/.xls) or delimited text.
+    For Excel exports, the 'Enrichment' sheet is the canonical input.
+    """
+    ext = os.path.splitext(str(path))[1].lower()
+    if ext in {".xlsx", ".xls"}:
+        return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+
+    # Fallback: TSV/CSV/whitespace (best-effort)
+    df = pd.read_csv(path, sep="\t")
+    if df.shape[1] > 1:
+        return df
+    df2 = pd.read_csv(path, sep=None, engine="python")
+    if df2.shape[1] > 1:
+        return df2
+    return pd.read_csv(path, sep=r"\s+", engine="python")
+
+
 def metascape_to_evidence_table(
     metascape_df: pd.DataFrame,
     *,
@@ -129,10 +134,18 @@ def metascape_to_evidence_table(
 
     df = metascape_df.copy()
 
-    missing = [c for c in METASCAPE_COLS if c not in df.columns]
+    missing = [c for c in REQUIRED_CORE_COLS if c not in df.columns]
     if missing:
         raise ValueError(
-            f"metascape_to_evidence_table: missing columns: {missing}. Found={list(df.columns)}"
+            f"metascape_to_evidence_table: missing required columns: {missing}. "
+            f"Found={list(df.columns)}"
+        )
+
+    have_evidence = [c for c in EVIDENCE_COLS if c in df.columns]
+    if not have_evidence:
+        raise ValueError(
+            "metascape_to_evidence_table: need at least one of {Symbols, Genes}. "
+            f"Found={list(df.columns)}"
         )
 
     df["group_id"] = df["GroupID"].map(_clean_str)
@@ -149,51 +162,48 @@ def metascape_to_evidence_table(
         i = int(df.index[bad][0])
         raise ValueError(f"metascape_to_evidence_table: empty Term/Description at row index={i}")
 
-    # stat: prefer Log(q-value) if numeric else LogP
-    logq = df["Log(q-value)"].map(_to_float)
-    logp = df["LogP"].map(_to_float)
+    # qval reconstruction from Log(q-value)
+    qval = df["Log(q-value)"].map(_infer_q_from_logq)
 
-    stat = logq.where(logq.notna(), logp)
-    stat_kind = pd.Series(["logq" if pd.notna(v) else "logp" for v in logq], index=df.index)
-    stat_kind = stat_kind.where(logq.notna(), "logp")
+    if config.strict_qval:
+        any_logq = df["Log(q-value)"].map(_to_float).notna().any()
+        if any_logq and qval.isna().all():
+            raise ValueError(
+                "metascape_to_evidence_table: could not reconstruct any valid qval "
+                "from Log(q-value). Check column semantics."
+            )
 
+    if config.drop_na_qval:
+        df = df[qval.notna()].copy()
+        qval = qval.loc[df.index]
+
+    # stat: make it monotone-positive for ranking (paper-friendly)
+    # Use abs(Log(q-value)) if numeric else abs(LogP) if numeric.
+    logq_raw = df["Log(q-value)"].map(_to_float)
+    logp_raw = df["LogP"].map(_to_float)
+
+    stat = logq_raw.where(logq_raw.notna(), logp_raw)
     if stat.isna().any():
         i = int(df.index[stat.isna()][0])
         raise ValueError(
             f"metascape_to_evidence_table: non-numeric Log(q-value)/LogP at row index={i}"
         )
+    stat_kind = pd.Series("logq", index=df.index).where(logq_raw.notna(), "logp")
+    stat = stat.abs().astype(float)
 
-    # qval: if Log(q-value) exists numeric => 10^(-logq) else NA
-    def _q_from_logq(v: Any) -> float | None:
-        vv = _to_float(v)
-        if vv is None:
-            return None
-        q = float(10 ** (-vv))
-        # sanity: q should be (0,1]
-        if not (q > 0.0 and q <= 1.0):
-            return None
-        return q
-
-    qval = df["Log(q-value)"].map(_q_from_logq)
-    if config.strict_qval and qval.isna().all() and logq.notna().any():
-        # logq existed but all qval became invalid -> likely wrong semantics
-        raise ValueError(
-            "metascape_to_evidence_table: could not derive valid qval from Log(q-value). "
-            "Check whether the column is -log10(q) as expected."
-        )
-
-    # evidence genes: prefer Symbols
-    if config.prefer_symbols:
-        genes_src = df["Symbols"]
-        fallback = df["Genes"]
+    # evidence genes: prefer Symbols then fall back to Genes (or vice versa)
+    if config.prefer_symbols and "Symbols" in df.columns:
+        primary = df["Symbols"]
+        secondary = df["Genes"] if "Genes" in df.columns else None
     else:
-        genes_src = df["Genes"]
-        fallback = df["Symbols"]
+        primary = df["Genes"] if "Genes" in df.columns else df["Symbols"]
+        secondary = df["Symbols"] if "Symbols" in df.columns else None
 
-    genes = genes_src.map(_split_genes)
+    genes = primary.map(_shared.parse_genes)
     empty = genes.map(len).eq(0)
-    if empty.any():
-        genes2 = fallback.map(_split_genes)
+
+    if secondary is not None and empty.any():
+        genes2 = secondary.map(_shared.parse_genes)
         genes = genes.where(~empty, genes2)
 
     empty2 = genes.map(len).eq(0)
@@ -201,10 +211,10 @@ def metascape_to_evidence_table(
         i = int(df.index[empty2][0])
         tid = df.loc[i, "term_id_raw"]
         raise ValueError(
-            f"metascape_to_evidence_table: empty Symbols/Genes at row index={i} (Term={tid})"
+            f"metascape_to_evidence_table: empty evidence genes at row index={i} (Term={tid})"
         )
 
-    # parse InTerm/InList without zip(strict=...) for compatibility
+    # parse InTerm/InList
     n_in_term: list[int | None] = []
     n_in_list: list[int | None] = []
     for x in df["InTerm_InList"].tolist():
@@ -217,11 +227,11 @@ def metascape_to_evidence_table(
             "term_id": df["term_id_raw"].map(_normalize_term_id),
             "term_name": df["term_name"],
             "source": config.source_name,
-            "stat": stat.astype(float),
-            "qval": qval,
+            "stat": stat,
+            "qval": qval.astype(float),
             "direction": "na",
             "evidence_genes": genes,
-            # optional provenance fields
+            # provenance (optional)
             "stat_kind": stat_kind.astype(str),
             "group_id": df["group_id"],
             "is_summary": df["is_summary"].astype(bool),
@@ -240,10 +250,13 @@ def convert_metascape_table_to_evidence_tsv(
     *,
     config: MetascapeAdapterConfig | None = None,
 ) -> pd.DataFrame:
-    raw = read_metascape_table(in_path)
+    if config is None:
+        config = MetascapeAdapterConfig()
+
+    raw = read_metascape_table(in_path, sheet_name=config.sheet_name)
     ev = metascape_to_evidence_table(raw, config=config)
 
     ev_out = ev.copy()
-    ev_out["evidence_genes"] = ev_out["evidence_genes"].map(lambda xs: ",".join(xs))
+    ev_out["evidence_genes"] = ev_out["evidence_genes"].map(_shared.join_genes_tsv)
     ev_out.to_csv(out_path, sep="\t", index=False)
     return ev
