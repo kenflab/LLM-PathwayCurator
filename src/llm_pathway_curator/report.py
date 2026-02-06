@@ -260,9 +260,11 @@ def _stringify_list_columns(df: pd.DataFrame) -> pd.DataFrame:
             if any(isinstance(x, (list, tuple, set)) for x in sample):
                 # Create a stable companion string column; keep original list-like column intact.
                 out[c_str] = s.map(
-                    lambda x: _shared.join_id_list_tsv(list(x), delim=LIST_SEP)
-                    if isinstance(x, (list, tuple, set))
-                    else ("" if _is_na_scalar(x) else str(x))
+                    lambda x: (
+                        _shared.join_id_list_tsv(list(x), delim=LIST_SEP)
+                        if isinstance(x, (list, tuple, set))
+                        else ("" if _is_na_scalar(x) else str(x))
+                    )
                 )
             else:
                 # scalar object column: keep dtype=object, make missing printable as ""

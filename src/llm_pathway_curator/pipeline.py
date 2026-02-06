@@ -2381,9 +2381,11 @@ def _learn_module_context_weights(
         lambda k: math.log(float(k)) if float(k) > 1 else 0.0
     )
     out["module_spec"] = out.apply(
-        lambda r: 1.0 - (float(r["module_entropy"]) / float(r["module_entropy_max"]))
-        if float(r["module_entropy_max"]) > 0
-        else 0.0,
+        lambda r: (
+            1.0 - (float(r["module_entropy"]) / float(r["module_entropy_max"]))
+            if float(r["module_entropy_max"]) > 0
+            else 0.0
+        ),
         axis=1,
     )
 
