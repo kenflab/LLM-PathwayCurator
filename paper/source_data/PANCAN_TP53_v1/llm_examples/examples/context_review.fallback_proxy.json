@@ -1,15 +1,15 @@
 {
   "context_status": "PASS",
   "context_evaluated": true,
-  "context_method": "proxy",
-  "context_review_mode": "none",
+  "context_method": "llm",
+  "context_review_mode": "llm",
   "context_gate_mode": "hard",
-  "context_confidence": 0.597218030864805,
-  "context_reason": "PROXY_U01_OK",
-  "context_notes": "proxy_context_v3: swap_active=0 u=0.823 p_warn=0.050 p_warn_eff=0.050 key_fields=['context_keys', 'term_uid', 'cancer', 'context_swap_to']",
+  "context_confidence": 1.0,
+  "context_reason": "The term HALLMARK_APOPTOSIS is relevant to the context of TP53 mutation in a tumor sample (HNSC), as apoptosis is often associated with cancer and TP53 mutation",
+  "context_notes": "nan",
   "ctx_id_effective": "HNSC|tumor|genotype|TP53_mut_vs_TP53_wt",
-  "context_signature": "60c997d59dbc",
-  "context_proxy_u01": 0.8229,
+  "context_signature": "4f87a455d90d",
+  "context_proxy_u01": 0.597218030864805,
   "evidence_ref": {
     "term_ids": [
       "fgsea_msigdb_H_entrez:HALLMARK_APOPTOSIS"

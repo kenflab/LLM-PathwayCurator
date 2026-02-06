@@ -328,12 +328,12 @@ def _parse_gene_list(x: Any) -> list[str]:
 
 def _hash_gene_set_12hex(genes: list[str]) -> str:
     """
-    Fallback fingerprint when gene IDs are unavailable.
+    Compute a 12-hex fingerprint for a gene set.
 
     Parameters
     ----------
-    term_uids : list[str]
-        Term UID tokens.
+    genes : list[str]
+        Gene tokens (order-insensitive).
 
     Returns
     -------
@@ -342,7 +342,7 @@ def _hash_gene_set_12hex(genes: list[str]) -> str:
 
     Notes
     -----
-    Delegates to `_shared.hash_set_12hex`. This is term-driven, not gene-driven.
+    Delegates to `_shared.hash_gene_set_12hex` for deterministic hashing.
     """
     return _shared.hash_gene_set_12hex(list(genes or []))
 
@@ -908,9 +908,21 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
       or a standardized {"error": {...}} object.
     """
     # 0) Prefer BaseLLMBackend contract first
+
+    def _wrap(obj: Any) -> dict[str, Any]:
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, list):
+            return {"claims": obj}
+        raise TypeError("backend JSON must be a dict or a list")
+
     try:
         if hasattr(backend, "generate") and callable(backend.generate):
             out = _try_call(backend.generate, prompt=prompt, json_mode=True, seed=seed)
+            if isinstance(out, dict):
+                return _wrap(out)
+            if isinstance(out, list):
+                return {"claims": out}
             s = out if isinstance(out, str) else str(out)
             frag = _extract_json_fragment(s) or s.strip()
             return json.loads(frag)
@@ -934,10 +946,12 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
         try:
             out = _try_call(fn, prompt=prompt, seed=seed)
             if isinstance(out, dict):
-                return out
+                return _wrap(out)
+            if isinstance(out, list):
+                return _wrap(out)
             if isinstance(out, str):
                 frag = _extract_json_fragment(out) or out.strip()
-                return json.loads(frag)
+                return _wrap(json.loads(frag))
         except Exception as e:
             last_err = e
             continue
@@ -959,8 +973,8 @@ def _backend_call_json(backend: BaseLLMBackend, *, prompt: str, seed: int | None
             s = out if isinstance(out, str) else str(out)
             frag = _extract_json_fragment(s)
             if frag:
-                return json.loads(frag)
-            return json.loads(s.strip())
+                return _wrap(json.loads(frag))
+            return _wrap(json.loads(s.strip()))
         except Exception as e:
             last_err = e
             continue
@@ -1072,9 +1086,9 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
     # Do NOT truncate candidates to k. The whole point of top_n is to give the model a pool
     # to choose from. Keep an absolute cap only.
     try:
-        max_lines = int(str(os.environ.get("LLMPATH_LLM_MAX_CAND_LINES", "100")).strip())
+        max_lines = int(str(os.environ.get("LLMPATH_LLM_MAX_CAND_LINES", "60")).strip())
     except Exception:
-        max_lines = 100
+        max_lines = 60
     max_lines = max(5, min(max_lines, 300))
     max_lines = min(max_lines, len(lines))
     lines = lines[:max_lines]
@@ -1091,34 +1105,35 @@ def build_claim_prompt(*, card: SampleCard, candidates: pd.DataFrame, k: int) ->
         ]
     }
 
-    strict_k = bool(_strict_k_enabled())
-    k_line = (
-        f"Return exactly {int(k)} claims (or fewer only if candidates fewer).\n"
-        if strict_k
-        else f"Return up to {int(k)} claims (prefer exactly {int(k)} when possible).\n"
-    )
+    # IMPORTANT:
+    # For small local models, requesting "exactly k" can trigger long generations/timeouts.
+    # We request "up to k" from the model; exact-k is enforced at the tool layer
+    # (deterministic repair/backfill), not at the model layer.
+    k_line = f"Return up to {int(k)} claims (prefer as many as possible, max {int(k)}).\n"
 
     header = (
-        "You select representative pathway terms for a biomedical analysis tool.\n"
-        "Return VALID JSON ONLY. No markdown. No commentary.\n" + k_line + "\n"
-        "CRITICAL COPY RULES:\n"
-        "- You MUST choose ONLY from the candidate lines.\n"
-        "- evidence_ref.term_ids MUST be a list with EXACTLY ONE string, and it MUST equal "
-        "the chosen uid EXACTLY.\n"
-        "- entity MUST equal the chosen id EXACTLY.\n"
-        "- Do NOT invent, abbreviate, or modify uid/id (no ellipsis, no '...').\n"
+        "Task: select representative pathway terms for a biomedical QA tool.\n"
+        "OUTPUT: VALID JSON ONLY (no markdown, no prose). Do not wrap in ```.\n" + k_line + "\n"
         "\n"
-        "Other rules:\n"
+        "HARD RULES (COPY EXACTLY):\n"
+        "1) Choose ONLY from the Candidates lines.\n"
+        "2) Do NOT repeat uid (uids must be unique).\n"
+        "3) evidence_ref.term_ids MUST be [uid] (a list with EXACTLY ONE string).\n"
+        "4) evidence_ref.term_ids[0] MUST equal the chosen uid EXACTLY.\n"
+        "5) entity MUST equal the chosen id EXACTLY.\n"
+        "6) Do NOT invent/abbreviate/modify uid or id (no ellipsis).\n"
+        "\n"
+        "OTHER RULES:\n"
         "- direction must be one of: up, down, na.\n"
         f"- context_keys MUST equal: {', '.join(ctx_keys)} (exact match, same order).\n"
         "\n"
-        "Output schema example (JSON):\n"
+        "SCHEMA EXAMPLE (JSON):\n"
         f"{_stable_json_dumps(example)}\n"
         "\n"
-        "Context (JSON):\n"
+        "CONTEXT (JSON):\n"
         f"{_stable_json_dumps({'context': ctx})}\n"
         "\n"
-        "Candidates (each line has uid/id/name/dir/surv/genes):\n"
+        "CANDIDATES (each line has uid/id/name/dir/surv/genes):\n"
     )
 
     return header + "\n".join(lines) + "\n\nReturn JSON now:\n"
@@ -1413,6 +1428,223 @@ def _post_validate_against_candidates(
     return (True, "ok", normalized)
 
 
+def _term_uid_from_claim(c: Claim) -> str:
+    """
+    Return the single term_uid token from a Claim.
+
+    The contract requires ``c.evidence_ref.term_ids`` to contain exactly one
+    term_uid token. This helper returns that token (stripped). If the contract
+    is not met, it returns an empty string.
+
+    Notes
+    -----
+    Minimal salvage for small-model artifacts:
+    - If the token starts with "uid=", strip that prefix.
+    - If the token contains a '|' delimiter, keep only the left side.
+    """
+    try:
+        term_ids = list(c.evidence_ref.term_ids or [])
+    except Exception:
+        return ""
+    if len(term_ids) != 1:
+        return ""
+
+    uid = str(term_ids[0] or "").strip()
+    if not uid:
+        return ""
+
+    # salvage common small-model formats: "uid=..." or "uid=... | ..."
+    lo = uid.lower()
+    if lo.startswith("uid="):
+        uid = uid.split("=", 1)[1].strip()
+
+    if "|" in uid:
+        uid = uid.split("|", 1)[0].strip()
+
+    uid = uid.strip(" ,;")
+    return uid
+
+
+def _repair_llm_claims_contract_minimal(
+    *,
+    claims: list[Claim],
+    cand: pd.DataFrame,
+    k: int,
+    ctx_keys_resolved: list[str],
+    enforce_exact_k: bool = False,
+) -> tuple[list[Claim], dict[str, Any]]:
+    """
+    Deterministically repair common small-model contract violations.
+
+    Repairs (conservative):
+    - Drop claims with invalid/missing single-term uid.
+    - Drop claims not present in the candidate pool (when available).
+    - Drop duplicate uids (first occurrence wins).
+    - Keep at most k_eff.
+    - If any repair occurred, backfill from candidates (candidate order)
+      until k_eff is reached.
+
+    When enforce_exact_k=True (strict-k mode), "returning fewer than k_eff"
+    is treated as a repair condition and triggers deterministic backfill.
+    """
+    meta: dict[str, Any] = {
+        "changed": False,
+        "enforce_exact_k": bool(enforce_exact_k),
+        "input_n": int(len(claims or [])),
+        "kept_n": 0,
+        "k": int(max(1, int(k))),
+        "k_eff": 0,
+        "shortfall": 0,
+        "dropped_dup": 0,
+        "dropped_invalid_uid": 0,
+        "dropped_not_in_candidates": 0,
+        "truncated": 0,
+        "backfilled": 0,
+    }
+
+    # Normalize candidate uid list (deterministic order, unique)
+    cand_uids: list[str] = []
+    cand_set: set[str] = set()
+    cand_df: pd.DataFrame | None = None
+    if isinstance(cand, pd.DataFrame) and ("term_uid" in cand.columns):
+        cand_df = cand.copy()
+        cand_df["term_uid"] = cand_df["term_uid"].astype(str).str.strip()
+        for x in cand_df["term_uid"].tolist():
+            if x and x not in cand_set:
+                cand_set.add(x)
+                cand_uids.append(x)
+
+    # Effective k: respect candidate availability when known
+    k_eff0 = int(min(meta["k"], len(cand_uids))) if cand_uids else int(meta["k"])
+    k_eff = int(max(1, k_eff0))
+    meta["k_eff"] = int(k_eff)
+
+    kept: list[Claim] = []
+    seen: set[str] = set()
+
+    # If LLM returned nothing, strict-k mode should still produce a fixed-size output
+    if not claims:
+        if enforce_exact_k and cand_uids and (cand_df is not None):
+            meta["changed"] = True
+            by_uid = cand_df.set_index("term_uid", drop=False)
+            for uid in cand_uids:
+                if len(kept) >= k_eff:
+                    break
+                try:
+                    r = by_uid.loc[uid]
+                except Exception:
+                    continue
+                if isinstance(r, pd.DataFrame):
+                    if r.empty:
+                        continue
+                    r = r.iloc[0]
+
+                term_id = str(r.get("term_id", "") or "").strip()
+                if not term_id:
+                    continue
+
+                direction = str(r.get("direction", "na") or "").strip().lower()
+                if direction not in {"up", "down", "na"}:
+                    direction = "na"
+
+                payload = {
+                    "entity": term_id,
+                    "direction": direction,
+                    "context_keys": list(ctx_keys_resolved or []),
+                    "evidence_ref": {"term_ids": [uid]},
+                }
+                try:
+                    kept.append(Claim.model_validate(payload))
+                    seen.add(uid)
+                    meta["backfilled"] += 1
+                except Exception:
+                    continue
+
+        meta["kept_n"] = int(len(kept))
+        meta["shortfall"] = int(max(0, k_eff - len(kept)))
+        return kept, meta
+
+    stop_idx: int | None = None
+
+    for i, c in enumerate(claims):
+        uid = _term_uid_from_claim(c)
+        if not uid:
+            meta["dropped_invalid_uid"] += 1
+            meta["changed"] = True
+            continue
+
+        if cand_set and (uid not in cand_set):
+            meta["dropped_not_in_candidates"] += 1
+            meta["changed"] = True
+            continue
+
+        if uid in seen:
+            meta["dropped_dup"] += 1
+            meta["changed"] = True
+            continue
+
+        seen.add(uid)
+        kept.append(c)
+
+        if len(kept) >= k_eff:
+            stop_idx = i
+            break
+
+    if stop_idx is not None and (stop_idx + 1) < len(claims):
+        meta["truncated"] = int(len(claims) - (stop_idx + 1))
+        meta["changed"] = True
+
+    # In strict-k mode, "short output" is itself a repair condition
+    if enforce_exact_k and (len(kept) < k_eff) and cand_uids and (cand_df is not None):
+        meta["shortfall"] = int(k_eff - len(kept))
+        meta["changed"] = True
+
+    # Backfill ONLY if we had to repair something (or strict-k shortfall)
+    if meta["changed"] and cand_uids and (len(kept) < k_eff) and (cand_df is not None):
+        by_uid = cand_df.set_index("term_uid", drop=False)
+
+        for uid in cand_uids:
+            if len(kept) >= k_eff:
+                break
+            if uid in seen:
+                continue
+
+            try:
+                r = by_uid.loc[uid]
+            except Exception:
+                continue
+
+            if isinstance(r, pd.DataFrame):
+                if r.empty:
+                    continue
+                r = r.iloc[0]
+
+            term_id = str(r.get("term_id", "") or "").strip()
+            if not term_id:
+                continue
+
+            direction = str(r.get("direction", "na") or "").strip().lower()
+            if direction not in {"up", "down", "na"}:
+                direction = "na"
+
+            payload = {
+                "entity": term_id,
+                "direction": direction,
+                "context_keys": list(ctx_keys_resolved or []),
+                "evidence_ref": {"term_ids": [uid]},
+            }
+            try:
+                kept.append(Claim.model_validate(payload))
+                seen.add(uid)
+                meta["backfilled"] += 1
+            except Exception:
+                continue
+
+    meta["kept_n"] = int(len(kept))
+    meta["shortfall"] = int(max(0, k_eff - len(kept)))
+    return kept, meta
+
+
 def propose_claims_llm(
     *,
     distilled_with_modules: pd.DataFrame,
@@ -1588,6 +1820,7 @@ def propose_claims_llm(
     # ensure candidates are not duplicated by term_uid (important for post-validate)
     df_rank = df_rank.drop_duplicates(subset=["term_uid"], keep="first")
 
+    strict_k = bool(_strict_k_enabled())
     require_gsh = os.environ.get("LLMPATH_LLM_REQUIRE_GENESET_HASH", "1").strip() != "0"
     prompt = build_claim_prompt(card=card, candidates=df_rank, k=int(k))
 
@@ -1602,7 +1835,7 @@ def propose_claims_llm(
         "notes": "",
         "backend_class": type(backend).__name__,
         "artifact_tag": (artifact_tag or ""),
-        "strict_k": bool(_strict_k_enabled()),
+        "strict_k": bool(strict_k),
         "top_n_mode": str(topn_meta.get("top_n_mode", "")),
         "top_n_env": str(topn_meta.get("top_n_env", "")),
         "top_n_alpha": topn_meta.get("top_n_alpha", None),
@@ -1701,8 +1934,20 @@ def propose_claims_llm(
             meta=meta,
         )
 
+    claims, repair_meta = _repair_llm_claims_contract_minimal(
+        claims=claims,
+        cand=df_rank,
+        k=int(k),
+        ctx_keys_resolved=ctx_keys_resolved,
+        enforce_exact_k=bool(strict_k),
+    )
+
+    if bool(repair_meta.get("changed", False)):
+        meta["llm_repair"] = repair_meta
+
     # Optional strict-k guardrail (paper/figure reproducibility)
-    if _strict_k_enabled():
+    # NOTE: strict-k is enforced AFTER tool-side repair/backfill, not by the LLM itself.
+    if bool(strict_k):
         # allow fewer only if candidates fewer
         k_eff = min(int(k), int(len(df_rank)))
         if len(claims) != k_eff:

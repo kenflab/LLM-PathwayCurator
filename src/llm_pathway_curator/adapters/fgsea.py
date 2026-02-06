@@ -1,12 +1,13 @@
 # LLM-PathwayCurator/src/llm_pathway_curator/adapters/fgsea.py
 from __future__ import annotations
 
-import hashlib
 import math
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
+
+from .. import _shared
 
 ALIASES: dict[str, str] = {
     "pathway": "pathway",
@@ -16,7 +17,7 @@ ALIASES: dict[str, str] = {
     "name": "pathway",
     "geneset": "pathway",
     "set": "pathway",
-    "id": "pathway",
+    # NOTE: DO NOT alias a generic "id" to pathway (too error-prone in public tools)
     "nes": "NES",
     "es": "ES",
     "padj": "padj",
@@ -31,6 +32,7 @@ ALIASES: dict[str, str] = {
     "le": "leadingEdge",
 }
 
+
 REQUIRED_CORE = ["pathway", "leadingEdge"]
 PREFERRED_STAT = ["NES", "ES"]
 
@@ -42,15 +44,8 @@ def _norm_colname(c: Any) -> str:
 
 
 def _is_na(x: Any) -> bool:
-    if x is None:
-        return True
-    try:
-        if isinstance(x, float) and math.isnan(x):
-            return True
-    except Exception:
-        pass
-    s = str(x).strip().lower()
-    return s in {"", "na", "nan", "none"}
+    # Spec-level NA policy lives in _shared.
+    return _shared.is_na_scalar(x) or _shared.is_na_token(x)
 
 
 def _clean_str(x: Any) -> str:
@@ -77,30 +72,8 @@ def _clean_gene_symbol(g: str) -> str:
 
 
 def _split_genes(x: Any) -> list[str]:
-    if _is_na(x):
-        return []
-    if isinstance(x, (list, tuple, set)):
-        parts = [_clean_gene_symbol(str(g)) for g in x]
-        parts = [p for p in parts if p]
-        return sorted(set(parts))
-
-    s = str(x).strip()
-    if not s or s.lower() in {"na", "nan", "none"}:
-        return []
-
-    s = s.replace("c(", "").replace(")", "").replace('"', "").replace("'", "")
-
-    for sep in [";", "|", "\t"]:
-        s = s.replace(sep, ",")
-
-    if "," in s:
-        parts = [p.strip() for p in s.split(",") if p.strip()]
-    else:
-        parts = [p.strip() for p in s.split() if p.strip()]
-
-    parts = [_clean_gene_symbol(p) for p in parts]
-    parts = [p for p in parts if p]
-    return sorted(set(parts))
+    # Spec-level gene parsing lives in _shared (handles ',', ';', '|', bracketed lists, etc.).
+    return _shared.parse_genes(x)
 
 
 def _term_slug(s: str) -> str:
@@ -119,14 +92,33 @@ def _term_slug(s: str) -> str:
 
 
 def _term_hash(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:10]
+    # Spec-level short hash (12-hex) to keep identity rules consistent across layers.
+    return _shared.sha256_12hex(s)
 
 
 @dataclass(frozen=True)
 class FgseaAdapterConfig:
+    """
+    Adapter configuration for converting an fgsea result table into EvidenceTable.
+
+    Defaults are chosen to match the paper's R-side EvidenceTable behavior:
+    - term_id is human-readable (raw pathway name)
+    - rows are sorted by qval asc, abs(stat) desc
+    - qval NA rows are dropped
+    """
+
     source_name: str = "fgsea"
     require_genes: bool = True
     keep_pval: bool = True  # store pval separately (does not replace qval)
+
+    # term_id policy:
+    # - "raw": term_id == pathway (recommended; matches paper EvidenceTable)
+    # - "prefixed_hashed": term_id == "FGSEA:<slug>|<hash>" (legacy)
+    term_id_mode: str = "raw"
+
+    # qval and output determinism
+    drop_na_qval: bool = True
+    sort_output: bool = True
 
 
 def read_fgsea_table(path: str) -> pd.DataFrame:
@@ -173,7 +165,7 @@ def fgsea_to_evidence_table(
     missing = [c for c in REQUIRED_CORE if c not in df.columns]
     if missing:
         raise ValueError(
-            f"fgsea_to_evidence_table: missing required columns: "
+            "fgsea_to_evidence_table: missing required columns: "
             f"{missing}. Found={list(df.columns)}"
         )
 
@@ -191,66 +183,80 @@ def fgsea_to_evidence_table(
     df["__pathway"] = df["pathway"].map(_clean_str)
     empty_pw = df["__pathway"].eq("")
     if empty_pw.any():
-        i = int(df.index[empty_pw][0])
-        raise ValueError(f"fgsea_to_evidence_table: empty pathway at row index={i}")
+        idx = df.index[empty_pw][0]
+        raise ValueError(f"fgsea_to_evidence_table: empty pathway at row index={idx!r}")
 
     df["evidence_genes"] = df["leadingEdge"].map(_split_genes)
     if config.require_genes:
         empty = df["evidence_genes"].map(len).eq(0)
         if empty.any():
-            i = int(df.index[empty][0])
-            pw = df.loc[i, "__pathway"]
+            idx = df.index[empty][0]
+            pw = df.at[idx, "__pathway"]
             raise ValueError(
                 "fgsea_to_evidence_table: empty leadingEdge/evidence_genes at row "
-                f"index={i} (pathway={pw})"
+                f"index={idx!r} (pathway={pw})"
             )
 
     df["__stat"] = df[stat_col].map(_to_float)
     if df["__stat"].isna().any():
-        i = int(df.index[df["__stat"].isna()][0])
-        raise ValueError(f"fgsea_to_evidence_table: non-numeric {stat_col} at row index={i}")
+        idx = df.index[df["__stat"].isna()][0]
+        raise ValueError(f"fgsea_to_evidence_table: non-numeric {stat_col} at row index={idx!r}")
 
     # qval: ONLY padj maps to qval (FDR). pval stored separately if present.
-    df["__qval"] = df["padj"].map(_to_float) if "padj" in df.columns else pd.NA
-    pval = df["pval"].map(_to_float) if ("pval" in df.columns and config.keep_pval) else pd.NA
-
-    # direction: prefer NES sign if NES exists
-    if "NES" in df.columns:
-        nes = df["NES"].map(_to_float)
-
-        def _dir(v: Any) -> str:
-            vv = _to_float(v)
-            if vv is None:
-                return "na"
-            if vv > 0:
-                return "up"
-            if vv < 0:
-                return "down"
-            return "na"
-
-        df["direction"] = nes.map(_dir)
+    if "padj" in df.columns:
+        qval = df["padj"].map(_to_float)
     else:
-        df["direction"] = "na"
+        qval = pd.Series([pd.NA] * len(df), index=df.index)
 
-    # stable term_id: FGSEA:<slug>|<hash>
+    if ("pval" in df.columns) and config.keep_pval:
+        pval = df["pval"].map(_to_float)
+    else:
+        pval = pd.Series([pd.NA] * len(df), index=df.index)
+
+    def _dir_from(v: Any) -> str:
+        vv = _to_float(v)
+        if vv is None:
+            return "na"
+        return "up" if vv > 0 else ("down" if vv < 0 else "na")
+
+    # direction: prefer NES sign, else fall back to chosen stat_col sign
+    if "NES" in df.columns:
+        df["direction"] = df["NES"].map(_dir_from)
+    else:
+        df["direction"] = df[stat_col].map(_dir_from)
+
+    # term_id: default "raw" matches paper EvidenceTable
     term_hash = df["__pathway"].map(_term_hash)
     term_slug = df["__pathway"].map(_term_slug)
+    if config.term_id_mode == "prefixed_hashed":
+        term_id = term_slug.combine(term_hash, lambda a, b: f"FGSEA:{a}|{b}")
+    else:
+        term_id = df["__pathway"]
 
     out = pd.DataFrame(
         {
-            "term_id": term_slug.combine(term_hash, lambda a, b: f"FGSEA:{a}|{b}"),
+            "term_id": term_id,
             "term_name": df["__pathway"],
             "source": config.source_name,
             "stat": df["__stat"].astype(float),
-            "qval": df["__qval"],
+            "qval": qval,
             "direction": df["direction"],
             "evidence_genes": df["evidence_genes"],
-            # optional provenance fields
+            # optional provenance fields (kept minimal)
             "q_kind": "padj" if "padj" in df.columns else "na",
             "pval": pval,
             "term_id_h": term_hash,
         }
     ).reset_index(drop=True)
+
+    # Paper-aligned filtering and stable ordering
+    if config.drop_na_qval and "qval" in out.columns:
+        out = out[out["qval"].notna()].reset_index(drop=True)
+
+    if config.sort_output and ("qval" in out.columns) and (len(out) > 0):
+        out["__abs_stat"] = out["stat"].abs()
+        out = out.sort_values(by=["qval", "__abs_stat"], ascending=[True, False])
+        out = out.drop(columns="__abs_stat").reset_index(drop=True)
 
     return out
 
@@ -265,6 +271,6 @@ def convert_fgsea_table_to_evidence_tsv(
     ev = fgsea_to_evidence_table(raw, config=config)
 
     ev_out = ev.copy()
-    ev_out["evidence_genes"] = ev_out["evidence_genes"].map(lambda xs: ",".join(xs))
+    ev_out["evidence_genes"] = ev_out["evidence_genes"].map(_shared.join_genes_tsv)
     ev_out.to_csv(out_path, sep="\t", index=False)
     return ev

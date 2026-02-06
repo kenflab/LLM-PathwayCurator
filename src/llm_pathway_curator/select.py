@@ -1638,6 +1638,10 @@ def _maybe_inject_context_snapshot(claim: Claim, r: pd.Series) -> Claim:
     reason = str(r.get("context_reason", "") or "").strip() or None
     notes = str(r.get("context_notes", "") or "").strip() or None
 
+    MAX_CTX = 160
+    if reason is not None and len(reason) > MAX_CTX:
+        reason = reason[:MAX_CTX]
+
     # Rebuild Claim to ensure model validators are applied consistently.
     return Claim(
         claim_id=str(claim.claim_id or ""),

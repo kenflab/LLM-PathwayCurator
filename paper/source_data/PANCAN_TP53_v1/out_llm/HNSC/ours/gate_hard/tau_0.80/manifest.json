@@ -15,8 +15,8 @@
     "python": "3.12.12"
   },
   "error": "",
-  "finished_unix": 1769646382,
-  "git_commit": "03a6e49513a08ac7a728da4ca44c39c9d06c5842",
+  "finished_unix": 1770391683,
+  "git_commit": "42b5a6755cbbd071952a2c1fd4ec12453d37d2a5",
   "inputs": {
     "evidence_table": {
       "mtime_unix": 1769181104.7039697,
@@ -43,7 +43,7 @@
     "k_claims": 50,
     "out_root": "/work/paper/source_data/PANCAN_TP53_v1/out_llm",
     "seed": 42,
-    "started_unix": 1769645031,
+    "started_unix": 1770390098,
     "stress": {
       "contradictory_max_extra": 0,
       "contradictory_p": 0.0,
@@ -79,7 +79,7 @@
     "variant": "ours"
   },
   "script": "paper/scripts/run_fig2_pipeline.py",
-  "started_unix": 1769645031,
+  "started_unix": 1770390098,
   "status": "ok",
   "tool": "llm-pathway-curator"
 }

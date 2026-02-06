@@ -856,9 +856,11 @@ class EvidenceTable:
         # evidence_genes: write as TSV-friendly joined string; do NOT re-parse on write
         if "evidence_genes" in out.columns:
             out["evidence_genes_str"] = out["evidence_genes"].map(
-                lambda x: _excel_safe_cell(_shared.join_genes_tsv(list(x)))
-                if isinstance(x, (list, tuple, set))
-                else _excel_safe_cell(x)
+                lambda x: (
+                    _excel_safe_cell(_shared.join_genes_tsv(list(x)))
+                    if isinstance(x, (list, tuple, set))
+                    else _excel_safe_cell(x)
+                )
             )
         elif "evidence_genes_str" in out.columns:
             out["evidence_genes_str"] = out["evidence_genes_str"].map(_excel_safe_cell)

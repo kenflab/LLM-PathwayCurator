@@ -1,9 +1,0 @@
-coverage_pass_total	coverage_decided_total	risk_fail_given_decided	risk_fail_total	fail_rate_total	n_pass	n_fail	n_abstain	n_decided	n_total	threshold	score_col	status_col	pass_if_score_ge	promote_abstain
-1.0	1.0	0.0	0.0	0.0	50.0	0.0	0.0	50.0	50.0	0.875	term_survival_agg	status	True	True
-0.96	0.96	0.0	0.0	0.0	48.0	0.0	2.0	48.0	50.0	0.890625	term_survival_agg	status	True	True
-0.78	0.78	0.0	0.0	0.0	39.0	0.0	11.0	39.0	50.0	0.90625	term_survival_agg	status	True	True
-0.52	0.52	0.0	0.0	0.0	26.0	0.0	24.0	26.0	50.0	0.921875	term_survival_agg	status	True	True
-0.4	0.4	0.0	0.0	0.0	20.0	0.0	30.0	20.0	50.0	0.9375	term_survival_agg	status	True	True
-0.3	0.3	0.0	0.0	0.0	15.0	0.0	35.0	15.0	50.0	0.953125	term_survival_agg	status	True	True
-0.14	0.14	0.0	0.0	0.0	7.0	0.0	43.0	7.0	50.0	0.96875	term_survival_agg	status	True	True
-0.06	0.06	0.0	0.0	0.0	3.0	0.0	47.0	3.0	50.0	1.0	term_survival_agg	status	True	True

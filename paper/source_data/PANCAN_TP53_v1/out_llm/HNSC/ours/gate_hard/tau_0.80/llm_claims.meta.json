@@ -1,7 +1,7 @@
 {
   "k": 50,
   "seed": 42,
-  "top_n": 50,
+  "top_n": 80,
   "require_gene_set_hash": true,
   "context_keys_resolved": [
     "condition",
@@ -10,19 +10,33 @@
     "comparison"
   ],
   "context_proxy_enabled": false,
-  "candidates_sha256": "da547dbe56bab784f93e986c3ae1e5c8c5570d23e2f41a25eeae6d33d1a09685",
+  "candidates_sha256": "8f5598f08cd34adeb36557dbadf238979e919ec2a29b934f1841b8d2356771ef",
   "notes": "ok",
   "backend_class": "OllamaBackend",
   "artifact_tag": "",
-  "strict_k": false,
-  "top_n_mode": "auto",
-  "top_n_env": "",
-  "top_n_alpha": 12,
-  "top_n_min": 15,
-  "top_n_max": 80,
-  "top_n_max_small": 50,
+  "strict_k": true,
+  "top_n_mode": "env",
+  "top_n_env": "80",
+  "top_n_alpha": null,
+  "top_n_min": null,
+  "top_n_max": null,
+  "top_n_max_small": null,
   "top_n_small_model": true,
   "top_n_model_hint": "llama3.1:8b",
-  "top_n_hard_max": null,
-  "top_n_soft_max": null
+  "top_n_hard_max": 80,
+  "top_n_soft_max": 50,
+  "llm_repair": {
+    "changed": true,
+    "enforce_exact_k": true,
+    "input_n": 41,
+    "kept_n": 50,
+    "k": 50,
+    "k_eff": 50,
+    "shortfall": 0,
+    "dropped_dup": 14,
+    "dropped_invalid_uid": 0,
+    "dropped_not_in_candidates": 0,
+    "truncated": 0,
+    "backfilled": 23
+  }
 }

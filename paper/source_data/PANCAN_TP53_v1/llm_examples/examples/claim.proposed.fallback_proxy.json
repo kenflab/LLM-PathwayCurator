@@ -8,10 +8,10 @@
     "perturbation",
     "comparison"
   ],
-  "context_evaluated": false,
-  "context_method": "none",
-  "context_status": null,
-  "context_reason": null,
+  "context_evaluated": true,
+  "context_method": "llm",
+  "context_status": "PASS",
+  "context_reason": "The term HALLMARK_APOPTOSIS is relevant to the context of TP53 mutation in a tumor sample (HNSC), as apoptosis is often associated with cancer and TP53 mutation",
   "context_notes": null,
   "evidence_ref": {
     "module_id": "Mdf6350d89cee",

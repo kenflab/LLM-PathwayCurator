@@ -54,6 +54,7 @@ paper/source_data/**/fig/* copy*.pdf
 # macOS / junk
 .Trash-*
 .DS_Store
-# macOS / junk
-.Trash-*
-.DS_Store
+
+/out/
+/**/*.xlsx
+
