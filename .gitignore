@@ -58,4 +58,6 @@ paper/source_data/**/fig/* copy*.pdf
 /out/
 /**/*.xlsx
 
-paper/notebooks/**/*.ipynb
+paper/notebooks/**
+!paper/notebooks/README.md
+
