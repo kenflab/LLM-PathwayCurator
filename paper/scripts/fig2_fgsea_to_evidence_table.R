@@ -1,6 +1,47 @@
 #!/usr/bin/env Rscript
 # paper/scripts/fig2_fgsea_to_evidence_table.R
 
+# =============================================================================
+# fig2_fgsea_to_evidence_table.R
+#
+# Convert an fgsea run (Hallmark, msigdbr) into an EvidenceTable (v1).
+#
+# Parameters
+# ----------
+# CANCER : character(1)
+#   TCGA cancer code (e.g., "HNSC"). Passed as a single CLI argument.
+#
+# Inputs
+# ------
+# derived/rankings/{CANCER}.deg_ranking.tsv
+#   Required columns: gene, score
+#   This benchmark expects ENTREZ IDs (as character strings) in `gene`.
+#
+# Outputs
+# -------
+# evidence_tables/{CANCER}.evidence_table.tsv
+#   Columns:
+#     term_id, term_name, source, stat, qval, direction, evidence_genes
+#
+# Dependencies
+# ------------
+# data.table, fgsea, msigdbr
+#
+# Reproducibility
+# ---------------
+# - Uses set.seed(0).
+# - Adds an epsilon jitter to break ties deterministically.
+#
+# Failure modes
+# -------------
+# - Missing ranking file or required columns.
+# - NA scores after numeric conversion.
+# - Too-small ranking (< 1000 genes).
+# - Zero overlap between stats genes and msigdbr gene sets.
+# - fgsea returns 0 rows after minSize/maxSize filtering.
+# =============================================================================
+
+
 suppressPackageStartupMessages({
   library(data.table)
   library(fgsea)

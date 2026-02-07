@@ -10,6 +10,17 @@ import pandas as pd
 
 
 def apply_pub_style(fontsize: int = 16) -> None:
+    """Apply publication-style matplotlib rcParams for line plots.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size for axes, ticks, and legend (default 16).
+
+    Notes
+    -----
+    This mutates global matplotlib rcParams for the current process.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -25,6 +36,18 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def variant_style(variant: str) -> dict[str, object]:
+    """Return line/marker style for a variant identifier.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier (case-insensitive).
+
+    Returns
+    -------
+    dict
+        Matplotlib style kwargs such as ``linestyle`` and ``marker``.
+    """
     v = str(variant or "").strip().lower()
     if v == "ours":
         return {"linestyle": "-", "marker": "o"}
@@ -36,15 +59,40 @@ def variant_style(variant: str) -> dict[str, object]:
 
 
 def _canon(s: str) -> str:
+    """Canonicalize an identifier string.
+
+    Parameters
+    ----------
+    s : str
+        Input string (may be None-like).
+
+    Returns
+    -------
+    str
+        Lower-cased, stripped string. None-like values become ``""``.
+    """
     return str(s or "").strip().lower()
 
 
 def variant_label(variant: str, *, mode: str = "proposed") -> str:
-    """
-    Paper-facing legend label.
-    mode:
-      - "proposed": Proposed (τ-audit)  [recommended]
-      - "ours":     Ours (audit+τ)
+    """Map a variant identifier to a paper-facing legend label.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier.
+    mode : {"proposed", "ours"}, optional
+        Legend label mode for ``variant="ours"`` (default "proposed").
+
+    Returns
+    -------
+    str
+        Legend label string used in the plot legend.
+
+    Notes
+    -----
+    Only legend labels are rewritten; data filtering still uses the raw
+    variant identifiers.
     """
     v = _canon(variant)
 
@@ -58,10 +106,44 @@ def variant_label(variant: str, *, mode: str = "proposed") -> str:
 
 
 def _parse_csv(s: str) -> list[str]:
+    """Parse a comma-separated list into stripped tokens.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string.
+
+    Returns
+    -------
+    list of str
+        Non-empty tokens with surrounding whitespace removed.
+    """
     return [x.strip() for x in str(s).split(",") if x.strip()]
 
 
 def load_table(path: Path) -> pd.DataFrame:
+    """Load and validate risk_coverage.tsv counts for status-by-tau plots.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to ``risk_coverage.tsv`` (tab-separated).
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with required columns present and numeric columns parsed.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+
+    Notes
+    -----
+    Rows are filtered to ``n_total > 0`` and to those with non-missing
+    numeric fields needed for rate computations.
+    """
     df = pd.read_csv(path, sep="\t")
 
     required = {
@@ -97,6 +179,38 @@ def summarize(
     gate_mode: str,
     variants: list[str],
 ) -> pd.DataFrame:
+    """Aggregate status counts by (tau, variant) and compute rates.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Risk/coverage table containing counts per run.
+    condition : str
+        Condition to filter (e.g., HNSC).
+    gate_mode : str
+        Gate mode to filter (e.g., hard).
+    variants : list of str
+        If non-empty, restrict to these variants.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Aggregated table with columns:
+        - tau, variant
+        - n_total, n_pass, n_abstain, n_fail (summed if duplicates exist)
+        - pass_rate, abstain_rate, fail_rate
+        - _sum (pass+abstain+fail; sanity diagnostic)
+
+    Raises
+    ------
+    ValueError
+        If no rows remain after filtering.
+
+    Notes
+    -----
+    Summation is safe for count columns when duplicates occur due to
+    repeated runs or merged outputs.
+    """
     d = df[(df["condition"] == condition) & (df["gate_mode"] == gate_mode)].copy()
     if variants:
         d = d[d["variant"].isin(set(variants))]
@@ -136,6 +250,35 @@ def plot_lines(
     label_mode: str = "proposed",  # "proposed" | "ours"
     xmargin: float = 0.03,  # tau-units padding
 ) -> None:
+    """Plot status rate(s) across tau for each variant.
+
+    Parameters
+    ----------
+    g : pandas.DataFrame
+        Output of ``summarize`` containing rates per (tau, variant).
+    out : pathlib.Path
+        Output figure path (pdf/png).
+    title : str
+        Optional title; if empty, no title is drawn (Nature-style).
+    fontsize : int
+        Base font size.
+    metric : {"abstain", "pass", "both"}, optional
+        Which rate(s) to plot (default "abstain").
+    label_mode : {"proposed", "ours"}, optional
+        Legend label mode for ``variant="ours"`` (default "proposed").
+    xmargin : float, optional
+        Extra x-axis margin in tau units to avoid clipped markers
+        (default 0.03).
+
+    Raises
+    ------
+    ValueError
+        If ``metric`` is not one of the supported values.
+
+    Notes
+    -----
+    Legend entries are de-duplicated while preserving insertion order.
+    """
     apply_pub_style(fontsize=fontsize)
 
     metric = str(metric).strip().lower()
@@ -232,6 +375,11 @@ def plot_lines(
 
 
 def main() -> None:
+    """CLI entry point for status-by-tau line plots.
+
+    Loads ``risk_coverage.tsv``, filters by condition/gate_mode/variants,
+    aggregates counts into rates, and writes a line plot figure.
+    """
     ap = argparse.ArgumentParser(
         description="Line plot of status rates across τ (variant curves on one axis)."
     )

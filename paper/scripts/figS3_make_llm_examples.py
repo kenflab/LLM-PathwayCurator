@@ -13,10 +13,37 @@ import pandas as pd
 # Helpers
 # -----------------------------
 def _u(s) -> str:
+    """
+    Normalize a value as an uppercased string.
+
+    Parameters
+    ----------
+    s : Any
+        Input value.
+
+    Returns
+    -------
+    str
+        Stripped, uppercased string representation.
+    """
     return str(s).strip().upper()
 
 
 def _is_na(x) -> bool:
+    """
+    Return True if a value should be treated as missing.
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+
+    Returns
+    -------
+    bool
+        True for None, NaN-like floats, and common NA strings
+        (e.g., "", "na", "nan", "none", "null").
+    """
     if x is None:
         return True
     if isinstance(x, float) and pd.isna(x):
@@ -26,6 +53,19 @@ def _is_na(x) -> bool:
 
 
 def _as_float_or_none(x) -> float | None:
+    """
+    Convert a value to float, returning None on failure or NA.
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+
+    Returns
+    -------
+    float or None
+        Parsed float, or None if input is NA or cannot be parsed.
+    """
     try:
         if _is_na(x):
             return None
@@ -35,6 +75,24 @@ def _as_float_or_none(x) -> float | None:
 
 
 def _as_bool_or_none(x) -> bool | None:
+    """
+    Convert a value to bool, returning None when unknown or NA.
+
+    Parameters
+    ----------
+    x : Any
+        Input value.
+
+    Returns
+    -------
+    bool or None
+        Parsed boolean for common truthy/falsey tokens, otherwise None.
+
+    Notes
+    -----
+    Accepted truthy tokens: "1", "true", "t", "yes", "y", "on".
+    Accepted falsey tokens: "0", "false", "f", "no", "n", "off".
+    """
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
     if isinstance(x, bool):
@@ -50,6 +108,30 @@ def _as_bool_or_none(x) -> bool | None:
 
 
 def _load_claim_json_from_row(row: pd.Series) -> dict:
+    """
+    Load a claim JSON object from a row.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Row containing one of the supported JSON columns.
+
+    Returns
+    -------
+    dict
+        Parsed claim JSON object.
+
+    Raises
+    ------
+    SystemExit
+        If no JSON column is found, JSON parsing fails, or the parsed
+        object is not a dict.
+
+    Notes
+    -----
+    Supported column names (first match wins):
+    "claim_json", "claim", "json", "payload_json".
+    """
     for c in ["claim_json", "claim", "json", "payload_json"]:
         if c in row.index and (not _is_na(row.get(c))):
             try:
@@ -66,13 +148,34 @@ def _load_claim_json_from_row(row: pd.Series) -> dict:
 
 def _require_evidence_ref(claim: dict) -> dict:
     """
-    Accept both old/new EvidenceRef shapes.
+    Validate and return the evidence_ref object from a claim.
 
-    We require:
-      - term_ids: list[str]
-      - module_id: str
-      - gene_set_hash: str
-      - gene_ids OR gene_symbols OR gene_symbols_str: list[str] (at least one present)
+    Parameters
+    ----------
+    claim : dict
+        Claim JSON object that must contain "evidence_ref".
+
+    Returns
+    -------
+    dict
+        The evidence_ref dictionary.
+
+    Raises
+    ------
+    SystemExit
+        If required evidence_ref fields are missing or empty.
+
+    Required Fields
+    ---------------
+    term_ids : list[str]
+    module_id : str
+    gene_set_hash : str
+    genes : list[str]
+        At least one of: gene_ids, gene_symbols, gene_symbols_str.
+
+    Notes
+    -----
+    This function is intentionally tolerant to legacy/new evidence_ref shapes.
     """
     evref = claim.get("evidence_ref")
     if not isinstance(evref, dict) or not evref:
@@ -114,13 +217,34 @@ def _require_evidence_ref(claim: dict) -> dict:
 
 def _pick_examples_from_audit(audit: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     """
-    Return (fallback_example, llm_example).
+    Select example rows from an audit log for paper examples.
 
-    fallback_example:
-      - context_method != llm (prefer proxy/none) AND status == PASS/ABSTAIN
+    Parameters
+    ----------
+    audit : pandas.DataFrame
+        Audit log table loaded from "audit_log.tsv".
 
-    llm_example:
-      - context_method == llm AND context_status in PASS/FAIL
+    Returns
+    -------
+    tuple[pandas.Series, pandas.Series]
+        (fallback_example_row, llm_example_row)
+
+    Selection Rules
+    ---------------
+    fallback_example_row
+        Prefer context_method != "llm" and status in {"PASS", "ABSTAIN"}.
+    llm_example_row
+        Prefer context_method == "llm" and context_status in {"PASS", "FAIL"}.
+
+    Raises
+    ------
+    SystemExit
+        If the audit table is empty.
+
+    Notes
+    -----
+    If preferred candidates are absent, this function falls back to the first
+    available row while preserving input TSV order.
     """
     if audit.empty:
         raise SystemExit("audit_log.tsv is empty.")
@@ -171,8 +295,29 @@ def _pick_examples_from_audit(audit: pd.DataFrame) -> tuple[pd.Series, pd.Series
 
 def _synthesize_context_review_from_audit_row(row: pd.Series, claim: dict) -> dict:
     """
-    FigS1: show that LLM/proxy produces typed review fields;
-    audit consumes them mechanically; evidence_ref anchors everything.
+    Synthesize a context-review record from an audit row and claim.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Row from the audit log containing context-related fields.
+    claim : dict
+        Claim JSON object with an evidence_ref anchor.
+
+    Returns
+    -------
+    dict
+        Paper-friendly context review record with an embedded evidence_ref.
+
+    Raises
+    ------
+    SystemExit
+        If the claim is missing a valid evidence_ref.
+
+    Notes
+    -----
+    This record is meant to illustrate that typed review fields are produced
+    (LLM/proxy) and later consumed mechanically by the audit.
     """
     evref = _require_evidence_ref(claim)
 
@@ -234,6 +379,23 @@ def _synthesize_context_review_from_audit_row(row: pd.Series, claim: dict) -> di
 
 
 def _audit_decision_record(row: pd.Series) -> dict:
+    """
+    Extract a compact audit decision record from an audit row.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Row from the audit log.
+
+    Returns
+    -------
+    dict
+        Dictionary containing audit status, reasons, and key decision flags.
+
+    Notes
+    -----
+    Empty strings and None values are removed for paper-friendly output.
+    """
     rec = {
         "status": _u(row.get("status", "")),
         "abstain_reason": str(row.get("abstain_reason", "") or "").strip(),
@@ -267,6 +429,33 @@ def _audit_decision_record(row: pd.Series) -> dict:
 
 
 def _evidence_excerpt(evidence_table_path: Path, claim: dict, *, n_rows: int) -> pd.DataFrame:
+    """
+    Write a small EvidenceTable excerpt matching a claim's evidence_ref.
+
+    Parameters
+    ----------
+    evidence_table_path : pathlib.Path
+        Path to an EvidenceTable TSV.
+    claim : dict
+        Claim JSON object with evidence_ref.term_ids and/or evidence_ref.module_id.
+    n_rows : int
+        Maximum number of rows to return.
+
+    Returns
+    -------
+    pandas.DataFrame
+        EvidenceTable subset including core columns when available.
+
+    Raises
+    ------
+    SystemExit
+        If the claim is missing a valid evidence_ref.
+
+    Notes
+    -----
+    Matching is attempted against both "term_uid" and "term_id" columns
+    when present.
+    """
     ev = pd.read_csv(evidence_table_path, sep="\t")
     evref = _require_evidence_ref(claim)
 
@@ -310,6 +499,38 @@ def _evidence_excerpt(evidence_table_path: Path, claim: dict, *, n_rows: int) ->
 def _write_example_bundle(
     out_dir: Path, *, tag: str, audit_row: pd.Series, evidence_table: Path, n_evidence_rows: int
 ) -> None:
+    """
+    Write a complete example bundle (claim, context review, audit decision, excerpt).
+
+    Parameters
+    ----------
+    out_dir : pathlib.Path
+        Output directory.
+    tag : str
+        Tag used in filenames (e.g., "fallback_proxy", "llm_review").
+    audit_row : pandas.Series
+        Selected audit row that includes the claim JSON column.
+    evidence_table : pathlib.Path
+        EvidenceTable TSV used to produce the excerpt.
+    n_evidence_rows : int
+        Number of EvidenceTable rows to include in the excerpt.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If claim JSON cannot be loaded or evidence_ref validation fails.
+
+    Outputs
+    -------
+    claim.proposed.<tag>.json
+    context_review.<tag>.json
+    audit_decision.<tag>.json
+    evidence_ref.<tag>.tsv
+    """
     claim = _load_claim_json_from_row(audit_row)
 
     (out_dir / f"claim.proposed.{tag}.json").write_text(
@@ -331,6 +552,22 @@ def _write_example_bundle(
 
 
 def main() -> None:
+    """
+    CLI entry point to generate example bundles for the paper.
+
+    Reads a run directory containing "audit_log.tsv", selects two example rows
+    (fallback/proxy and LLM review), and writes JSON/TSV bundles under
+    "<out-examples-dir>/examples/".
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required input files are missing or empty.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True, help=".../HNSC/ours/gate_hard/tau_0.80")
     ap.add_argument(
@@ -355,7 +592,7 @@ def main() -> None:
     if not audit_tsv.exists():
         raise SystemExit(
             f"Missing: {audit_tsv}\n"
-            "FigS1 examples should be produced from audit_log.tsv to demonstrate "
+            "FigS3 examples should be produced from audit_log.tsv to demonstrate "
             "the mechanical cage."
         )
 
@@ -384,7 +621,7 @@ def main() -> None:
         n_evidence_rows=int(args.n_evidence_rows),
     )
 
-    print("[figS1_make_examples] wrote bundles:")
+    print("[figS3_make_examples] wrote bundles:")
     for tag in ["fallback_proxy", "llm_review"]:
         print(f"  - {out_dir}/claim.proposed.{tag}.json")
         print(f"  - {out_dir}/context_review.{tag}.json")

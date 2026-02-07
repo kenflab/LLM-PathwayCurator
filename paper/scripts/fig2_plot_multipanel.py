@@ -11,6 +11,18 @@ import pandas as pd
 
 
 def apply_pub_style(fontsize: int = 16) -> None:
+    """Apply publication-style matplotlib rcParams.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size used for axes/labels/legend (default 16).
+
+    Notes
+    -----
+    This mutates global matplotlib rcParams for the current Python process.
+    Call once near the start of plotting.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -28,6 +40,23 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def method_style(method: str) -> dict[str, object]:
+    """Return line/marker style for a method identifier.
+
+    Parameters
+    ----------
+    method : str
+        Method identifier string (case-insensitive).
+
+    Returns
+    -------
+    dict
+        Matplotlib style kwargs (e.g., ``linestyle``, ``marker``).
+
+    Notes
+    -----
+    This helper is currently unused by the plotting routine (variant styling
+    is used instead). It is kept for optional future plots.
+    """
     m = method.lower()
     if m in ("ours", "method_ours"):
         return {"linestyle": "-", "marker": "o"}
@@ -43,6 +72,18 @@ def method_style(method: str) -> dict[str, object]:
 
 
 def variant_style(variant: str) -> dict[str, object]:
+    """Return line/marker style for a variant identifier.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier string (case-insensitive).
+
+    Returns
+    -------
+    dict
+        Matplotlib style kwargs (e.g., ``linestyle``, ``marker``).
+    """
     v = str(variant or "").strip().lower()
     if v in ("ours",):
         return {"linestyle": "-", "marker": "o"}
@@ -54,18 +95,43 @@ def variant_style(variant: str) -> dict[str, object]:
 
 
 def _canon(s: str) -> str:
+    """Canonicalize an identifier string.
+
+    Parameters
+    ----------
+    s : str
+        Input string (may be None-like).
+
+    Returns
+    -------
+    str
+        Lower-cased, stripped string. None-like values become ``""``.
+    """
     return str(s or "").strip().lower()
 
 
 def variant_label(variant: str, *, mode: str = "proposed") -> str:
-    """
-    Paper-facing legend label.
-    - Keep code identifiers (ours/context_swap/stress) unchanged elsewhere.
-    - Only rewrite what appears in the figure legend.
+    """Map a variant identifier to a paper-facing legend label.
 
-    mode:
-      - "proposed": use Proposed (τ-audit) for ours (recommended)
-      - "ours": use Ours (audit+τ) for ours
+    This keeps internal identifiers stable (e.g., ours/context_swap/stress)
+    while allowing a human-readable legend label.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier.
+    mode : {"proposed", "ours"}, optional
+        Legend label mode for ``variant="ours"`` (default "proposed").
+
+    Returns
+    -------
+    str
+        Legend label string.
+
+    Notes
+    -----
+    Only the legend label is rewritten; the data filtering still relies on
+    the raw variant identifiers.
     """
     v = _canon(variant)
 
@@ -80,9 +146,21 @@ def variant_label(variant: str, *, mode: str = "proposed") -> str:
 
 
 def method_label(method: str) -> str:
-    """
-    Optional: only used when label_mode=variant_method.
-    Keep minimal and safe.
+    """Map a method identifier to a compact legend label.
+
+    Parameters
+    ----------
+    method : str
+        Method identifier.
+
+    Returns
+    -------
+    str
+        Short label string for legends.
+
+    Notes
+    -----
+    Used only when ``label_mode="variant_method"``.
     """
     m = _canon(method)
     if m in ("ours", "method_ours"):
@@ -99,6 +177,32 @@ def method_label(method: str) -> str:
 
 
 def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
+    """Load and validate a risk_coverage.tsv table for plotting.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to ``risk_coverage.tsv`` (tab-separated).
+    ycol : str
+        Column to use on the y-axis. Must exist in the table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cleaned DataFrame with required columns present and key numeric
+        columns parsed.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing, or if human-risk mode is selected
+        but ``n_pass_labeled`` is missing.
+
+    Notes
+    -----
+    - Filters to ``tau`` and ``coverage_pass`` within [0, 1].
+    - Drops rows with missing ``tau`` or ``coverage_pass``.
+    """
     df = pd.read_csv(path, sep="\t")
 
     required = {"benchmark_id", "condition", "variant", "method", "tau", "coverage_pass", ycol}
@@ -131,6 +235,18 @@ def load_and_validate(path: Path, *, ycol: str) -> pd.DataFrame:
 
 
 def mm_to_inch(mm: float) -> float:
+    """Convert millimeters to inches.
+
+    Parameters
+    ----------
+    mm : float
+        Length in millimeters.
+
+    Returns
+    -------
+    float
+        Length in inches.
+    """
     return float(mm) / 25.4
 
 
@@ -142,11 +258,35 @@ def resolve_figsize(
     width_mm: float | None,
     height_mm: float | None,
 ) -> tuple[float, float]:
-    """
-    Priority:
-      1) --figsize W H (inches)
-      2) --width-mm / --height-mm (mm; if one missing, infer from grid aspect)
-      3) fallback auto sizing (current behavior)
+    """Resolve figure size in inches from CLI sizing options.
+
+    Priority order:
+    1) ``--figsize W H`` (inches)
+    2) ``--width-mm`` / ``--height-mm`` (mm; infer missing side)
+    3) fallback auto sizing based on grid shape
+
+    Parameters
+    ----------
+    cols : int
+        Number of grid columns.
+    rows : int
+        Number of grid rows.
+    figsize : tuple[float, float] or None
+        Explicit (width, height) in inches.
+    width_mm : float or None
+        Figure width in mm.
+    height_mm : float or None
+        Figure height in mm.
+
+    Returns
+    -------
+    tuple of float
+        (width, height) in inches.
+
+    Raises
+    ------
+    ValueError
+        If an explicit ``--figsize`` contains non-positive values.
     """
     if figsize is not None:
         w, h = float(figsize[0]), float(figsize[1])
@@ -181,6 +321,30 @@ def _panel_plot(
     label_mode: str = "variant",  # "variant" or "variant_method"
     ours_label_mode: str = "proposed",  # "proposed" or "ours"
 ) -> None:
+    """Plot a single condition panel (risk vs coverage) for selected variants.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    d : pandas.DataFrame
+        Subset of risk_coverage rows for this condition.
+    variants : list of str
+        Variant identifiers to plot (in order).
+    condition : str
+        Condition label used as the panel title.
+    ycol : str
+        Column name for y-axis values.
+    label_mode : {"variant", "variant_method"}, optional
+        Legend label mode (default "variant").
+    ours_label_mode : {"proposed", "ours"}, optional
+        Legend label mode for ``variant="ours"`` (default "proposed").
+
+    Notes
+    -----
+    - Rows with y values outside [0, 1] are filtered out.
+    - Human-risk modes also filter to ``n_pass_labeled > 0``.
+    """
     d = d.sort_values(["variant", "method", "tau"], kind="mergesort")
 
     for variant in variants:
@@ -232,6 +396,18 @@ def _panel_plot(
 
 
 def _ylabel_for(ycol: str) -> str:
+    """Return a human-readable y-axis label for a given ycol name.
+
+    Parameters
+    ----------
+    ycol : str
+        Column name used for the y-axis.
+
+    Returns
+    -------
+    str
+        Axis label string.
+    """
     if ycol == "fail_rate_answered":
         return "Non-accept risk (FAIL among answered = PASS+FAIL)"
     if ycol == "fail_rate_total":
@@ -248,6 +424,17 @@ def _ylabel_for(ycol: str) -> str:
 
 
 def main() -> None:
+    """Render a multipanel Fig. 2 plot from risk_coverage.tsv.
+
+    The script loads a risk/coverage table, optionally filters by
+    benchmark_id and/or condition, selects variants to plot, and writes a
+    single figure file (pdf/png).
+
+    Notes
+    -----
+    - Uses a shared legend placed outside the axes.
+    - Figure size can be controlled via inches or mm (Nature-friendly).
+    """
     ap = argparse.ArgumentParser(description="Supplement multipanel Fig2 from risk_coverage.tsv")
     ap.add_argument("--in", dest="inp", required=True, help="risk_coverage.tsv")
     ap.add_argument("--out", required=True, help="output figure path (pdf/png)")

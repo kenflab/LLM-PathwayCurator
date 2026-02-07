@@ -10,6 +10,17 @@ import pandas as pd
 
 
 def apply_pub_style(fontsize: int = 16) -> None:
+    """Apply publication-style matplotlib rcParams for stacked bar plots.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size for axes, ticks, and legend (default 16).
+
+    Notes
+    -----
+    This mutates global matplotlib rcParams for the current process.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -25,7 +36,27 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def infer_variant_from_path(p: Path) -> str:
-    # .../out_llm/HNSC/ours/gate_hard/tau_0.80/audit_log.tsv
+    """Infer the variant directory name from an audit_log.tsv path.
+
+    The function supports paths like:
+    ``.../out*/<condition>/<variant>/gate_*/tau_*/audit_log.tsv``
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to an ``audit_log.tsv`` file.
+
+    Returns
+    -------
+    str
+        Inferred variant name. Falls back to a parent directory heuristic
+        if the expected layout is not found.
+
+    Notes
+    -----
+    This is a heuristic intended for plotting convenience, not a strict
+    contract.
+    """
     parts = [x for x in p.parts]
     # variant is the segment after condition (HNSC)
     # find ".../out*/<condition>/<variant>/gate_*/tau_*/audit_log.tsv"
@@ -36,6 +67,20 @@ def infer_variant_from_path(p: Path) -> str:
 
 
 def canon_variant(v: str, *, is_llm: bool = False) -> str:
+    """Canonicalize a variant identifier to a paper-facing label.
+
+    Parameters
+    ----------
+    v : str
+        Raw variant identifier.
+    is_llm : bool, optional
+        If True, label the proposed variant as an LLM run (default False).
+
+    Returns
+    -------
+    str
+        Canonicalized variant label used on the x-axis.
+    """
     v = (v or "").strip().lower()
 
     if v == "ours":
@@ -48,7 +93,23 @@ def canon_variant(v: str, *, is_llm: bool = False) -> str:
 
 
 def canon_reason(r: str) -> str:
-    # normalize abstain reasons for figure legend (paper-facing)
+    """Canonicalize an abstain reason code to a readable label.
+
+    Parameters
+    ----------
+    r : str
+        Raw abstain reason string from audit logs.
+
+    Returns
+    -------
+    str
+        Human-readable reason label suitable for legends.
+
+    Notes
+    -----
+    Known codes are mapped to curated labels. Unknown values are converted
+    from snake_case to Title-like text.
+    """
     s = (r or "").strip()
     if not s:
         return "Unknown"
@@ -76,6 +137,31 @@ def canon_reason(r: str) -> str:
 
 
 def main() -> None:
+    """Plot ABSTAIN reason composition as a 100% stacked bar chart.
+
+    Reads one or more ``audit_log.tsv`` files (typically one per variant),
+    extracts ABSTAIN rows, normalizes abstain reasons, collapses reasons to a
+    global top-k (others -> "Other"), and plots per-variant proportions among
+    ABSTAIN.
+
+    Command-line arguments
+    ----------------------
+    --audit-logs : list[str]
+        One or more audit_log.tsv paths.
+    --out : str
+        Output figure path (pdf/png).
+    --title : str, optional
+        Optional title.
+    --topk : int, optional
+        Keep top-k abstain reasons globally (default 5).
+    --fontsize : int, optional
+        Base font size (default 16).
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing or if no rows are available to plot.
+    """
     ap = argparse.ArgumentParser(description="Plot ABSTAIN reason composition (stacked bar).")
     ap.add_argument(
         "--audit-logs", nargs="+", required=True, help="audit_log.tsv paths (one per variant)"

@@ -10,6 +10,17 @@ import pandas as pd
 
 
 def apply_pub_style(fontsize: int = 16) -> None:
+    """Apply publication-style matplotlib rcParams for scatter plots.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size used for axes, ticks, and legend (default 16).
+
+    Notes
+    -----
+    This mutates global matplotlib rcParams for the current process.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -27,10 +38,36 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def _canon(s: str) -> str:
+    """Canonicalize an identifier string.
+
+    Parameters
+    ----------
+    s : str
+        Input string (may be None-like).
+
+    Returns
+    -------
+    str
+        Lower-cased, stripped string. None-like values become ``""``.
+    """
     return str(s or "").strip().lower()
 
 
 def variant_label(variant: str, *, mode: str = "proposed") -> str:
+    """Map a variant identifier to a legend label.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier.
+    mode : {"proposed", "ours"}, optional
+        Legend label mode for ``variant="ours"`` (default "proposed").
+
+    Returns
+    -------
+    str
+        Legend label string used in the plot legend.
+    """
     v = _canon(variant)
     if v == "ours":
         return "Proposed (τ-audit)" if mode == "proposed" else "Ours (audit+τ)"
@@ -44,6 +81,19 @@ def variant_label(variant: str, *, mode: str = "proposed") -> str:
 
 
 def variant_style(variant: str) -> dict[str, object]:
+    """Return marker styling for a variant identifier.
+
+    Parameters
+    ----------
+    variant : str
+        Variant identifier (case-insensitive).
+
+    Returns
+    -------
+    dict
+        Matplotlib style kwargs. This plot draws points only, so
+        ``linestyle`` is always ``"None"`` and a marker is selected.
+    """
     v = _canon(variant)
     # Match multipanel marker/linestyle identity BUT draw points only (no connecting lines).
     if v == "ours":
@@ -58,10 +108,53 @@ def variant_style(variant: str) -> dict[str, object]:
 
 
 def _parse_csv(s: str) -> list[str]:
+    """Parse a comma-separated list into stripped tokens.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string.
+
+    Returns
+    -------
+    list of str
+        Non-empty tokens with surrounding whitespace removed.
+    """
     return [x.strip() for x in str(s).split(",") if x.strip()]
 
 
 def load_table(path: Path, *, ycol: str, min_npass_labeled: int = 1) -> pd.DataFrame:
+    """Load and validate a labeled risk/coverage table for scatter plotting.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Input TSV path (e.g., risk_coverage.label.tsv).
+    ycol : str
+        Y-axis column to plot.
+    min_npass_labeled : int, optional
+        Minimum ``n_pass_labeled`` required for a point to be kept
+        (default 1).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cleaned DataFrame with numeric columns parsed and rows filtered
+        to sane ranges.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+
+    Notes
+    -----
+    Rows are filtered to:
+    - tau in [0, 1]
+    - coverage_pass in [0, 1]
+    - ycol in [0, 1]
+    - n_pass_labeled >= min_npass_labeled
+    """
     df = pd.read_csv(path, sep="\t")
 
     required = {
@@ -99,6 +192,18 @@ def load_table(path: Path, *, ycol: str, min_npass_labeled: int = 1) -> pd.DataF
 
 
 def _ylabel(ycol: str) -> str:
+    """Return a human-readable y-axis label for a given metric column.
+
+    Parameters
+    ----------
+    ycol : str
+        Column name used as the y-axis.
+
+    Returns
+    -------
+    str
+        Axis label string.
+    """
     y = str(ycol).strip()
     if y == "risk_human_reject":
         return "Human reject rate\n (among human-labeled PASS)"
@@ -114,6 +219,18 @@ def _ylabel(ycol: str) -> str:
 
 
 def main() -> None:
+    """Plot scatter points of PASS rate vs human risk.
+
+    The script reads a labeled risk/coverage TSV, filters by condition and
+    gate_mode, selects variants, and plots coverage_pass on x with a human
+    risk metric on y. Point size encodes ``n_pass_labeled`` as an uncertainty
+    proxy.
+
+    Notes
+    -----
+    - No title is drawn unless explicitly provided.
+    - Optional annotations are off by default to avoid clutter.
+    """
     ap = argparse.ArgumentParser(
         description="Scatter: coverage_pass vs human risk (from risk_coverage.label.tsv)"
     )

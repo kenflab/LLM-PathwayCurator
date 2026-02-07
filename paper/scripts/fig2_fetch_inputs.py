@@ -29,14 +29,55 @@ XENA_PHENO_URL = "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/downl
 
 
 def _die(msg: str) -> None:
+    """Abort execution with a message.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable error message.
+
+    Raises
+    ------
+    SystemExit
+        Always raised with ``msg``.
+    """
     raise SystemExit(msg)
 
 
 def _ensure_dir(p: Path) -> None:
+    """Ensure a directory exists.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Directory path to create.
+
+    Notes
+    -----
+    Creates parent directories as needed and does not error if the directory
+    already exists.
+    """
     p.mkdir(parents=True, exist_ok=True)
 
 
 def _download_url(url: str, out_path: Path) -> None:
+    """Download a URL to a local file atomically.
+
+    The download is written to a temporary file in the same directory and
+    then moved into place to avoid partially-written outputs.
+
+    Parameters
+    ----------
+    url : str
+        Source URL (public, no auth).
+    out_path : pathlib.Path
+        Destination file path.
+
+    Raises
+    ------
+    SystemExit
+        If the download fails. Any temporary file is removed on failure.
+    """
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:
         with urllib.request.urlopen(url) as r, tmp.open("wb") as w:
@@ -49,6 +90,25 @@ def _download_url(url: str, out_path: Path) -> None:
 
 
 def main() -> None:
+    """Fetch fixed public inputs for the Fig. 2 pipeline (v1).
+
+    Downloads three UCSC Xena / PanCanAtlas-hosted files into
+    ``paper/source_data/PANCAN_TP53_v1/raw`` if they are missing:
+
+    - expression.xena.gz
+    - mc3.v0.2.8.PUBLIC.xena.gz
+    - TCGA_phenotype_dense.tsv.gz (downloaded from the Dense phenotype URL)
+
+    Raises
+    ------
+    SystemExit
+        If any expected output file is missing or empty after download.
+
+    Notes
+    -----
+    Files are only downloaded when absent. Existing files are not
+    re-downloaded.
+    """
     _ensure_dir(RAW)
 
     expr_out = RAW / "expression.xena.gz"

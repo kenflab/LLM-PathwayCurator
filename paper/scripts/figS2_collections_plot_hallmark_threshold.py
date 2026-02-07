@@ -17,6 +17,13 @@ from llm_pathway_curator.modules import build_term_gene_edges, filter_hub_genes
 # Style (paper-consistent, minimal)
 # -------------------------
 def apply_pub_style(fontsize: int = 16) -> None:
+    """Apply a minimal publication style to matplotlib rcParams.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size used to scale labels and titles.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -33,19 +40,52 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def _die(msg: str) -> None:
+    """Exit the program with an error message.
+
+    Parameters
+    ----------
+    msg : str
+        Error message to display.
+    """
     raise SystemExit(msg)
 
 
 def _ensure_file(p: Path, label: str) -> None:
+    """Validate that a path exists, is a file, and is non-empty.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to validate.
+    label : str
+        Human-readable label used in error messages.
+
+    Raises
+    ------
+    SystemExit
+        If the path is missing, not a file, or empty.
+    """
     if not p.exists():
-        _die(f"[figSx_hallmark_thresholds] missing {label}: {p}")
+        _die(f"[figS2_hallmark_thresholds] missing {label}: {p}")
     if not p.is_file():
-        _die(f"[figSx_hallmark_thresholds] not a file {label}: {p}")
+        _die(f"[figS2_hallmark_thresholds] not a file {label}: {p}")
     if p.stat().st_size == 0:
-        _die(f"[figSx_hallmark_thresholds] empty {label}: {p}")
+        _die(f"[figS2_hallmark_thresholds] empty {label}: {p}")
 
 
 def _read_tsv(p: Path) -> pd.DataFrame:
+    """Read a TSV file into a DataFrame with basic validation.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        TSV file path.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Parsed table.
+    """
     _ensure_file(p, "TSV")
     return pd.read_csv(p, sep="\t")
 
@@ -54,6 +94,23 @@ def _read_tsv(p: Path) -> pd.DataFrame:
 # Core helpers
 # -------------------------
 def empirical_percentile(dist: np.ndarray, x: float) -> float:
+    """Compute the empirical CDF value at x.
+
+    This returns the fraction of finite values in ``dist`` that are
+    less than or equal to ``x``.
+
+    Parameters
+    ----------
+    dist : numpy.ndarray
+        Numeric array (may contain NaN/inf).
+    x : float
+        Query value.
+
+    Returns
+    -------
+    float
+        Empirical percentile in [0, 1], or NaN if dist is empty.
+    """
     dist = dist[np.isfinite(dist)]
     if dist.size == 0:
         return float("nan")
@@ -61,6 +118,18 @@ def empirical_percentile(dist: np.ndarray, x: float) -> float:
 
 
 def _ecdf_xy(dist: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute ECDF x/y arrays for plotting.
+
+    Parameters
+    ----------
+    dist : numpy.ndarray
+        Numeric array (may contain NaN/inf).
+
+    Returns
+    -------
+    tuple of numpy.ndarray
+        Sorted values ``x`` and ECDF probabilities ``y``.
+    """
     d = dist[np.isfinite(dist)].astype(float)
     if d.size == 0:
         return np.array([]), np.array([])
@@ -70,6 +139,25 @@ def _ecdf_xy(dist: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def sample_term_pairs(terms: list[str], *, max_pairs: int = 200_000, seed: int = 0) -> np.ndarray:
+    """Sample unique term index pairs for term-term statistics.
+
+    If the total number of pairs is small, this enumerates all pairs.
+    Otherwise, it samples unique pairs up to ``max_pairs``.
+
+    Parameters
+    ----------
+    terms : list of str
+        Term identifiers (only length is used).
+    max_pairs : int, optional
+        Maximum number of unique pairs to return.
+    seed : int, optional
+        Random seed for sampling.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of shape (k, 2) with integer indices (i < j).
+    """
     rng = np.random.default_rng(seed)
     n = len(terms)
     if n < 2:
@@ -101,6 +189,18 @@ def sample_term_pairs(terms: list[str], *, max_pairs: int = 200_000, seed: int =
 
 
 def _build_term_to_genes(edges_f: pd.DataFrame) -> dict[str, set[str]]:
+    """Build a mapping from term_uid to its gene set.
+
+    Parameters
+    ----------
+    edges_f : pandas.DataFrame
+        Filtered edge table with columns: term_uid, gene_id.
+
+    Returns
+    -------
+    dict of str to set of str
+        Mapping from term_uid to the set of gene identifiers.
+    """
     term_to_genes: dict[str, set[str]] = {}
     if edges_f.empty:
         return term_to_genes
@@ -126,6 +226,49 @@ def compute_hallmark_distributions(
     seed: int = 0,
     include_zero_shared: bool = False,
 ) -> dict[str, object]:
+    """Compute empirical distributions used to justify Hallmark thresholds.
+
+    This computes:
+    - Gene term-degree distribution (pre hub-filter).
+    - Shared-gene count and Jaccard distributions for sampled term pairs
+      after hub filtering.
+
+    Parameters
+    ----------
+    evidence_df : pandas.DataFrame
+        Evidence table containing term identifiers and gene lists.
+    term_id_col : str, optional
+        Column name used as the term identifier (passed to edge builder).
+    genes_col : str, optional
+        Column name containing evidence genes (comma-separated).
+    max_gene_term_degree_value : int, optional
+        Threshold shown as a vertical line for gene term-degree.
+    min_shared_genes_value : int, optional
+        Threshold shown as a vertical line for shared genes.
+    jaccard_min_value : float, optional
+        Threshold shown as a vertical line for Jaccard similarity.
+    hub_degree_for_filter : int, optional
+        Max gene term-degree used for hub filtering before term-pair stats.
+    pair_sample_max : int, optional
+        Maximum number of term pairs to sample for statistics.
+    seed : int, optional
+        Random seed used for pair sampling.
+    include_zero_shared : bool, optional
+        If True, include zero-shared pairs in the ECDFs (unconditional).
+        If False, condition on shared > 0 for shared/jaccard ECDFs.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys: meta, gene_term_degree,
+        term_pair_shared_genes, term_pair_jaccard.
+        Each metric includes summary stats and a ``dist`` array.
+
+    Notes
+    -----
+    If ``include_zero_shared=False``, the shared/jaccard distributions are
+    conditioned on shared > 0, so percentiles are conditional.
+    """
     # 1) edges (pre-filter): gene term-degree distribution
     edges = build_term_gene_edges(evidence_df, term_id_col=term_id_col, genes_col=genes_col)
     if edges.empty:
@@ -245,6 +388,17 @@ def compute_hallmark_distributions(
 # Plotting (ECDF panels)
 # -------------------------
 def _annotate_meta(ax: plt.Axes, meta: dict[str, object], *, fontsize: int) -> None:
+    """Annotate a plot with compact metadata text.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis to annotate.
+    meta : dict
+        Metadata dictionary produced by compute_hallmark_distributions.
+    fontsize : int
+        Base font size used to scale annotation text.
+    """
     lines = []
     n_terms = meta.get("n_terms", None)
     n_pairs_total = meta.get("n_pairs_total", None)
@@ -290,9 +444,30 @@ def plot_ecdf_panel(
     meta: dict[str, object] | None,
     fontsize: int,
 ) -> None:
+    """Plot an ECDF panel with a vertical threshold line.
+
+    Parameters
+    ----------
+    dist : numpy.ndarray
+        Distribution values for ECDF.
+    out_path : pathlib.Path
+        Output file path.
+    title : str
+        Panel title.
+    xlabel : str
+        X-axis label.
+    vline_value : float
+        Value at which to draw the vertical line.
+    vline_label : str
+        Legend label for the vertical line.
+    meta : dict, optional
+        Metadata to annotate on the panel.
+    fontsize : int
+        Base font size.
+    """
     x, y = _ecdf_xy(dist)
     if x.size == 0:
-        _die(f"[figSx_hallmark_thresholds] no finite values for panel: {title}")
+        _die(f"[figS2_hallmark_thresholds] no finite values for panel: {title}")
 
     apply_pub_style(fontsize)
     fig, ax = plt.subplots(figsize=(6.6, 4.8), dpi=300)
@@ -319,6 +494,18 @@ def plot_ecdf_panel(
 
 
 def _write_summary_tables(res: dict[str, object], *, outdir: Path) -> None:
+    """Write summary TSV and JSON files for threshold percentiles.
+
+    The JSON file stores a slimmed version of the result dictionary
+    (without large ``dist`` arrays). The TSV contains one row per metric.
+
+    Parameters
+    ----------
+    res : dict
+        Result dictionary from compute_hallmark_distributions.
+    outdir : pathlib.Path
+        Output directory.
+    """
     outdir.mkdir(parents=True, exist_ok=True)
 
     # JSON (full, without huge arrays)
@@ -374,9 +561,19 @@ def _write_summary_tables(res: dict[str, object], *, outdir: Path) -> None:
 # Main
 # -------------------------
 def main() -> None:
+    """CLI entry point for Hallmark threshold ECDF panels.
+
+    Reads a distilled Hallmark table, computes empirical distributions,
+    writes summary TSV/JSON, and saves three ECDF panels.
+
+    Raises
+    ------
+    SystemExit
+        If inputs are missing or distributions are empty.
+    """
     ap = argparse.ArgumentParser(
         description=(
-            "Generate Supp Fig Sx panels: ECDFs showing where Hallmark module thresholds sit "
+            "Generate Supp Fig S2 panels: ECDFs showing where Hallmark module thresholds sit "
             "within empirical distributions (HALLMARK distilled evidence)."
         )
     )
@@ -436,7 +633,7 @@ def main() -> None:
     genes_col = str(args.genes_col)
     for c in [term_id_col, genes_col]:
         if c not in df.columns:
-            _die(f"[figSx_hallmark_thresholds] input missing required column: {c}")
+            _die(f"[figS2_hallmark_thresholds] input missing required column: {c}")
 
     res = compute_hallmark_distributions(
         df,
@@ -452,7 +649,7 @@ def main() -> None:
     )
 
     if "error" in res:
-        _die(f"[figSx_hallmark_thresholds] {res['error']}")
+        _die(f"[figS2_hallmark_thresholds] {res['error']}")
 
     # Write summary TSV/JSON
     _write_summary_tables(res, outdir=outdir)
@@ -467,10 +664,10 @@ def main() -> None:
     # Panel A
     dA = res.get("gene_term_degree", {})
     if not isinstance(dA, dict) or "dist" not in dA:
-        _die("[figSx_hallmark_thresholds] missing gene_term_degree.dist")
+        _die("[figS2_hallmark_thresholds] missing gene_term_degree.dist")
     plot_ecdf_panel(
         np.asarray(dA["dist"], dtype=float),
-        out_path=outdir / f"FigSx_HallmarkThresholds_PanelA_gene_degree.{fmt}",
+        out_path=outdir / f"FigS2_HallmarkThresholds_PanelA_gene_degree.{fmt}",
         title=str(args.title_A),
         xlabel="Gene term-degree (#terms per gene)",
         vline_value=float(args.max_gene_term_degree),
@@ -482,10 +679,10 @@ def main() -> None:
     # Panel B
     dB = res.get("term_pair_shared_genes", {})
     if not isinstance(dB, dict) or "dist" not in dB:
-        _die("[figSx_hallmark_thresholds] missing term_pair_shared_genes.dist")
+        _die("[figS2_hallmark_thresholds] missing term_pair_shared_genes.dist")
     plot_ecdf_panel(
         np.asarray(dB["dist"], dtype=float),
-        out_path=outdir / f"FigSx_HallmarkThresholds_PanelB_shared_genes.{fmt}",
+        out_path=outdir / f"FigS2_HallmarkThresholds_PanelB_shared_genes.{fmt}",
         title=str(args.title_B),
         xlabel="Shared genes between term pairs",
         vline_value=float(args.min_shared_genes),
@@ -497,10 +694,10 @@ def main() -> None:
     # Panel C
     dC = res.get("term_pair_jaccard", {})
     if not isinstance(dC, dict) or "dist" not in dC:
-        _die("[figSx_hallmark_thresholds] missing term_pair_jaccard.dist")
+        _die("[figS2_hallmark_thresholds] missing term_pair_jaccard.dist")
     plot_ecdf_panel(
         np.asarray(dC["dist"], dtype=float),
-        out_path=outdir / f"FigSx_HallmarkThresholds_PanelC_jaccard.{fmt}",
+        out_path=outdir / f"FigS2_HallmarkThresholds_PanelC_jaccard.{fmt}",
         title=str(args.title_C),
         xlabel="Jaccard similarity between term pairs",
         vline_value=float(args.jaccard_min),
@@ -509,11 +706,11 @@ def main() -> None:
         fontsize=fs,
     )
 
-    print("[figSx_hallmark_thresholds] WROTE:")
-    for p in sorted(outdir.glob(f"FigSx_HallmarkThresholds_Panel*.{fmt}")):
+    print("[figS2_hallmark_thresholds] WROTE:")
+    for p in sorted(outdir.glob(f"FigS2_HallmarkThresholds_Panel*.{fmt}")):
         print(" ", p)
-    print(" ", outdir / "FigSx_hallmark_threshold_percentiles.tsv")
-    print(" ", outdir / "FigSx_hallmark_threshold_percentiles.json")
+    print(" ", outdir / "FigS2_hallmark_threshold_percentiles.tsv")
+    print(" ", outdir / "FigS2_hallmark_threshold_percentiles.json")
 
 
 if __name__ == "__main__":

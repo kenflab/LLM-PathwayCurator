@@ -64,10 +64,40 @@ PROTEIN_ALTERING_UP = {x.upper() for x in PROTEIN_ALTERING}
 
 
 def _die(msg: str) -> None:
+    """Abort execution with a message.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable error message.
+
+    Raises
+    ------
+    SystemExit
+        Always raised with ``msg``.
+    """
     raise SystemExit(msg)
 
 
 def _read_tsv_gz(path: Path) -> pd.DataFrame:
+    """Read a gzipped TSV file into a DataFrame.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to a ``.tsv.gz`` file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Loaded table with all columns as strings and missing values filled
+        with empty strings.
+
+    Raises
+    ------
+    SystemExit
+        If the file does not exist or cannot be read.
+    """
     if not path.exists():
         _die(f"[make_groups] missing file: {path}")
     try:
@@ -79,6 +109,28 @@ def _read_tsv_gz(path: Path) -> pd.DataFrame:
 
 
 def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
+    """Pick the first matching column name from candidates.
+
+    Matching is case-insensitive; the returned name preserves the exact
+    spelling in the input DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    candidates : list of str
+        Candidate column names to try in order.
+
+    Returns
+    -------
+    str
+        The selected column name.
+
+    Raises
+    ------
+    SystemExit
+        If none of the candidate columns exist.
+    """
     cols = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in cols:
@@ -89,22 +141,97 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
 
 
 def _normalize_barcode(s: str) -> str:
-    # Use first 16 chars for sample-level matching (TCGA-XX-YYYY-ZZ)
+    """Normalize a TCGA barcode string for sample-level matching.
+
+    The current implementation trims to the first 16 characters after
+    stripping whitespace.
+
+    Parameters
+    ----------
+    s : str
+        Input barcode-like string.
+
+    Returns
+    -------
+    str
+        Normalized barcode prefix.
+    """
     s = str(s).strip()
     return s[:16]
 
 
 def _norm_disease(x: str) -> str:
+    """Normalize disease strings for dictionary mapping.
+
+    This lowercases the input, strips whitespace, and collapses internal
+    whitespace to single spaces.
+
+    Parameters
+    ----------
+    x : str
+        Raw disease label.
+
+    Returns
+    -------
+    str
+        Normalized disease key.
+    """
     x = str(x).strip().lower()
     x = re.sub(r"\s+", " ", x)
     return x
 
 
 def _has_col(df: pd.DataFrame, name: str) -> bool:
+    """Check whether a DataFrame has a column (case-insensitive).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    name : str
+        Column name to check.
+
+    Returns
+    -------
+    bool
+        True if a column matches ``name`` ignoring case.
+    """
     return name.lower() in {c.lower() for c in df.columns}
 
 
 def main() -> None:
+    """Build TP53 mutant vs wild-type group tables per TCGA cancer.
+
+    This script:
+    1) Reads phenotype and MC3 mutation tables.
+    2) Keeps "primary-like" samples by ``sample_type_id`` in {1, 3}.
+    3) Maps phenotype ``primary_disease`` to TCGA codes via
+       ``DISEASE_TO_TCGA``.
+    4) Extracts TP53 protein-altering mutations from MC3 (optionally
+       requiring ``FILTER=PASS`` when available).
+    5) Writes per-cancer ``{TCGA}.groups.tsv`` and a master
+       ``PANCAN.groups.tsv``.
+
+    Outputs
+    -------
+    derived/groups/{TCGA}.groups.tsv
+        Two-column table: ``sample`` and ``group``.
+    derived/groups/PANCAN.groups.tsv
+        Three-column table: ``sample``, ``cancer``, ``group``.
+
+    Raises
+    ------
+    SystemExit
+        If required inputs are missing, mapping yields no samples, or no
+        TP53 protein-altering calls are found after filtering.
+
+    Notes
+    -----
+    - Group assignment is based on membership in the TP53-mutated sample
+      set; otherwise samples are labeled TP53_wt.
+    - The script prints warnings when a cancer has zero samples in either
+      arm.
+    """
     mc3_path = RAW / "mc3.v0.2.8.PUBLIC.xena.gz"
     pheno_path = RAW / "TCGA_phenotype_dense.tsv.gz"
 

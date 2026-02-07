@@ -14,18 +14,56 @@ import pandas as pd
 # Collection + reason canonicalization
 # -----------------------------------------------------------------------------
 def _canon(s: str) -> str:
+    """Canonicalize a string value.
+
+    Parameters
+    ----------
+    s : str
+        Input string (may be None-like).
+
+    Returns
+    -------
+    str
+        Stripped string. None-like values become ``""``.
+    """
     return str(s or "").strip()
 
 
 def _canon_l(s: str) -> str:
+    """Canonicalize a string value to lower-case.
+
+    Parameters
+    ----------
+    s : str
+        Input string (may be None-like).
+
+    Returns
+    -------
+    str
+        Stripped, lower-cased string. None-like values become ``""``.
+    """
     return _canon(s).lower()
 
 
 def infer_collection_from_source(source: str, term_id: str = "", term_uid: str = "") -> str:
-    """
-    Robust, spec-level mapping:
-      - Prefer `source` (audit_log/distilled) or prefix inside term_uid / term_id.
-      - Fall back to "Other" (never drop rows).
+    """Infer a paper-facing collection name from source/term identifiers.
+
+    This is a robust mapping that prefers explicit source labels and
+    identifier prefixes. It never drops rows; unknowns map to "Other".
+
+    Parameters
+    ----------
+    source : str
+        Source string from audit/distilled tables (e.g., adapter name).
+    term_id : str, optional
+        Term identifier (e.g., GO:..., R-HSA-..., KEGG_...).
+    term_uid : str, optional
+        Tool-owned term UID which may embed a source-like prefix.
+
+    Returns
+    -------
+    str
+        One of: "Hallmark", "Reactome", "KEGG", "GO", "Other".
     """
     s = _canon_l(source)
     tu = _canon_l(term_uid)
@@ -54,10 +92,25 @@ def infer_collection_from_source(source: str, term_id: str = "", term_uid: str =
 
 
 def infer_collection_from_term_ids_str(term_ids_str: str) -> str:
-    """
-    modules.tsv has term_ids_str like:
-      fgsea_msigdb_H_entrez:HALLMARK_X;reactome:R-HSA-...
-    We assign collection by majority vote across term prefixes (ties -> Mixed/Other).
+    """Infer collection label for a module from its term_ids_str.
+
+    The modules.tsv field ``term_ids_str`` typically contains semicolon-
+    separated items like:
+    ``fgsea_msigdb_H_entrez:HALLMARK_X;reactome:R-HSA-...``
+
+    The collection is chosen by majority vote across parsed prefixes.
+    Ties are mapped to "Other".
+
+    Parameters
+    ----------
+    term_ids_str : str
+        Term list string for a module.
+
+    Returns
+    -------
+    str
+        Inferred collection label (e.g., "Hallmark", "Reactome", "GO",
+        "KEGG", or "Other").
     """
     t = _canon(term_ids_str)
     if not t:
@@ -85,9 +138,20 @@ def infer_collection_from_term_ids_str(term_ids_str: str) -> str:
 
 
 def canon_reason(reason: str) -> str:
-    """
-    Paper-facing normalization.
-    Keeps bounded set readable; everything else becomes Title Case-ish.
+    """Normalize audit reason codes to paper-facing labels.
+
+    Known reason codes are mapped to a bounded, readable set. Unknown values
+    are converted from snake_case into title-like text.
+
+    Parameters
+    ----------
+    reason : str
+        Raw reason string (may be empty/NA-like).
+
+    Returns
+    -------
+    str
+        Canonical reason label suitable for tables/figures.
     """
     s = _canon(reason)
     if not s or s.lower() in ("na", "none", "nan"):
@@ -136,17 +200,57 @@ def canon_reason(reason: str) -> str:
 # IO helpers
 # -----------------------------------------------------------------------------
 def _parse_csv_list(x: str) -> list[str]:
+    """Parse a comma-separated string into tokens.
+
+    Parameters
+    ----------
+    x : str
+        Comma-separated string.
+
+    Returns
+    -------
+    list of str
+        Non-empty tokens with surrounding whitespace removed.
+    """
     return [a.strip() for a in str(x or "").split(",") if a.strip()]
 
 
 def _looks_like_condition_dir(p: Path, conditions: list[str]) -> bool:
-    # Heuristic: directory name matches one of requested conditions (case-insensitive)
+    """Heuristic check whether a directory name matches a condition list.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Directory path to test.
+    conditions : list of str
+        Requested condition codes (case-insensitive).
+
+    Returns
+    -------
+    bool
+        True if ``p.name`` matches one of ``conditions``.
+    """
     name = p.name.strip().upper()
     return name in {c.strip().upper() for c in conditions}
 
 
 def _infer_collection_from_dirname(dirname: str) -> str:
-    # Map your pipeline folder names to paper-facing labels
+    """Map an out_root subdirectory name to a collection label.
+
+    This supports "collection-first" layouts where out_root contains
+    collection folders (e.g., H, C5_GO_BP, C2_CP_REACTOME).
+
+    Parameters
+    ----------
+    dirname : str
+        Directory name under out_root.
+
+    Returns
+    -------
+    str
+        Inferred collection label (e.g., "Hallmark", "GO", "Reactome",
+        "KEGG", or the original name / "Other").
+    """
     d = _canon(dirname)
     dl = d.lower()
 
@@ -169,6 +273,35 @@ def iter_runs(
     gate_modes: Iterable[str],
     taus: Iterable[float],
 ) -> Iterable[dict[str, object]]:
+    """Iterate expected run directories across conditions/variants/gates/taus.
+
+    Supports two layouts:
+
+    1) Flat:
+       out_root/<COND>/<VARIANT>/gate_<GATE>/tau_<TAU>/
+
+    2) Collection-first:
+       out_root/<COLLECTION>/<COND>/<VARIANT>/gate_<GATE>/tau_<TAU>/
+
+    Parameters
+    ----------
+    out_root : pathlib.Path
+        Root directory containing pipeline outputs.
+    conditions : collections.abc.Iterable of str
+        Condition codes (e.g., HNSC, LUAD).
+    variants : collections.abc.Iterable of str
+        Variant names (e.g., ours, context_swap).
+    gate_modes : collections.abc.Iterable of str
+        Gate modes (e.g., hard, note).
+    taus : collections.abc.Iterable of float
+        Tau values to include.
+
+    Yields
+    ------
+    dict
+        Run descriptor with keys:
+        condition, variant, gate_mode, tau, run_dir, collection_run.
+    """
     conditions_l = [c.strip().upper() for c in conditions]
     variants_l = [v.strip() for v in variants]
     gate_modes_l = [g.strip() for g in gate_modes]
@@ -211,10 +344,38 @@ def iter_runs(
 
 
 def read_tsv(path: Path) -> pd.DataFrame:
+    """Read a TSV file into a DataFrame.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        TSV file path.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Parsed table.
+    """
     return pd.read_csv(path, sep="\t")
 
 
 def ensure_cols(df: pd.DataFrame, cols: Iterable[str], *, where: str) -> None:
+    """Assert that a DataFrame contains required columns.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    cols : collections.abc.Iterable of str
+        Required column names.
+    where : str
+        Human-readable context for error messages.
+
+    Raises
+    ------
+    ValueError
+        If any required columns are missing.
+    """
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"Missing columns in {where}: {missing}")
@@ -225,6 +386,25 @@ _FALSE = {"false", "0", "no", "n", "f"}
 
 
 def _parse_bool_series(s: pd.Series) -> pd.Series:
+    """Parse a heterogeneous series into pandas BooleanDtype.
+
+    Accepts:
+    - bool dtype as-is
+    - numeric 0/1 as False/True
+    - strings in {_TRUE, _FALSE} sets (case-insensitive)
+
+    Unknown tokens are set to NA.
+
+    Parameters
+    ----------
+    s : pandas.Series
+        Input series.
+
+    Returns
+    -------
+    pandas.Series
+        BooleanDtype series with values {True, False, <NA>}.
+    """
     x = s.copy()
     # Already boolean
     if x.dtype == bool:
@@ -242,6 +422,20 @@ def _parse_bool_series(s: pd.Series) -> pd.Series:
 
 
 def _true_rate(series: pd.Series) -> float:
+    """Compute the fraction of True values in a boolean-like series.
+
+    NA values are ignored. If all values are NA, returns NaN.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Boolean-like series.
+
+    Returns
+    -------
+    float
+        Mean of True-as-1 over non-NA values, or NaN if undefined.
+    """
     b = _parse_bool_series(series)
     b2 = b.dropna()
     if b2.empty:
@@ -257,11 +451,38 @@ def build_audit_tables(
     audit_path: Path,
     benchmark_id: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Returns:
-      - audit_outcomes_wide: one row per collection with PASS/ABSTAIN/FAIL counts + rates
-      - audit_reasons_long: one row per collection x reason_type x reason
-      - audit_gate_summary: one row per collection with key gate diagnostic rates
+    """Build collection-level audit outcome and reason tables for one run.
+
+    Parameters
+    ----------
+    run : dict
+        Run descriptor from ``iter_runs``.
+    audit_path : pathlib.Path
+        Path to ``audit_log.tsv`` for the run.
+    benchmark_id : str
+        Benchmark identifier recorded into outputs.
+
+    Returns
+    -------
+    tuple of pandas.DataFrame
+        (audit_outcomes_wide, audit_reasons_long, audit_gate_summary)
+
+        audit_outcomes_wide
+            One row per (condition, variant, gate_mode, tau, collection) with
+            PASS/ABSTAIN/FAIL counts and rates.
+
+        audit_reasons_long
+            Long table: one row per collection x reason_type x reason with
+            count and within-type fraction.
+
+        audit_gate_summary
+            One row per collection with diagnostic gate rates if the
+            corresponding columns exist in audit_log.tsv.
+
+    Raises
+    ------
+    ValueError
+        If mandatory columns (e.g., status) are missing.
     """
     df = read_tsv(audit_path)
 
@@ -419,9 +640,31 @@ def build_module_tables(
     distilled_with_modules_path: Path,
     benchmark_id: str,
 ) -> pd.DataFrame:
-    """
-    Returns module_survival_long (one row per module) with:
-      module_id, collection, module_survival, n_genes, n_terms, hub_filter_n_hubs, hub_gene_rate
+    """Build module-level survival and hub metrics for one run.
+
+    Parameters
+    ----------
+    run : dict
+        Run descriptor from ``iter_runs``.
+    modules_path : pathlib.Path
+        Path to ``modules.tsv``.
+    distilled_with_modules_path : pathlib.Path
+        Path to ``distilled.with_modules.tsv`` (fallback source for survival).
+    benchmark_id : str
+        Benchmark identifier recorded into outputs.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Module-level long table with one row per module and columns:
+        benchmark_id, condition, variant, gate_mode, tau, collection,
+        module_id, module_survival, n_genes, n_terms, hub_filter_n_hubs,
+        hub_gene_rate.
+
+    Raises
+    ------
+    ValueError
+        If required columns regress in input files.
     """
     mod = read_tsv(modules_path)
     ensure_cols(
@@ -509,8 +752,22 @@ def build_module_tables(
 
 
 def summarize_modules(module_long: pd.DataFrame) -> pd.DataFrame:
-    """
-    One row per (benchmark_id, condition, variant, gate_mode, tau, collection).
+    """Summarize module-level metrics to collection-level aggregates.
+
+    Parameters
+    ----------
+    module_long : pandas.DataFrame
+        Output of ``build_module_tables`` (one row per module).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (benchmark_id, condition, variant, gate_mode, tau,
+        collection) with:
+        - n_modules
+        - median_module_genes / median_module_terms
+        - hub_gene_rate_median
+        - module_survival percentiles (p10/p50/p90)
     """
     keys = ["benchmark_id", "condition", "variant", "gate_mode", "tau", "collection"]
 
@@ -542,6 +799,19 @@ def summarize_modules(module_long: pd.DataFrame) -> pd.DataFrame:
 # Main
 # -----------------------------------------------------------------------------
 def main() -> None:
+    """CLI entry point to collect collection-wise metrics across runs.
+
+    The script scans run directories, builds:
+    - collections_summary_wide.tsv
+    - module_survival_long.tsv
+    - audit_reasons_long.tsv
+    and optionally a missing_runs.txt when inputs are incomplete.
+
+    Raises
+    ------
+    ValueError
+        If --out-root is invalid or if no runs are collected.
+    """
     ap = argparse.ArgumentParser(
         description=(
             "Collect Hallmark vs GO vs Reactome vs KEGG collection metrics "

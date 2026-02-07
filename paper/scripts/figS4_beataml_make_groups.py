@@ -19,22 +19,98 @@ OUT_GROUPS = DER / "groups"
 
 
 def _die(msg: str) -> None:
+    """
+    Exit the script with an error message.
+
+    Parameters
+    ----------
+    msg : str
+        Error message to show.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        Always raised with the provided message.
+    """
     raise SystemExit(msg)
 
 
 def _warn(msg: str) -> None:
+    """
+    Print a warning message to stderr.
+
+    Parameters
+    ----------
+    msg : str
+        Warning text.
+
+    Returns
+    -------
+    None
+    """
     print(f"[beataml_groups] WARNING: {msg}", file=sys.stderr)
 
 
 def _info(msg: str) -> None:
+    """
+    Print an informational message to stderr.
+
+    Parameters
+    ----------
+    msg : str
+        Message text.
+
+    Returns
+    -------
+    None
+    """
     print(f"[beataml_groups] {msg}", file=sys.stderr)
 
 
 def _ensure_dir(p: Path) -> None:
+    """
+    Create a directory if it does not exist.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Directory to create.
+
+    Returns
+    -------
+    None
+    """
     p.mkdir(parents=True, exist_ok=True)
 
 
 def _read_table(path: Path) -> pd.DataFrame:
+    """
+    Read a tabular file (TSV/CSV/XLSX) into a DataFrame as strings.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Input file path.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Loaded table with missing values filled as empty strings.
+
+    Raises
+    ------
+    SystemExit
+        If the file is missing or cannot be read.
+
+    Notes
+    -----
+    - XLSX is read with ``pandas.read_excel``.
+    - For text files, TSV is attempted first, then CSV as a fallback.
+    """
     if not path.exists():
         _die(f"[beataml_groups] missing file: {path}")
     suf = path.suffix.lower()
@@ -50,10 +126,38 @@ def _read_table(path: Path) -> pd.DataFrame:
 
 
 def _canon(s: str) -> str:
+    """
+    Canonicalize a string for comparisons.
+
+    Parameters
+    ----------
+    s : str
+        Input string.
+
+    Returns
+    -------
+    str
+        Lowercased string with collapsed whitespace.
+    """
     return re.sub(r"\s+", " ", str(s or "").strip()).lower()
 
 
 def _pick_col(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
+    """
+    Pick a column name from candidates using case-insensitive matching.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    candidates : Iterable[str]
+        Candidate column names in priority order.
+
+    Returns
+    -------
+    str or None
+        Matched column name as it appears in ``df.columns``, or None.
+    """
     cols = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in cols:
@@ -62,6 +166,21 @@ def _pick_col(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
 
 
 def _pick_first_present(df: pd.DataFrame, candidates: list[list[str]]) -> str | None:
+    """
+    Pick the first matching column from grouped candidate lists.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    candidates : list[list[str]]
+        Candidate groups; each group is tried in order.
+
+    Returns
+    -------
+    str or None
+        First matched column name, or None if none match.
+    """
     for group in candidates:
         c = _pick_col(df, group)
         if c:
@@ -70,6 +189,19 @@ def _pick_first_present(df: pd.DataFrame, candidates: list[list[str]]) -> str | 
 
 
 def _clean_id(x: str) -> str:
+    """
+    Normalize an identifier by stripping and removing internal whitespace.
+
+    Parameters
+    ----------
+    x : str
+        Raw identifier.
+
+    Returns
+    -------
+    str
+        Cleaned identifier, or "" if empty.
+    """
     s = str(x or "").strip()
     if not s:
         return ""
@@ -78,10 +210,47 @@ def _clean_id(x: str) -> str:
 
 
 def _score_overlap(a: set[str], b: set[str]) -> int:
+    """
+    Compute overlap size between two sets.
+
+    Parameters
+    ----------
+    a, b : set[str]
+        Input sets.
+
+    Returns
+    -------
+    int
+        Size of the intersection.
+    """
     return len(a & b)
 
 
 def _extract_sample_ids_from_counts(counts_path: Path, *, max_cols: int = 200000) -> list[str]:
+    """
+    Extract sample IDs from a counts matrix header line.
+
+    Parameters
+    ----------
+    counts_path : pathlib.Path
+        Counts file path. The first line is treated as a header.
+    max_cols : int, optional
+        Maximum number of sample columns to keep.
+
+    Returns
+    -------
+    list[str]
+        Cleaned sample IDs (excluding the first non-sample column).
+
+    Raises
+    ------
+    SystemExit
+        If the header cannot be parsed as TSV/CSV.
+
+    Notes
+    -----
+    Only the first line is read. TSV is attempted first; CSV is a fallback.
+    """
     if not counts_path.exists():
         _die(f"[beataml_groups] missing counts file: {counts_path}")
     with counts_path.open("r", encoding="utf-8", errors="replace") as f:
@@ -106,11 +275,43 @@ def _extract_sample_ids_from_counts(counts_path: Path, *, max_cols: int = 200000
 
 
 def _canon_effect(x: str) -> str:
+    """
+    Canonicalize a mutation effect string for rule-based matching.
+
+    Parameters
+    ----------
+    x : str
+        Raw effect/consequence text.
+
+    Returns
+    -------
+    str
+        Lowercased, whitespace-collapsed string with "-" and spaces replaced
+        by underscores.
+    """
     s = _canon(x)
     return s.replace("-", "_").replace(" ", "_")
 
 
 def _is_protein_altering(effect: str) -> bool:
+    """
+    Return True if an effect label looks protein-altering.
+
+    Parameters
+    ----------
+    effect : str
+        Effect/consequence label.
+
+    Returns
+    -------
+    bool
+        True if the label matches common protein-altering categories.
+
+    Notes
+    -----
+    This is a heuristic intended for cohort grouping, not variant annotation
+    truth.
+    """
     s = _canon_effect(effect)
     if any(
         tok in s
@@ -140,11 +341,41 @@ def _is_protein_altering(effect: str) -> bool:
 
 
 def _truthy(x: str) -> bool:
+    """
+    Interpret a string as a truthy flag.
+
+    Parameters
+    ----------
+    x : str
+        Input value.
+
+    Returns
+    -------
+    bool
+        True for common truthy tokens ("1", "true", "t", "yes", "y").
+    """
     s = _canon(x)
     return s in {"1", "true", "t", "yes", "y"} or s.startswith("true")
 
 
 def _clinical_tp53_positive(x: str) -> bool:
+    """
+    Heuristic clinical TP53 positivity check from a free-text field.
+
+    Parameters
+    ----------
+    x : str
+        Clinical field value.
+
+    Returns
+    -------
+    bool
+        True if the text contains "TP53" and does not contain "WT".
+
+    Notes
+    -----
+    This is used as a QC/fallback signal and is intentionally broad.
+    """
     s = str(x or "").strip()
     if not s:
         return False
@@ -157,6 +388,27 @@ def _clinical_tp53_positive(x: str) -> bool:
 
 @dataclass(frozen=True)
 class ClinicalBridge:
+    """
+    Column-name bridge describing how clinical identifiers map across assays.
+
+    Attributes
+    ----------
+    subj_col : str
+        Subject/patient identifier column.
+    rnaseq_col : str or None
+        RNA-seq sample identifier column (optional).
+    dnaseq_col : str or None
+        DNA/exome sample identifier column (optional).
+    tp53_col : str or None
+        Clinical TP53 field column (optional).
+    flag_used_col : str or None
+        Cohort inclusion flag column (optional).
+    flag_rna_col : str or None
+        RNA analysis flag column (optional).
+    flag_exome_col : str or None
+        Exome analysis flag column (optional).
+    """
+
     subj_col: str
     rnaseq_col: str | None
     dnaseq_col: str | None
@@ -167,6 +419,24 @@ class ClinicalBridge:
 
 
 def _detect_clinical_bridge(clin: pd.DataFrame) -> ClinicalBridge:
+    """
+    Detect key identifier and flag columns in a clinical table.
+
+    Parameters
+    ----------
+    clin : pandas.DataFrame
+        Clinical table.
+
+    Returns
+    -------
+    ClinicalBridge
+        Detected bridge configuration.
+
+    Raises
+    ------
+    SystemExit
+        If a subject/patient column cannot be detected.
+    """
     subj_col = _pick_first_present(
         clin,
         [
@@ -241,10 +511,26 @@ def _choose_counts_key(
     counts_ids: set[str], clin: pd.DataFrame, br: ClinicalBridge
 ) -> tuple[str, dict[str, str], dict[str, str]]:
     """
-    Returns:
-      key_level: "rnaseq" or "subject"
-      rnaseq_to_subj: mapping for rnaseq sample -> subject
-      dnaseq_to_subj: mapping for dnaseq sample -> subject
+    Choose the identifier level used by the counts matrix.
+
+    Parameters
+    ----------
+    counts_ids : set[str]
+        Sample IDs parsed from the counts header.
+    clin : pandas.DataFrame
+        Clinical table.
+    br : ClinicalBridge
+        Detected clinical bridge.
+
+    Returns
+    -------
+    tuple[str, dict[str, str], dict[str, str]]
+        (key_level, rnaseq_to_subj, dnaseq_to_subj)
+
+    Notes
+    -----
+    ``key_level`` is chosen as "rnaseq" if RNA-seq sample overlap is at least
+    subject overlap and non-zero; otherwise "subject".
     """
     rnaseq_to_subj: dict[str, str] = {}
     dnaseq_to_subj: dict[str, str] = {}
@@ -279,8 +565,27 @@ def _choose_counts_key(
 
 
 def _eligible_subjects(clin: pd.DataFrame, br: ClinicalBridge) -> set[str]:
+    """
+    Compute the eligible subject set from clinical flags.
+
+    Parameters
+    ----------
+    clin : pandas.DataFrame
+        Clinical table.
+    br : ClinicalBridge
+        Detected clinical bridge.
+
+    Returns
+    -------
+    set[str]
+        Subject IDs passing available cohort flags.
+
+    Notes
+    -----
+    If flag columns are missing, the corresponding filter is skipped.
+    """
     subj = clin[br.subj_col].astype(str).map(_clean_id)
-    mask = pd.Series([True] * len(clin))
+    mask = pd.Series([True] * len(clin), index=clin.index)
 
     # apply only if column exists; otherwise no-op
     if br.flag_used_col and br.flag_used_col in clin.columns:
@@ -296,6 +601,24 @@ def _eligible_subjects(clin: pd.DataFrame, br: ClinicalBridge) -> set[str]:
 
 
 def _detect_mut_id_candidates(mut: pd.DataFrame) -> list[str]:
+    """
+    Detect plausible identifier columns in a mutations table.
+
+    Parameters
+    ----------
+    mut : pandas.DataFrame
+        Mutations table.
+
+    Returns
+    -------
+    list[str]
+        Candidate ID columns in priority order (unique, order-preserving).
+
+    Notes
+    -----
+    Candidates are detected by name keywords and common explicit IDs
+    (e.g., dbgap_sample_id).
+    """
     cols = list(mut.columns)
     mut_cols_l = {c.lower(): c for c in cols}
 
@@ -327,6 +650,32 @@ def _detect_mut_id_candidates(mut: pd.DataFrame) -> list[str]:
 
 
 def main() -> None:
+    """
+    CLI entry point to build TP53 groups for BeatAML (Supplement).
+
+    The script:
+    - extracts counts sample IDs,
+    - detects key columns in mutations and clinical tables,
+    - maps TP53 protein-altering mutations onto the counts key level,
+    - applies an optional clinical cohort filter,
+    - writes a groups TSV and a debug text file.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required inputs are missing or mapping fails sanity checks.
+
+    Outputs
+    -------
+    <out>.tsv
+        Columns: sample, subject, group.
+    <out>.debug.txt
+        Provenance and key detection/mapping summaries.
+    """
     ap = argparse.ArgumentParser(description="Build TP53 groups for BeatAML (Supplement).")
     ap.add_argument("--counts", default=str(RAW / "beataml_waves1to4_counts_dbgap.txt"))
     ap.add_argument("--mutations", default=str(RAW / "beataml_wes_wv1to4_mutations_dbgap.txt"))

@@ -11,19 +11,68 @@ import pandas as pd
 
 
 def die(msg: str, code: int = 1) -> None:
+    """Print an error message and abort the sanity check.
+
+    Parameters
+    ----------
+    msg : str
+        Error message to print to stderr.
+    code : int, optional
+        Exit code passed to SystemExit (default 1).
+
+    Raises
+    ------
+    SystemExit
+        Always raised with the given exit code.
+    """
     print(f"[SANITY][ERROR] {msg}", file=sys.stderr)
     raise SystemExit(code)
 
 
 def warn(msg: str) -> None:
+    """Print a warning message to stderr.
+
+    Parameters
+    ----------
+    msg : str
+        Warning message to print.
+    """
     print(f"[SANITY][WARN] {msg}", file=sys.stderr)
 
 
 def info(msg: str) -> None:
+    """Print an informational message to stdout.
+
+    Parameters
+    ----------
+    msg : str
+        Message to print.
+    """
     print(f"[SANITY][INFO] {msg}")
 
 
 def read_jsonl(p: Path) -> pd.DataFrame:
+    """Read a JSONL file into a flattened DataFrame.
+
+    Each non-empty line must be a valid JSON object. Objects are normalized
+    using ``pandas.json_normalize`` to support nested keys.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to a JSONL file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Normalized table. Returns an empty DataFrame if no valid rows are
+        found.
+
+    Raises
+    ------
+    SystemExit
+        If any line cannot be parsed as JSON.
+    """
     rows = []
     with p.open("r", encoding="utf-8") as f:
         for ln, line in enumerate(f, start=1):
@@ -40,6 +89,15 @@ def read_jsonl(p: Path) -> pd.DataFrame:
 
 
 def head_text(path: Path, n: int = 3) -> None:
+    """Print the first N lines of a text file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Text file path.
+    n : int, optional
+        Number of lines to print (default 3).
+    """
     print(f"\n== head: {path.name} (n={n}) ==")
     with path.open("r", encoding="utf-8") as f:
         for _i, line in zip(range(n), f, strict=False):
@@ -47,6 +105,22 @@ def head_text(path: Path, n: int = 3) -> None:
 
 
 def _maybe_show_df(df: pd.DataFrame, n: int = 10, cols: list[str] | None = None) -> None:
+    """Pretty-print a small head view of a DataFrame.
+
+    Optionally selects a subset of columns and warns if requested columns
+    are missing. Uses a temporary pandas display context to keep output
+    compact and readable.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Table to print. If empty, prints ``(empty)``.
+    n : int, optional
+        Number of rows to show (default 10).
+    cols : list of str or None, optional
+        If provided, only these columns are printed (missing columns are
+        warned and skipped).
+    """
     if df is None or df.empty:
         print("(empty)")
         return
@@ -70,6 +144,20 @@ def _maybe_show_df(df: pd.DataFrame, n: int = 10, cols: list[str] | None = None)
 
 
 def main() -> None:
+    """Run a quick end-to-end sanity check on a Fig. 2 output directory.
+
+    The check verifies presence and non-emptiness of key artifacts, inspects
+    run metadata, parses the JSONL report, summarizes audit decisions and
+    reasons, optionally inspects module/edge artifacts, and prints a compact
+    view of the risk/coverage payload and sample card.
+
+    Notes
+    -----
+    - The base directory can be overridden by passing a single CLI argument.
+    - This is a diagnostic script; it prefers warnings over hard failures
+      except for missing/empty required artifacts.
+    """
+
     # Allow overriding base on CLI (useful for tau sweep dirs)
     default_base = "/work/paper/source_data/PANCAN_TP53_v1/out/HNSC/ours"
     base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(default_base)

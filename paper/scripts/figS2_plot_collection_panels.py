@@ -14,6 +14,23 @@ import pandas as pd
 # Style (paper-consistent, minimal)
 # -------------------------
 def apply_pub_style(fontsize: int = 16) -> None:
+    """
+    Apply a minimal, paper-consistent Matplotlib style.
+
+    Parameters
+    ----------
+    fontsize : int, optional
+        Base font size used to scale related rcParams.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function mutates global ``matplotlib.rcParams`` for the current
+    Python process.
+    """
     plt.rcParams.update(
         {
             "font.size": fontsize,
@@ -30,27 +47,107 @@ def apply_pub_style(fontsize: int = 16) -> None:
 
 
 def _die(msg: str) -> None:
+    """
+    Exit the script with a message.
+
+    Parameters
+    ----------
+    msg : str
+        Error message shown to the user.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        Always raised with the provided message.
+    """
     raise SystemExit(msg)
 
 
 def _canon(s: str) -> str:
+    """
+    Canonicalize a string for robust comparisons.
+
+    Parameters
+    ----------
+    s : str
+        Input string.
+
+    Returns
+    -------
+    str
+        Lowercased, stripped string. ``None``/empty inputs become ``""``.
+    """
     return str(s or "").strip().lower()
 
 
 def _parse_csv(s: str) -> list[str]:
+    """
+    Parse a comma-separated string into a list of non-empty tokens.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string (e.g., ``"HNSC, LUAD"``).
+
+    Returns
+    -------
+    list[str]
+        List of stripped tokens. Empty tokens are dropped.
+    """
     return [x.strip() for x in str(s).split(",") if x.strip()]
 
 
 def _ensure_file(p: Path, label: str) -> None:
+    """
+    Validate that a path exists, is a file, and is non-empty.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to validate.
+    label : str
+        Label used in error messages.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If the file is missing, not a file, or empty.
+    """
     if not p.exists():
-        _die(f"[figSx_plot] missing {label}: {p}")
+        _die(f"[figS2_plot] missing {label}: {p}")
     if not p.is_file():
-        _die(f"[figSx_plot] not a file {label}: {p}")
+        _die(f"[figS2_plot] not a file {label}: {p}")
     if p.stat().st_size == 0:
-        _die(f"[figSx_plot] empty {label}: {p}")
+        _die(f"[figS2_plot] empty {label}: {p}")
 
 
 def _read_tsv(p: Path) -> pd.DataFrame:
+    """
+    Read a TSV file into a DataFrame after basic validation.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to a TSV file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Loaded table.
+
+    Raises
+    ------
+    SystemExit
+        If the file is missing, not a file, or empty.
+    """
     _ensure_file(p, "TSV")
     return pd.read_csv(p, sep="\t")
 
@@ -63,6 +160,32 @@ def _filter_df(
     gate_modes: list[str] | None,
     taus: list[float] | None,
 ) -> pd.DataFrame:
+    """
+    Filter a metrics DataFrame by common dimensions.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    conditions : list[str] or None
+        Allowed condition labels (case-insensitive). Uses ``condition`` column.
+    variants : list[str] or None
+        Allowed variant labels. Uses ``variant`` column.
+    gate_modes : list[str] or None
+        Allowed gate modes. Uses ``gate_mode`` column.
+    taus : list[float] or None
+        Allowed tau values. Uses ``tau`` column. Values are coerced to numeric
+        and compared after rounding to 6 decimals.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered copy of ``df``.
+
+    Notes
+    -----
+    Missing columns are ignored (no filtering applied for that dimension).
+    """
     out = df.copy()
 
     def has(col: str) -> bool:
@@ -90,21 +213,65 @@ def _filter_df(
 
 
 def _infer_collection_col(df: pd.DataFrame) -> str:
+    """
+    Infer the collection column name from a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+
+    Returns
+    -------
+    str
+        Name of the collection column.
+
+    Raises
+    ------
+    SystemExit
+        If no known collection column is found.
+    """
     for c in ["collection", "gene_set_collection", "msig_collection", "collection_name"]:
         if c in df.columns:
             return c
     _die(
-        "[figSx_plot] cannot find a collection column (expected one of: "
+        "[figS2_plot] cannot find a collection column (expected one of: "
         "collection, gene_set_collection, msig_collection, collection_name)"
     )
 
 
 def _nice_collection_label(x: str) -> str:
-    # Keep “Less is more”: don’t over-format.
+    """
+    Format a collection label for display.
+
+    Parameters
+    ----------
+    x : str
+        Raw collection identifier.
+
+    Returns
+    -------
+    str
+        Display-friendly label with minimal formatting.
+    """
     return str(x).replace("_", " ").strip()
 
 
 def _infer_tumor_col(df: pd.DataFrame) -> str | None:
+    """
+    Infer a tumor/cohort column name from a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+
+    Returns
+    -------
+    str or None
+        First matching column name from a predefined candidate list, or
+        ``None`` if none are present.
+    """
     candidates = [
         "conditiondiseasetumor_type",
         "tcga_cancer",
@@ -121,6 +288,23 @@ def _infer_tumor_col(df: pd.DataFrame) -> str | None:
 
 
 def _make_palette(keys: list[str]) -> dict[str, tuple[float, float, float]]:
+    """
+    Create a simple categorical palette mapping.
+
+    Parameters
+    ----------
+    keys : list[str]
+        Category keys in display order.
+
+    Returns
+    -------
+    dict[str, tuple[float, float, float]]
+        Mapping from key to RGB tuple (0–1 range).
+
+    Notes
+    -----
+    Uses Matplotlib's ``tab20`` colormap.
+    """
     cmap = plt.get_cmap("tab20")
     colors = [cmap(i % cmap.N)[:3] for i in range(len(keys))]
     return {k: colors[i] for i, k in enumerate(keys)}
@@ -146,6 +330,46 @@ def plot_panel_A(
     jitter: float = 0.12,
     box_fill_alpha: float = 0.22,
 ) -> None:
+    """
+    Plot Panel A: module survival distributions by collection.
+
+    This panel shows per-module survival values as boxplots with overlaid
+    jittered points.
+
+    Parameters
+    ----------
+    module_survival_long : pandas.DataFrame
+        Long-form table with at least a collection column (one of
+        ``collection``, ``gene_set_collection``, ``msig_collection``,
+        ``collection_name``) and ``module_survival``.
+    out_path : pathlib.Path
+        Output file path (PDF/PNG).
+    conditions, variants, gate_modes : list[str] or None
+        Optional filters applied if corresponding columns exist.
+    taus : list[float] or None
+        Optional tau filter applied if ``tau`` column exists.
+    fontsize : int
+        Base font size used by :func:`apply_pub_style`.
+    title : str
+        Panel title (currently unused; reserved for future use).
+    dot_size : float, optional
+        Scatter point size.
+    dot_alpha : float, optional
+        Scatter point alpha.
+    jitter : float, optional
+        Horizontal jitter amplitude for points.
+    box_fill_alpha : float, optional
+        Alpha used for box fills.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or filtering yields no data.
+    """
     df = module_survival_long.copy()
 
     coll_col = _infer_collection_col(df)
@@ -157,7 +381,7 @@ def plot_panel_A(
     df = df.dropna(subset=["module_survival", coll_col])
 
     if df.empty:
-        _die("[figSx_plot] Panel A: no rows after filtering")
+        _die("[figS2_plot] Panel A: no rows after filtering")
 
     # ---- group data ----
     colls = [str(c) for c in sorted(df[coll_col].astype(str).unique())]
@@ -169,7 +393,7 @@ def plot_panel_A(
         groups.append(vals)
 
     if not any(len(g) for g in groups):
-        _die("[figSx_plot] Panel A: no valid module_survival values to plot")
+        _die("[figS2_plot] Panel A: no valid module_survival values to plot")
 
     # ---- colors: fill by collection ----
     cmap = plt.get_cmap("tab10")
@@ -225,8 +449,24 @@ def plot_panel_A(
 # Panel B: module structure stats (by collection)
 # -------------------------
 def _pick_proxy_col(df: pd.DataFrame) -> str:
-    # Prefer a single “hub/bridge proxy” column if present.
-    # Adjust this list if your collector uses different names.
+    """
+    Select a proxy column for hub/bridge behavior if available.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+
+    Returns
+    -------
+    str
+        Name of a proxy column if found; otherwise an empty string.
+
+    Notes
+    -----
+    The candidate list is heuristic and may be adjusted to match collector
+    output naming.
+    """
     candidates = [
         "bridge_gene_rate",
         "bridge_rate",
@@ -256,18 +496,55 @@ def plot_panel_B(
     fontsize: int,
     title: str,
 ) -> None:
+    """
+    Plot Panel B: module structure summary statistics by collection.
+
+    This panel aggregates the filtered slice to one row per collection
+    (median across runs) and visualizes per-module counts and the number
+    of modules.
+
+    Parameters
+    ----------
+    collections_summary_wide : pandas.DataFrame
+        Wide table with collection-level summary metrics.
+    out_path : pathlib.Path
+        Output file path (PDF/PNG).
+    conditions, variants, gate_modes : list[str] or None
+        Optional filters applied if corresponding columns exist.
+    taus : list[float] or None
+        Optional tau filter applied if ``tau`` column exists.
+    fontsize : int
+        Base font size used by :func:`apply_pub_style`.
+    title : str
+        Panel title (currently unused; reserved for future use).
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or filtering yields no data.
+
+    Required Columns
+    ----------------
+    n_modules : numeric
+    median_module_genes : numeric
+    median_module_terms : numeric
+    """
     df = collections_summary_wide.copy()
     coll_col = _infer_collection_col(df)
 
     df = _filter_df(df, conditions=conditions, variants=variants, gate_modes=gate_modes, taus=taus)
     if df.empty:
-        _die("[figSx_plot] Panel B: no rows after filtering")
+        _die("[figS2_plot] Panel B: no rows after filtering")
 
     required_any = ["n_modules", "median_module_genes", "median_module_terms"]
     missing = [c for c in required_any if c not in df.columns]
     if missing:
         _die(
-            f"[figSx_plot] collections_summary_wide.tsv missing required columns "
+            f"[figS2_plot] collections_summary_wide.tsv missing required columns "
             f" for Panel B: {missing}"
         )
 
@@ -285,7 +562,7 @@ def plot_panel_B(
     )
     g = df.groupby(coll_col, as_index=False)[agg_cols].median(numeric_only=True)
     if g.empty:
-        _die("[figSx_plot] Panel B: empty aggregation result")
+        _die("[figS2_plot] Panel B: empty aggregation result")
 
     g = g.sort_values(coll_col, kind="mergesort")
     labels = [_nice_collection_label(x) for x in g[coll_col].astype(str).tolist()]
@@ -360,6 +637,44 @@ def plot_panel_C(
     fontsize: int,
     title: str,
 ) -> None:
+    """
+    Plot Panel C: PASS/ABSTAIN/FAIL composition by collection (100% stacked).
+
+    The panel sums counts per collection across the filtered slice and
+    plots stacked proportions.
+
+    Parameters
+    ----------
+    collections_summary_wide : pandas.DataFrame
+        Wide table containing audit outcome counts. Accepts ``n_total`` or
+        legacy ``n_total_claims``.
+    out_path : pathlib.Path
+        Output file path (PDF/PNG).
+    conditions, variants, gate_modes : list[str] or None
+        Optional filters applied if corresponding columns exist.
+    taus : list[float] or None
+        Optional tau filter applied if ``tau`` column exists.
+    fontsize : int
+        Base font size used by :func:`apply_pub_style`.
+    title : str
+        Panel title (currently unused; reserved for future use).
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or filtering yields no data.
+
+    Required Columns
+    ----------------
+    n_total : numeric
+    n_pass : numeric
+    n_abstain : numeric
+    n_fail : numeric
+    """
     df = collections_summary_wide.copy()
     coll_col = _infer_collection_col(df)
     # Accept collector naming
@@ -368,13 +683,13 @@ def plot_panel_C(
 
     df = _filter_df(df, conditions=conditions, variants=variants, gate_modes=gate_modes, taus=taus)
     if df.empty:
-        _die("[figSx_plot] Panel C: no rows after filtering")
+        _die("[figS2_plot] Panel C: no rows after filtering")
 
     needed = ["n_total", "n_pass", "n_abstain", "n_fail"]
     missing = [c for c in needed if c not in df.columns]
     if missing:
         _die(
-            f"[figSx_plot] collections_summary_wide.tsv missing required columns "
+            f"[figS2_plot] collections_summary_wide.tsv missing required columns "
             f"for Panel C: {missing}"
         )
 
@@ -480,11 +795,26 @@ def plot_panel_C(
 # -------------------------
 def _infer_reason_cols(df: pd.DataFrame) -> tuple[str, str]:
     """
-    Returns (status_col, reason_col).
+    Infer status and reason columns in an audit-reasons table.
 
     Supports two formats:
-      (A) collector output: reason_type + reason
-      (B) legacy: status/audit_status/outcome + reason/reason_code/...
+    (A) collector output: ``reason_type`` + ``reason``
+    (B) legacy output: status/outcome + reason/reason_code variants
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Audit reasons table.
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(status_col, reason_col)``
+
+    Raises
+    ------
+    SystemExit
+        If no suitable status or reason column is found.
     """
     # Prefer collector format
     if "reason_type" in df.columns:
@@ -498,7 +828,7 @@ def _infer_reason_cols(df: pd.DataFrame) -> tuple[str, str]:
                 break
         if not status_col:
             _die(
-                "[figSx_plot] audit_reasons_long.tsv missing a status column (expected: "
+                "[figS2_plot] audit_reasons_long.tsv missing a status column (expected: "
                 "reason_type or status/audit_status/outcome)"
             )
 
@@ -540,12 +870,49 @@ def plot_panel_D(
     topk: int = 5,
     include_fail_if_any: bool = True,
 ) -> None:
+    """
+    Plot Panel D: top ABSTAIN reasons by collection; optionally FAIL reasons.
+
+    The primary display is the ABSTAIN reason composition within each
+    collection. If enabled and FAIL counts exist, FAIL reason composition
+    is shown side-by-side.
+
+    Parameters
+    ----------
+    audit_reasons_long : pandas.DataFrame
+        Long table with collection, status, and reason fields. Accepts
+        multiple naming conventions (see :func:`_infer_reason_cols`).
+    out_path : pathlib.Path
+        Output file path (PDF/PNG).
+    conditions, variants, gate_modes : list[str] or None
+        Optional filters applied if corresponding columns exist.
+    taus : list[float] or None
+        Optional tau filter applied if ``tau`` column exists.
+    fontsize : int
+        Base font size used by :func:`apply_pub_style`.
+    title : str
+        Panel title (currently unused; reserved for future use).
+    topk : int, optional
+        Number of top reasons to keep; the rest are grouped into ``Other``.
+    include_fail_if_any : bool, optional
+        If True, plot FAIL reasons when any FAIL counts are present.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If ABSTAIN rows are absent after filtering or if required columns
+        cannot be inferred.
+    """
     df = audit_reasons_long.copy()
     coll_col = _infer_collection_col(df)
 
     df = _filter_df(df, conditions=conditions, variants=variants, gate_modes=gate_modes, taus=taus)
     if df.empty:
-        _die("[figSx_plot] Panel D: no rows after filtering")
+        _die("[figS2_plot] Panel D: no rows after filtering")
 
     status_col, reason_col = _infer_reason_cols(df)
 
@@ -562,7 +929,7 @@ def plot_panel_D(
     # Primary: ABSTAIN
     abd = df[df[status_col] == "ABSTAIN"].copy()
     if abd.empty:
-        _die("[figSx_plot] Panel D: no ABSTAIN rows (after filtering)")
+        _die("[figS2_plot] Panel D: no ABSTAIN rows (after filtering)")
 
     top = (
         abd.groupby(reason_col, as_index=False)["count"]
@@ -655,8 +1022,23 @@ def plot_panel_D(
 # Main
 # -------------------------
 def main() -> None:
+    """
+    CLI entry point for generating Supp Fig S2 panels (A–D).
+
+    Loads TSV inputs, applies optional filters (conditions/variants/gates/taus),
+    and writes panel figures to the output directory.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function parses command-line arguments and performs file I/O.
+    """
+
     ap = argparse.ArgumentParser(
-        description="Plot Supp Fig Sx panels (A–D) from collection_metrics TSVs."
+        description="Plot Supp Fig S2 panels (A–D) from collection_metrics TSVs."
     )
     ap.add_argument(
         "--collections-summary-wide", required=True, help="collections_summary_wide.tsv"
@@ -770,7 +1152,7 @@ def main() -> None:
     )
 
     print("[figS2_plot] WROTE:")
-    for p in sorted(outdir.glob(f"FigSx_Panel*.{fmt}")):
+    for p in sorted(outdir.glob(f"FigS2_Panel*.{fmt}")):
         print(" ", p)
 
 

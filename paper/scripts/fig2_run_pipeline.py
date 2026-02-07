@@ -1,5 +1,28 @@
 #!/usr/bin/env python3
 # paper/scripts/run_fig2_pipeline.py
+
+"""
+Fig. 2 reproduction orchestrator (paper).
+
+This script performs a deterministic tau-sweep over conditions × variants × gate modes
+and runs the core LLM-PathwayCurator pipeline (`llm_pathway_curator.pipeline.run_pipeline`).
+
+Inputs
+------
+- EvidenceTables: paper/source_data/<benchmark_id>/evidence_tables/<COND>.evidence_table.tsv
+- Sample Cards : paper/source_data/<benchmark_id>/sample_cards/<COND>.<gate>.sample_card.json
+
+Outputs (per job)
+-----------------
+<out_root>/<COND>/<variant>/gate_<gate>/tau_<tau>/
+  - report.jsonl, audit_log.tsv, claims.proposed.tsv, modules.tsv, run_meta.json, manifest.json
+
+Determinism
+-----------
+Controlled by `--seed` (default 42) and the library's fixed settings.
+This script does not implement scientific logic; it orchestrates reproducible runs.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -32,14 +55,17 @@ ENV_STRESS = {
 # Utils
 # -------------------------
 def _die(msg: str) -> None:
+    """Exit the runner with a message (raises SystemExit)."""
     raise SystemExit(msg)
 
 
 def _warn(msg: str) -> None:
+    """Print a warning message to stderr (runner prefix included)."""
     print(f"[run_fig2] WARNING: {msg}", file=sys.stderr)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    """Read a JSON file into a dict, or exit with a helpful error."""
     if not path.exists():
         _die(f"[run_fig2] missing file: {path}")
     try:
@@ -49,11 +75,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, obj: Any) -> None:
+    """Write an object as pretty JSON (sorted keys) and ensure parent dirs exist."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _ensure_file(path: Path, label: str) -> None:
+    """Fail-fast if `path` is missing, not a file, or empty."""
     if not path.exists():
         _die(f"[run_fig2] {label} not found: {path}")
     if not path.is_file():
@@ -63,6 +91,7 @@ def _ensure_file(path: Path, label: str) -> None:
 
 
 def _sha256_file(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file."""
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -71,6 +100,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _maybe_git_rev() -> str:
+    """Return current git commit hash, or an empty string if unavailable."""
     try:
         out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
         return out.decode("utf-8").strip()
@@ -79,6 +109,7 @@ def _maybe_git_rev() -> str:
 
 
 def _require_backend_env_for_context_review() -> None:
+    """Fail-fast unless LLMPATH_BACKEND is set to a supported backend for LLM review."""
     kind = str(os.environ.get("LLMPATH_BACKEND", "")).strip().lower()
     if not kind:
         _die(
@@ -90,12 +121,37 @@ def _require_backend_env_for_context_review() -> None:
 
 
 def _validate_card_schema(card: dict[str, Any]) -> None:
+    """Fail-fast on forbidden Sample Card fields (spec enforcement)."""
     extra = card.get("extra", {})
     if isinstance(extra, dict) and "k_claims" in extra:
         _die("[run_fig2] invalid sample_card: extra.k_claims is forbidden (use top-level k_claims)")
 
 
 def _validate_evidence_table(path: Path) -> None:
+    """
+    Validate that a TSV satisfies the EvidenceTable contract.
+
+    Parameters
+    ----------
+    path
+        EvidenceTable TSV path.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If parsing fails or the contract is violated.
+
+    Notes
+    -----
+    Inputs: EvidenceTable TSV.
+    Outputs: none (validation only).
+    Determinism: deterministic.
+    Dependencies: `llm_pathway_curator.schema.EvidenceTable.read_tsv`.
+    """
     try:
         EvidenceTable.read_tsv(str(path))
     except Exception as e:
@@ -103,10 +159,12 @@ def _validate_evidence_table(path: Path) -> None:
 
 
 def _parse_csv(arg: str) -> list[str]:
+    """Parse a comma-separated CLI argument into a list of non-empty tokens."""
     return [x.strip() for x in str(arg).split(",") if x.strip()]
 
 
 def _parse_taus(s: str) -> list[float]:
+    """Parse a comma-separated tau list into floats (non-empty)."""
     vals: list[float] = []
     for x in _parse_csv(s):
         vals.append(float(x))
@@ -116,6 +174,7 @@ def _parse_taus(s: str) -> list[float]:
 
 
 def _parse_gate_modes(s: str) -> list[str]:
+    """Parse comma-separated gate modes (allowed: note, hard)."""
     modes = _parse_csv(s)
     allowed = {"note", "hard"}
     bad = sorted(set(modes) - allowed)
@@ -127,6 +186,7 @@ def _parse_gate_modes(s: str) -> list[str]:
 
 
 def _parse_variants(s: str) -> list[str]:
+    """Parse comma-separated variants (allowed: ours, context_swap, stress)."""
     variants = _parse_csv(s)
     allowed = {"ours", "context_swap", "stress"}
     bad = sorted(set(variants) - allowed)
@@ -138,6 +198,7 @@ def _parse_variants(s: str) -> list[str]:
 
 
 def _validate_k_claims(k_claims: int) -> None:
+    """Validate that k_claims is >= 1."""
     if k_claims < 1:
         _die(f"[run_fig2] --k-claims must be >= 1 (got {k_claims})")
 
@@ -149,6 +210,7 @@ def _validate_stress_args(
     p_contra: float,
     contra_cap: int,
 ) -> None:
+    """Validate stress CLI arguments (ranges and non-negativity)."""
     if p_drop < 0.0 or p_drop > 1.0:
         _die(f"[run_fig2] --stress-evidence-dropout-p must be in [0,1] (got {p_drop})")
     if min_keep < 0:
@@ -160,6 +222,7 @@ def _validate_stress_args(
 
 
 def _stress_recipe(*, p_drop: float, p_contra: float) -> str:
+    """Return a human-readable stress recipe label for metadata."""
     if float(p_drop) > 0.0 and float(p_contra) > 0.0:
         return "dropout+contradiction"
     if float(p_drop) > 0.0:
@@ -175,6 +238,7 @@ def _set_audit_tau(
     *,
     k_claims: int | None = None,
 ) -> dict[str, Any]:
+    """Set `extra.audit_tau` (and optionally top-level `k_claims`) on a Sample Card."""
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
@@ -188,6 +252,7 @@ def _set_audit_tau(
 
 
 def _set_stress_gate_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Set `extra.stress_gate_mode` on a Sample Card (off/note/hard)."""
     mode = str(mode).strip().lower()
     allowed = {"off", "note", "hard"}
     if mode not in allowed:
@@ -201,6 +266,7 @@ def _set_stress_gate_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
 
 
 def _set_context_review_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Set `extra.context_review_mode` on a Sample Card (off/llm)."""
     mode = str(mode).strip().lower()
     allowed = {"off", "llm"}
     if mode not in allowed:
@@ -216,10 +282,12 @@ def _set_context_review_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
 def _outdir_for(
     *, out_root: Path, condition: str, variant: str, gate_mode: str, tau: float
 ) -> Path:
+    """Build the canonical output directory path for a job."""
     return out_root / condition / variant / f"gate_{gate_mode}" / f"tau_{tau:.2f}"
 
 
 def _report_exists_ok(outdir: Path) -> bool:
+    """Return True if `outdir/report.jsonl` exists and is non-empty."""
     rp = outdir / "report.jsonl"
     return rp.exists() and rp.is_file() and rp.stat().st_size > 0
 
@@ -234,6 +302,32 @@ def _patch_report_jsonl(
     gate_mode: str,
     tau: float,
 ) -> None:
+    """
+    Patch per-record metadata into `report.jsonl` for downstream aggregation.
+
+    Parameters
+    ----------
+    report_path
+        Path to `report.jsonl` produced by `run_pipeline`.
+    benchmark_id, condition, method, variant, gate_mode, tau
+        Metadata fields injected into every JSONL record.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If the JSONL file is missing, empty, or contains invalid JSON.
+
+    Notes
+    -----
+    Inputs: existing `report.jsonl`.
+    Outputs: rewritten `report.jsonl` (same path) with additional fields.
+    Determinism: deterministic transformation.
+    Dependencies: JSONL schema emitted by `llm_pathway_curator.report`.
+    """
     if not report_path.exists():
         _die(f"[run_fig2] report.jsonl not found for patch: {report_path}")
 
@@ -264,6 +358,7 @@ def _patch_report_jsonl(
 
 
 def _make_shuffled_mapping_all(all_conditions: list[str]) -> dict[str, str]:
+    """Create a deterministic rotation map for context-swap across all conditions."""
     if len(all_conditions) < 2:
         _die("[run_fig2] context_swap requires >=2 conditions in evidence_tables/")
     rot = all_conditions[1:] + all_conditions[:1]
@@ -271,6 +366,7 @@ def _make_shuffled_mapping_all(all_conditions: list[str]) -> dict[str, str]:
 
 
 def _with_temp_env(env_updates: dict[str, str]) -> dict[str, str]:
+    """Apply env updates and return old values for later restoration."""
     old: dict[str, str] = {}
     for k, v in env_updates.items():
         if k in os.environ:
@@ -282,6 +378,7 @@ def _with_temp_env(env_updates: dict[str, str]) -> dict[str, str]:
 
 
 def _restore_env(old_values: dict[str, str]) -> None:
+    """Restore environment variables captured by `_with_temp_env`."""
     for k, old in old_values.items():
         if old == "__MISSING__":
             os.environ.pop(k, None)
@@ -309,6 +406,33 @@ def _write_manifest(
     stress: dict[str, Any],
     error: str = "",
 ) -> None:
+    """
+    Write a runner-level provenance manifest for one job.
+
+    Parameters
+    ----------
+    outdir
+        Job output directory.
+    status
+        "ok" or "error".
+    error
+        Error message when status is "error".
+    plan
+        High-level run plan used to reproduce the job batch.
+    evidence_table, sample_card
+        Input paths recorded with size/mtime/sha256.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Inputs: `evidence_table`, `sample_card`, and current environment metadata.
+    Outputs: `outdir/manifest.json`.
+    Determinism: sha256 and paths are deterministic given fixed inputs.
+    Dependencies: local git (optional) and filesystem metadata.
+    """
     manifest = {
         "tool": "llm-pathway-curator",
         "script": "paper/scripts/run_fig2_pipeline.py",
@@ -367,6 +491,7 @@ def _write_manifest(
 
 
 def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
+    """Warn if stress was expected but not reflected in outputs/metadata."""
     rm = outdir / "run_meta.json"
     if not rm.exists():
         _warn(f"missing run_meta.json for stress check: {rm}")
@@ -429,6 +554,46 @@ def _check_stress_effect(outdir: Path, *, expected_enabled: bool) -> None:
 
 @dataclass(frozen=True)
 class Job:
+    """
+    One tau-sweep job specification for the Fig. 2 reproduction runner.
+
+    Parameters
+    ----------
+    benchmark_id
+        Directory name under `paper/source_data/`.
+    condition
+        Condition label (e.g., HNSC, BRCA) that selects EvidenceTable and Sample Card.
+    method
+        Method label recorded into `report.jsonl` (e.g., ours, context_swap).
+    variant
+        Variant name controlling how Sample Cards are prepared (ours/context_swap/stress).
+    gate_mode
+        Audit gate mode (note/hard).
+    tau
+        Stability threshold used by the audit (`audit_tau`).
+    k_claims
+        Number of proposed claims before audit.
+    seed
+        RNG seed forwarded to `run_pipeline`.
+    evidence_table
+        Path to EvidenceTable TSV for this condition.
+    sample_card
+        Path to Sample Card JSON used for this job (may be a generated context-swap card).
+    outdir
+        Output directory for this job.
+    context_swap_from, context_swap_to
+        Human-readable labels recorded for context swap provenance.
+    stress_*
+        Stress knobs forwarded to the pipeline (dropout/contradiction).
+
+    Notes
+    -----
+    Inputs: `evidence_table`, `sample_card`.
+    Outputs: written under `outdir/` by `run_pipeline` plus `manifest.json`.
+    Determinism: controlled by `seed` and fixed pipeline settings.
+    Dependencies: `llm_pathway_curator.pipeline.run_pipeline`.
+    """
+
     benchmark_id: str
     condition: str
     method: str
@@ -449,6 +614,37 @@ class Job:
 
 
 def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
+    """
+    Execute one job and write a decision-grade report under the job output directory.
+
+    Parameters
+    ----------
+    job
+        Fully specified job (inputs, tau, seed, stress knobs, and output directory).
+    force
+        If True, overwrite existing outputs. If False, skip when `report.jsonl` exists.
+    plan
+        Run plan metadata recorded into `manifest.json` for provenance.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Inputs
+      - `job.evidence_table` (EvidenceTable TSV)
+      - `job.sample_card` (Sample Card JSON)
+    Outputs
+      - `job.outdir/report.jsonl` (patched with benchmark/condition/method metadata)
+      - `job.outdir/manifest.json` (runner-level provenance)
+      - additional artifacts produced by `run_pipeline` (audit log, modules, etc.)
+    Determinism
+      - `job.seed` is forwarded to `RunConfig(seed=...)`.
+    Dependencies
+      - `llm_pathway_curator.pipeline.run_pipeline`
+      - `llm_pathway_curator.pipeline.RunConfig`
+    """
     if (not force) and _report_exists_ok(job.outdir):
         print(f"[run_fig2] SKIP (exists): {job.outdir}")
         return
@@ -582,8 +778,31 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
 
 
 def _resolve_sd(benchmark_id: str) -> Path:
-    # --- BEATAML/PANCAN switch ---
-    # Expect benchmark_id to equal directory name under paper/source_data/
+    """
+    Resolve the benchmark root directory under `paper/source_data/`.
+
+    Parameters
+    ----------
+    benchmark_id
+        Directory name under `paper/source_data/` (e.g., PANCAN_TP53_v1).
+
+    Returns
+    -------
+    Path
+        Path to `paper/source_data/<benchmark_id>`.
+
+    Raises
+    ------
+    SystemExit
+        If the benchmark directory does not exist.
+
+    Notes
+    -----
+    Inputs: `benchmark_id`.
+    Outputs: none (path resolution only).
+    Determinism: deterministic.
+    Dependencies: filesystem layout under `paper/source_data/`.
+    """
     p = PAPER / "source_data" / benchmark_id
     if not p.exists():
         _die(f"[run_fig2] benchmark directory not found: {p}")
@@ -591,6 +810,31 @@ def _resolve_sd(benchmark_id: str) -> Path:
 
 
 def _iter_all_conditions(evid_dir: Path) -> list[str]:
+    """
+    List all available condition labels from EvidenceTable file names.
+
+    Parameters
+    ----------
+    evid_dir
+        Directory containing `*.evidence_table.tsv`.
+
+    Returns
+    -------
+    list[str]
+        Uppercased condition labels inferred from `<COND>.evidence_table.tsv`.
+
+    Raises
+    ------
+    SystemExit
+        If the directory is missing or no matching EvidenceTables are found.
+
+    Notes
+    -----
+    Inputs: `evid_dir/*.evidence_table.tsv`.
+    Outputs: condition list used to plan tau-sweep jobs.
+    Determinism: ordering is deterministic via `sorted(glob(...))`.
+    Dependencies: file naming convention `<COND>.evidence_table.tsv`.
+    """
     if not evid_dir.exists():
         _die(f"[run_fig2] missing dir: {evid_dir}")
     conds: list[str] = []
@@ -602,6 +846,33 @@ def _iter_all_conditions(evid_dir: Path) -> list[str]:
 
 
 def main() -> None:
+    """
+    CLI entry point for Fig. 2 reproduction runs (tau-sweep orchestrator).
+
+    This function:
+    1) Resolves benchmark directories under `paper/source_data/<benchmark_id>/`.
+    2) Validates EvidenceTables and Sample Cards (fail-fast).
+    3) Builds a job list across conditions × variants × gate modes × taus.
+    4) Runs each job via `_run_one`, writing outputs under `<out_root>/...`.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Inputs
+      - EvidenceTables: `<benchmark>/evidence_tables/*.evidence_table.tsv`
+      - Sample Cards : `<benchmark>/sample_cards/*.sample_card.json`
+    Outputs
+      - Per-job outputs under:
+        `<out_root>/<COND>/<variant>/gate_<gate>/tau_<tau>/`
+    Determinism
+      - Controlled by `--seed` (default 42) and library-level fixed settings.
+    Dependencies
+      - `llm_pathway_curator.pipeline.run_pipeline`
+      - `llm_pathway_curator.schema.EvidenceTable` (contract validation)
+    """
     ap = argparse.ArgumentParser(
         description=(
             "Fig2 (paper/supp): deterministic tau-sweep over conditions × variants × gate modes."

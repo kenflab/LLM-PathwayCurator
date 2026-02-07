@@ -11,17 +11,71 @@ _ALLOWED = {"", "ACCEPT", "REJECT", "SHOULD_ABSTAIN"}
 
 
 def _iter_audit_logs(root: Path) -> list[Path]:
+    """Iterate audit_log.tsv files under a Fig. 2 output root.
+
+    This collects both supported directory layouts:
+
+    - new: ``*/*/gate_*/tau_*/audit_log.tsv``
+    - old: ``*/*/tau_*/audit_log.tsv``
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Root directory containing per-condition run outputs.
+
+    Returns
+    -------
+    list of pathlib.Path
+        Sorted list of unique audit_log.tsv paths.
+    """
     files_new = list(root.glob("*/*/gate_*/tau_*/audit_log.tsv"))
     files_old = list(root.glob("*/*/tau_*/audit_log.tsv"))
     return sorted({p.resolve(): p for p in (files_new + files_old)}.values())
 
 
 def _infer_condition_from_path(audit_path: Path, root: Path) -> str:
+    """Infer condition name from an audit_log.tsv path.
+
+    Parameters
+    ----------
+    audit_path : pathlib.Path
+        Path to ``audit_log.tsv`` under ``root``.
+    root : pathlib.Path
+        Root directory used to compute the relative path.
+
+    Returns
+    -------
+    str
+        Condition name inferred as the first component of the relative path.
+        Returns an empty string if inference fails.
+    """
     rel = audit_path.relative_to(root)
     return str(rel.parts[0]) if len(rel.parts) >= 1 else ""
 
 
 def _load_labels(path: Path) -> pd.DataFrame:
+    """Load labels.tsv for merge checks.
+
+    The input must contain at least ``claim_id`` and ``human_label``.
+    Values are normalized (strip + upper-case) and missing values are
+    filled with empty strings.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to ``labels.tsv``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing ``claim_id`` and ``human_label`` (and any other
+        columns present in the input).
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+    """
     df = pd.read_csv(path, sep="\t", dtype=str).fillna("")
     if "claim_id" not in df.columns:
         raise ValueError(f"labels.tsv missing claim_id: {path}")
@@ -35,6 +89,34 @@ def _load_labels(path: Path) -> pd.DataFrame:
 
 
 def main() -> None:
+    """Check labels.tsv quality and merge-ability against audit_log.tsv.
+
+    The script performs:
+    1) Duplicate ``claim_id`` detection in labels.
+    2) Validation of ``human_label`` values against an allowed set.
+    3) Collection of claim_ids from audit logs under ``--root`` (optionally
+       filtered by ``--condition``).
+    4) Coverage checks: labeled claim_ids found vs missing in audit logs.
+    5) Counts of non-blank labels targeting a preferred audit status
+       (default PASS).
+
+    Command-line arguments
+    ----------------------
+    --labels : str
+        Path to labels.tsv.
+    --root : str
+        Fig2 output root containing audit_log.tsv files.
+    --condition : str, optional
+        If set, restrict checks to a single condition (e.g., HNSC).
+    --prefer-status : str, optional
+        Audit status used for the "labeled among status" report
+        (default PASS).
+
+    Raises
+    ------
+    SystemExit
+        If no audit_log.tsv files are found under ``--root``.
+    """
     ap = argparse.ArgumentParser(
         description="Check labels.tsv quality and merge-ability against audit_log.tsv."
     )

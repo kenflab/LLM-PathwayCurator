@@ -1,6 +1,42 @@
 #!/usr/bin/env Rscript
 # paper/scripts/fig2_deg_rank.R
 
+# =============================================================================
+# fig2_deg_rank.R
+#
+# Compute DEG ranking (TP53_mut vs TP53_wt) using limma t-statistic.
+#
+# Parameters
+# ----------
+# CANCER : character(1)
+#   TCGA cancer code (e.g., "HNSC"). Passed as a single CLI argument.
+#
+# Inputs
+# ------
+# raw/expression.xena.gz  (or expression.tsv.gz / expression.xena.tsv.gz)
+#   Wide matrix: first column = gene id, remaining columns = samples.
+# derived/groups/{CANCER}.groups.tsv
+#   Columns: sample, group  (group in {TP53_wt, TP53_mut})
+#
+# Outputs
+# -------
+# derived/rankings/{CANCER}.deg_ranking.tsv
+#   Columns: gene, score
+#   score is limma moderated t-statistic for (TP53_mut - TP53_wt).
+#
+# Dependencies
+# ------------
+# data.table, limma
+#
+# Failure modes
+# -------------
+# - Missing expression or groups file.
+# - Too few matched samples (< 10).
+# - Unexpected group labels (not TP53_wt/TP53_mut).
+# - Non-numeric expression matrix (would fail lmFit).
+# =============================================================================
+
+
 suppressPackageStartupMessages({
   library(data.table)
   library(limma)
