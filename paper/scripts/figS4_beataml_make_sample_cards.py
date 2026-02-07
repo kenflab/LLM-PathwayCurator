@@ -14,19 +14,82 @@ OUT = SD / "sample_cards"
 
 
 def _die(msg: str) -> None:
+    """
+    Exit the script with an error message.
+
+    Parameters
+    ----------
+    msg : str
+        Error message displayed to the user.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        Always raised with the provided message.
+    """
     raise SystemExit(msg)
 
 
 def _write_json(path: Path, obj: dict) -> None:
+    """
+    Write a JSON object to disk with stable formatting.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Output file path.
+    obj : dict
+        JSON-serializable dictionary.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - Parent directories are created if needed.
+    - Output is pretty-printed with indentation and sorted keys.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def make_card(*, card_id: str, context_gate_mode: str, k_claims: int, tau: float) -> dict:
     """
-    card_id:
-      - "BEATAML"      : true BeatAML context
-      - "BEATAML_SWAP" : counterfactual context for context_swap ablation
+    Create a BeatAML sample card dictionary.
+
+    Parameters
+    ----------
+    card_id : str
+        Sample card identifier. Supported values are:
+        - "BEATAML": true BeatAML context
+        - "BEATAML_SWAP": counterfactual context for context-swap ablation
+    context_gate_mode : str
+        Context gate behavior (e.g., "note" or "hard").
+    k_claims : int
+        Number of claims to propose downstream.
+    tau : float
+        Audit stability threshold used downstream.
+
+    Returns
+    -------
+    dict
+        Sample card object compatible with the paper pipelines.
+
+    Raises
+    ------
+    SystemExit
+        If ``card_id`` is not recognized.
+
+    Notes
+    -----
+    The counterfactual card intentionally uses a mismatched disease/tissue to
+    stress context gating. Evidence and groups remain BeatAML; only the
+    sample-card context keys differ.
     """
     if card_id not in {"BEATAML", "BEATAML_SWAP"}:
         _die(f"[beataml_sample_cards] unknown card_id: {card_id}")
@@ -75,6 +138,21 @@ def make_card(*, card_id: str, context_gate_mode: str, k_claims: int, tau: float
 
 
 def main() -> None:
+    """
+    CLI entry point to write BeatAML sample cards for the supplement.
+
+    The script validates that a groups TSV exists and writes 4 sample cards:
+    2 card IDs ("BEATAML", "BEATAML_SWAP") × 2 gate modes ("note", "hard").
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        If required inputs are missing.
+    """
     ap = argparse.ArgumentParser(
         description="BeatAML (Supplement): write sample cards (note/hard)."
     )

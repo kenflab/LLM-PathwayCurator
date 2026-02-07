@@ -18,7 +18,7 @@ for (a in commandArgs(trailingOnly = FALSE)) {
   }
 }
 if (is.null(script_path) || !nzchar(script_path)) {
-  die("Cannot determine script path. Run via: Rscript paper/scripts/figS_beataml_fgsea_to_evidence_table.R")
+  die("Cannot determine script path. Run via: Rscript paper/scripts/figS4_beataml_fgsea_to_evidence_table.R")
 }
 
 SCRIPT_DIR <- dirname(normalizePath(script_path, mustWork = TRUE))

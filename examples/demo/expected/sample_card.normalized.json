@@ -1,0 +1,14 @@
+{
+  "condition": "BRCA",
+  "tissue": "breast",
+  "perturbation": "TP53 mutation",
+  "comparison": "TP53-mut vs TP53-wt",
+  "notes": null,
+  "context_tokens_text": null,
+  "context_tokens_policy": {},
+  "context_tokens_meta": {},
+  "k_claims_value": 3,
+  "extra": {
+    "disease": "breast cancer"
+  }
+}

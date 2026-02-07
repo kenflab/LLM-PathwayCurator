@@ -12,6 +12,21 @@ import pandas as pd
 
 
 def _parse_tau_from_path(p: Path) -> float | None:
+    """Parse tau value from a path.
+
+    The function looks for a substring like ``tau_0.8`` within the path
+    string and returns it as a float.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path that may include a ``tau_<number>`` segment.
+
+    Returns
+    -------
+    float or None
+        Parsed tau value if present and valid; otherwise None.
+    """
     m = re.search(r"tau_([0-9]*\.?[0-9]+)", str(p))
     if not m:
         return None
@@ -22,16 +37,32 @@ def _parse_tau_from_path(p: Path) -> float | None:
 
 
 def _infer_keys_from_path(audit_path: Path, root: Path) -> dict[str, str]:
-    """
-    Supports BOTH layouts:
+    """Infer run keys from an audit_log.tsv path.
 
-    New (preferred):
-      root/<condition>/<VARIANT>/gate_<GATE_MODE>/tau_xx/audit_log.tsv
+    Supports both directory layouts:
 
-    Old:
-      root/<condition>/<VARIANT>/tau_xx/audit_log.tsv
+    - New:
+      ``root/<condition>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv``
+    - Old:
+      ``root/<condition>/<VARIANT>/tau_*/audit_log.tsv``
 
-    Returns: condition, variant, gate_mode (may be "")
+    Parameters
+    ----------
+    audit_path : pathlib.Path
+        Path to ``audit_log.tsv``.
+    root : pathlib.Path
+        Root directory used to compute the relative path.
+
+    Returns
+    -------
+    dict of str
+        Mapping with keys ``condition``, ``variant``, ``gate_mode``.
+        ``gate_mode`` is an empty string for the old layout.
+
+    Notes
+    -----
+    If the relative path is shorter than expected, empty strings are
+    returned for all keys.
     """
     rel = audit_path.relative_to(root)
     parts = rel.parts
@@ -55,6 +86,18 @@ def _infer_keys_from_path(audit_path: Path, root: Path) -> dict[str, str]:
 
 
 def _read_run_meta(run_dir: Path) -> dict[str, Any]:
+    """Read run metadata JSON from a run directory.
+
+    Parameters
+    ----------
+    run_dir : pathlib.Path
+        Directory expected to contain ``run_meta.json``.
+
+    Returns
+    -------
+    dict
+        Parsed JSON object if present and valid; otherwise an empty dict.
+    """
     rp = run_dir / "run_meta.json"
     if not rp.exists():
         return {}
@@ -65,18 +108,69 @@ def _read_run_meta(run_dir: Path) -> dict[str, Any]:
 
 
 def _read_benchmark_id(run_dir: Path, fallback: str) -> str:
+    """Get benchmark_id from run metadata with a fallback.
+
+    Parameters
+    ----------
+    run_dir : pathlib.Path
+        Run directory containing ``run_meta.json``.
+    fallback : str
+        Fallback benchmark id used when metadata is missing or empty.
+
+    Returns
+    -------
+    str
+        Benchmark id string (trimmed). Falls back to ``fallback``.
+    """
     meta = _read_run_meta(run_dir)
     bid = str(meta.get("benchmark_id", "")).strip()
     return bid if bid else str(fallback or "").strip()
 
 
 def _read_method(run_dir: Path, fallback: str) -> str:
+    """Get method name from run metadata with a fallback.
+
+    Parameters
+    ----------
+    run_dir : pathlib.Path
+        Run directory containing ``run_meta.json``.
+    fallback : str
+        Fallback method name used when metadata is missing or empty.
+
+    Returns
+    -------
+    str
+        Method string (trimmed). Falls back to ``fallback``.
+    """
     meta = _read_run_meta(run_dir)
     m = str(meta.get("method", "")).strip()
     return m if m else str(fallback or "").strip()
 
 
 def _load_labels(path: Path) -> pd.DataFrame:
+    """Load human labels from a TSV file.
+
+    The input must include ``claim_id`` and one of:
+    ``human_label``, ``human_decision``, or ``label``.
+    Labels are normalized to upper-case and empty/NA-like values are
+    dropped. Duplicate claim_ids keep the last occurrence.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to a labels TSV.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Two-column DataFrame with ``claim_id`` and ``human_label``.
+        ``claim_id`` is stripped; ``human_label`` is upper-case.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing.
+    """
     df = pd.read_csv(path, sep="\t", dtype=str).fillna("")
     df.columns = [c.strip() for c in df.columns]
 
@@ -105,6 +199,28 @@ def _load_labels(path: Path) -> pd.DataFrame:
 
 
 def _attach_labels(audit: pd.DataFrame, labels: pd.DataFrame | None) -> pd.DataFrame:
+    """Attach human labels to an audit log DataFrame.
+
+    This performs a left join on ``claim_id`` and keeps audit rows even when
+    a label is missing.
+
+    Parameters
+    ----------
+    audit : pandas.DataFrame
+        Audit log DataFrame (expects ``claim_id`` for joining).
+    labels : pandas.DataFrame or None
+        Output of ``_load_labels`` (may be None/empty).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Audit DataFrame with an added ``human_label`` column when possible.
+
+    Notes
+    -----
+    If ``claim_id`` is missing from the audit DataFrame, the input is
+    returned unchanged.
+    """
     if labels is None or labels.empty:
         return audit
     if "claim_id" not in audit.columns:
@@ -115,6 +231,42 @@ def _attach_labels(audit: pd.DataFrame, labels: pd.DataFrame | None) -> pd.DataF
 
 
 def _compute_from_audit(audit: pd.DataFrame) -> dict[str, float]:
+    """Compute risk/coverage metrics from an audit log.
+
+    Required column:
+    - ``status`` in {PASS, ABSTAIN, FAIL}
+
+    Optional columns:
+    - ``human_label`` (evaluated among PASS only)
+    - ``audit_notes`` (for a debug-only proxy risk)
+
+    Parameters
+    ----------
+    audit : pandas.DataFrame
+        Audit log table.
+
+    Returns
+    -------
+    dict of str to float
+        Summary metrics including:
+        - counts: n_total, n_pass, n_abstain, n_fail, n_answered
+        - rates: coverage_pass, abstain_rate_total, fail_rate_total,
+          fail_rate_answered
+        - human risk (PASS only): risk_human_reject, risk_human_nonaccept,
+          n_pass_labeled
+        - debug proxy: risk_proxy
+
+    Raises
+    ------
+    ValueError
+        If the audit table lacks the required ``status`` column.
+
+    Notes
+    -----
+    - ``answered`` is defined as PASS or FAIL (ABSTAIN excluded).
+    - ``risk_proxy`` is for dev/debug only and should not be used as a paper
+      risk metric.
+    """
     if "status" not in audit.columns:
         raise ValueError("audit_log.tsv missing column: status")
 
@@ -202,6 +354,37 @@ def _compute_from_audit(audit: pd.DataFrame) -> dict[str, float]:
 
 
 def main() -> None:
+    """Collect Fig. 2 risk/coverage points from audit_log.tsv files.
+
+    The script scans a root directory for audit logs in either layout:
+
+    - New:
+      ``<condition>/<VARIANT>/gate_<MODE>/tau_*/audit_log.tsv``
+    - Old:
+      ``<condition>/<VARIANT>/tau_*/audit_log.tsv``
+
+    It parses tau from the path, attaches optional human labels, computes
+    summary metrics, and writes a TSV table.
+
+    Command-line arguments
+    ----------------------
+    --root : str
+        Root directory to scan for audit logs.
+    --out : str
+        Output TSV path.
+    --benchmark-id : str, optional
+        Fallback benchmark id when run_meta.json is missing.
+    --method : str, optional
+        Fallback method name when run_meta.json is missing.
+    --labels : str, optional
+        Labels TSV path to compute human risk among PASS.
+
+    Raises
+    ------
+    SystemExit
+        If no audit logs are found, labels path is invalid, or 0 rows are
+        collected unexpectedly.
+    """
     ap = argparse.ArgumentParser(
         description=(
             "Collect Fig2 points from audit_log.tsv (dev/debug). "

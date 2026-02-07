@@ -13,10 +13,48 @@ OUT = SD / "sample_cards"
 
 
 def _die(msg: str) -> None:
+    """Abort execution with a message.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable error message.
+
+    Raises
+    ------
+    SystemExit
+        Always raised with ``msg`` as the exit message.
+    """
     raise SystemExit(msg)
 
 
 def make_card(cancer: str, *, context_gate_mode: str) -> dict:
+    """Create a Sample Card dictionary for a single cancer cohort.
+
+    This returns a JSON-serializable dict that encodes the study context
+    and analysis knobs used by the Fig. 2 pipelines.
+
+    Parameters
+    ----------
+    cancer : str
+        Cancer/condition label (e.g., ``"HNSC"``).
+    context_gate_mode : str
+        Context gate behavior. Expected values are ``"note"`` or
+        ``"hard"`` (written under ``extra.context_gate_mode``).
+
+    Returns
+    -------
+    dict
+        Sample Card object to be written as ``*.sample_card.json``.
+        The top-level keys include ``condition``, ``tissue``,
+        ``perturbation``, ``comparison``, ``k_claims``, ``notes``,
+        and an ``extra`` mapping for benchmark-specific knobs.
+
+    Notes
+    -----
+    - The caller controls gating via ``context_gate_mode``; this function
+      does not run any audits and does not validate existence of files.
+    """
     return {
         "condition": cancer,
         "tissue": "tumor",
@@ -41,6 +79,27 @@ def make_card(cancer: str, *, context_gate_mode: str) -> dict:
 
 
 def main() -> None:
+    """Generate per-cancer Sample Card JSON files for Fig. 2.
+
+    This script scans ``paper/source_data/PANCAN_TP53_v1/derived/groups``
+    for ``*.groups.tsv`` files (excluding ``PANCAN.groups.tsv``) and writes
+    two cards per cancer into ``paper/source_data/PANCAN_TP53_v1/sample_cards``:
+
+    - ``{CANCER}.note.sample_card.json`` (no hard gate on nonspecificity)
+    - ``{CANCER}.hard.sample_card.json`` (ABSTAIN on nonspecificity)
+
+    Raises
+    ------
+    SystemExit
+        If the expected groups directory is missing or no per-cancer group
+        files are found.
+
+    Notes
+    -----
+    - Cancer labels are inferred from the filename prefix before the first
+      dot (e.g., ``BRCA.groups.tsv`` -> ``BRCA``).
+    - Output JSON is pretty-printed with sorted keys for reproducibility.
+    """
     if not GROUPS.exists():
         _die(f"[make_sample_cards] missing dir: {GROUPS}")
 

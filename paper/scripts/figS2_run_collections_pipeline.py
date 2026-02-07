@@ -1,5 +1,35 @@
 #!/usr/bin/env python3
 # paper/scripts/run_figS2_collections_pipeline.py
+
+"""
+Supp Fig S2 reproduction orchestrator (collections sensitivity).
+
+This script runs the core LLM-PathwayCurator pipeline at a fixed tau (default 0.80)
+across gene set collections (Hallmark/GO BP/Reactome/KEGG) and variants
+(ours/context_swap/stress), over multiple cancers and audit gate modes.
+
+Inputs
+------
+- EvidenceTables:
+  paper/source_data/<benchmark_id>/evidence_tables/<CANCER>.<suffix>.evidence_table.tsv
+- Sample Cards:
+  paper/source_data/<benchmark_id>/sample_cards/<CANCER>.<gate>.sample_card.json
+
+Outputs (per job)
+-----------------
+<out_root>/<collection_slug>/<CANCER>/<variant>/gate_<gate>/tau_<tau>/
+  - report.jsonl, audit_log.tsv, claims.proposed.tsv, modules.tsv, run_meta.json
+  - run_meta.runner.json (runner-added metadata)
+
+Determinism
+-----------
+Controlled by `--seed` (default 42) and library-level fixed settings.
+
+Dependencies
+------------
+`llm_pathway_curator.pipeline.run_pipeline` and the EvidenceTable TSV contract.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,14 +51,17 @@ PAPER = Path(__file__).resolve().parents[1]  # paper/
 # Utils
 # -------------------------
 def _die(msg: str) -> None:
+    """Exit the runner with a message (raises SystemExit)."""
     raise SystemExit(msg)
 
 
 def _warn(msg: str) -> None:
+    """Print a warning message to stderr (runner prefix included)."""
     print(f"[run_figS2] WARNING: {msg}", file=sys.stderr)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    """Read a JSON file into a dict, or exit with a helpful error."""
     if not path.exists():
         _die(f"[run_figS2] missing file: {path}")
     try:
@@ -38,11 +71,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, obj: Any) -> None:
+    """Write an object as pretty JSON (sorted keys) and ensure parent dirs exist."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _ensure_file(path: Path, label: str) -> None:
+    """Fail-fast if `path` is missing, not a file, or empty."""
     if not path.exists():
         _die(f"[run_figS2] {label} not found: {path}")
     if not path.is_file():
@@ -52,10 +87,12 @@ def _ensure_file(path: Path, label: str) -> None:
 
 
 def _parse_csv(arg: str) -> list[str]:
+    """Parse a comma-separated CLI argument into a list of non-empty tokens."""
     return [x.strip() for x in str(arg).split(",") if x.strip()]
 
 
 def _validate_evidence_table(path: Path) -> None:
+    """Validate EvidenceTable TSV contract via `EvidenceTable.read_tsv`."""
     try:
         EvidenceTable.read_tsv(str(path))
     except Exception as e:
@@ -63,6 +100,7 @@ def _validate_evidence_table(path: Path) -> None:
 
 
 def _report_exists_ok(outdir: Path) -> bool:
+    """Return True if `outdir/report.jsonl` exists and is non-empty."""
     rp = outdir / "report.jsonl"
     return rp.exists() and rp.is_file() and rp.stat().st_size > 0
 
@@ -70,10 +108,12 @@ def _report_exists_ok(outdir: Path) -> bool:
 def _outdir_for(
     *, out_root: Path, condition: str, variant: str, gate_mode: str, tau: float
 ) -> Path:
+    """Build a canonical output directory path for one job."""
     return out_root / condition / variant / f"gate_{gate_mode}" / f"tau_{tau:.2f}"
 
 
 def _make_rotation_map(conds: list[str]) -> dict[str, str]:
+    """Create a deterministic rotation map used for context_swap within the run."""
     if len(conds) < 2:
         _die("[run_figS2] context_swap requires >=2 conditions (cancers) in this run")
     rot = conds[1:] + conds[:1]
@@ -81,6 +121,7 @@ def _make_rotation_map(conds: list[str]) -> dict[str, str]:
 
 
 def _set_card_extra(card: dict[str, Any], key: str, val: Any) -> dict[str, Any]:
+    """Set `card['extra'][key] = val` (creating a dict if needed)."""
     extra = card.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
@@ -90,7 +131,7 @@ def _set_card_extra(card: dict[str, Any], key: str, val: Any) -> dict[str, Any]:
 
 
 def _set_k_claims(card: dict[str, Any], k_claims: int) -> dict[str, Any]:
-    # enforce spec: extra.k_claims forbidden
+    """Set top-level `k_claims` and remove forbidden `extra.k_claims` if present."""
     extra = card.get("extra", {})
     if isinstance(extra, dict) and "k_claims" in extra:
         extra.pop("k_claims", None)
@@ -100,10 +141,12 @@ def _set_k_claims(card: dict[str, Any], k_claims: int) -> dict[str, Any]:
 
 
 def _set_audit_tau(card: dict[str, Any], tau: float) -> dict[str, Any]:
+    """Set `extra.audit_tau` for audit configuration metadata."""
     return _set_card_extra(card, "audit_tau", float(tau))
 
 
 def _set_context_review_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Set `extra.context_review_mode` (off/llm) with validation."""
     mode = str(mode).strip().lower()
     if mode not in {"off", "llm"}:
         _die(f"[run_figS2] invalid context_review_mode={mode} (allowed: off,llm)")
@@ -111,6 +154,7 @@ def _set_context_review_mode(card: dict[str, Any], mode: str) -> dict[str, Any]:
 
 
 def _require_backend_env_for_context_review() -> None:
+    """Fail-fast unless `LLMPATH_BACKEND` is set to a supported backend."""
     kind = str(os.environ.get("LLMPATH_BACKEND", "")).strip().lower()
     if not kind:
         _die(
@@ -126,12 +170,48 @@ def _require_backend_env_for_context_review() -> None:
 # -------------------------
 @dataclass(frozen=True)
 class CollectionSpec:
+    """
+    Gene set collection specification for the collections sensitivity pipeline.
+
+    Parameters
+    ----------
+    name
+        Paper-facing label (e.g., Hallmark, GO_BP, Reactome, KEGG_MEDICUS).
+    suffix
+        EvidenceTable filename suffix produced by the paper-side fgsea scripts.
+        Expected file pattern: `<CANCER>.<suffix>.evidence_table.tsv`.
+    out_slug
+        Directory slug under `out_root/` used to group outputs by collection.
+
+    Notes
+    -----
+    Inputs: used only for planning and file resolution.
+    Outputs: affects output directory layout under `out_root/`.
+    Determinism: deterministic.
+    Dependencies: the file naming convention in `evidence_tables/`.
+    """
+
     name: str  # paper-facing label (Hallmark/GO_BP/Reactome/KEGG_MEDICUS)
     suffix: str  # evidence_tables filename suffix (matches your fgsea script output)
     out_slug: str  # directory slug under out_root
 
 
 def _default_collections() -> list[CollectionSpec]:
+    """
+    Return the default collection set used for the paper.
+
+    Returns
+    -------
+    list[CollectionSpec]
+        Default collections in paper order.
+
+    Notes
+    -----
+    Inputs: none.
+    Outputs: collection specs used to resolve EvidenceTables and output paths.
+    Determinism: deterministic.
+    Dependencies: must match suffixes produced by the paper-side fgsea scripts.
+    """
     return [
         CollectionSpec(name="Hallmark", suffix="H", out_slug="H"),
         CollectionSpec(name="GO_BP", suffix="C5_GO_BP", out_slug="C5_GO_BP"),
@@ -143,6 +223,30 @@ def _default_collections() -> list[CollectionSpec]:
 
 
 def _find_evidence_table(evid_dir: Path, cancer: str, suffix: str) -> Path:
+    """
+    Resolve and validate an EvidenceTable TSV for a given cancer and collection suffix.
+
+    Parameters
+    ----------
+    evid_dir
+        Directory containing EvidenceTables.
+    cancer
+        Cancer label (uppercased), used as `<CANCER>` in the expected file name.
+    suffix
+        Collection suffix used as `<suffix>` in the expected file name.
+
+    Returns
+    -------
+    Path
+        Path to `<CANCER>.<suffix>.evidence_table.tsv`.
+
+    Notes
+    -----
+    Inputs: filesystem path `<evid_dir>/<CANCER>.<suffix>.evidence_table.tsv`.
+    Outputs: none (path resolution + validation only).
+    Determinism: deterministic.
+    Dependencies: `EvidenceTable.read_tsv` contract validation.
+    """
     # expects: <CANCER>.<suffix>.evidence_table.tsv
     p = evid_dir / f"{cancer}.{suffix}.evidence_table.tsv"
     _ensure_file(p, f"evidence_table ({cancer}, {suffix})")
@@ -151,6 +255,30 @@ def _find_evidence_table(evid_dir: Path, cancer: str, suffix: str) -> Path:
 
 
 def _sample_card_path(sd: Path, cancer: str, gate_mode: str) -> Path:
+    """
+    Resolve a Sample Card JSON path for a given cancer and gate mode.
+
+    Parameters
+    ----------
+    sd
+        Benchmark root directory under `paper/source_data/<benchmark_id>/`.
+    cancer
+        Cancer label (uppercased).
+    gate_mode
+        Gate mode string used in file naming (e.g., hard, note).
+
+    Returns
+    -------
+    Path
+        Path to `<sd>/sample_cards/<CANCER>.<gate_mode>.sample_card.json`.
+
+    Notes
+    -----
+    Inputs: filesystem path under `<sd>/sample_cards/`.
+    Outputs: none (path resolution only).
+    Determinism: deterministic.
+    Dependencies: file naming convention in `sample_cards/`.
+    """
     p = sd / "sample_cards" / f"{cancer}.{gate_mode}.sample_card.json"
     _ensure_file(p, f"sample_card ({cancer}, gate={gate_mode})")
     return p
@@ -161,6 +289,46 @@ def _sample_card_path(sd: Path, cancer: str, gate_mode: str) -> Path:
 # -------------------------
 @dataclass(frozen=True)
 class Job:
+    """
+    One job configuration for the collections pipeline.
+
+    Parameters
+    ----------
+    benchmark_id
+        Directory name under `paper/source_data/`.
+    collection
+        Paper-facing collection label (e.g., Hallmark).
+    collection_suffix
+        EvidenceTable filename suffix for this collection.
+    condition
+        Cancer/condition label (e.g., BRCA, HNSC).
+    variant
+        Variant name: ours, context_swap, or stress.
+    gate_mode
+        Audit gate mode: hard or note.
+    tau
+        Stability threshold used by the audit.
+    k_claims
+        Number of proposed claims before audit.
+    seed
+        RNG seed forwarded to `run_pipeline`.
+    evidence_table
+        EvidenceTable TSV for this (condition, collection).
+    sample_card
+        Sample Card JSON used for proposal/audit (may be generated for context_swap).
+    outdir
+        Output directory for this job.
+    stress_*
+        Stress knobs forwarded to the pipeline when `variant == "stress"`.
+
+    Notes
+    -----
+    Inputs: `evidence_table`, `sample_card`.
+    Outputs: written under `outdir/` by `run_pipeline` plus `run_meta.runner.json`.
+    Determinism: controlled by `seed` and fixed pipeline settings.
+    Dependencies: `llm_pathway_curator.pipeline.run_pipeline`.
+    """
+
     benchmark_id: str
     collection: str
     collection_suffix: str
@@ -181,6 +349,34 @@ class Job:
 
 
 def _run_one(job: Job, *, force: bool) -> None:
+    """
+    Run the core pipeline for one (collection, condition, variant) job.
+
+    Parameters
+    ----------
+    job
+        Fully specified job including inputs, tau/seed, stress knobs, and output dir.
+    force
+        If True, overwrite existing outputs. If False, skip when `report.jsonl` exists.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Inputs
+      - `job.evidence_table` (EvidenceTable TSV)
+      - `job.sample_card` (Sample Card JSON)
+    Outputs
+      - `job.outdir/report.jsonl` and pipeline artifacts (audit log, modules, etc.)
+      - `job.outdir/run_meta.runner.json` (runner-added metadata)
+    Determinism
+      - `job.seed` is forwarded to `RunConfig(seed=...)`.
+    Dependencies
+      - `llm_pathway_curator.pipeline.RunConfig`
+      - `llm_pathway_curator.pipeline.run_pipeline`
+    """
     if (not force) and _report_exists_ok(job.outdir):
         print(f"[run_figS2] SKIP (exists): {job.outdir}")
         return
@@ -221,6 +417,35 @@ def _run_one(job: Job, *, force: bool) -> None:
 
 
 def main() -> None:
+    """
+    CLI entry point for the collections sensitivity pipeline (Supp Fig S2).
+
+    This function:
+    1) Resolves `paper/source_data/<benchmark_id>/` and validates required inputs.
+    2) Selects collections and builds jobs across collections × cancers × variants × gates.
+    3) Optionally generates context-swap Sample Cards per job.
+    4) Runs each job via `_run_one`, writing outputs under `<out_root>/`.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Inputs
+      - EvidenceTables:
+        `<benchmark>/evidence_tables/<CANCER>.<suffix>.evidence_table.tsv`
+      - Sample Cards:
+        `<benchmark>/sample_cards/<CANCER>.<gate>.sample_card.json`
+    Outputs
+      - Per-job outputs under:
+        `<out_root>/<collection_slug>/<CANCER>/<variant>/gate_<gate>/tau_<tau>/`
+    Determinism
+      - Controlled by `--seed` (default 42) and library-level fixed settings.
+    Dependencies
+      - `llm_pathway_curator.pipeline.run_pipeline`
+      - `llm_pathway_curator.schema.EvidenceTable` (contract validation)
+    """
     ap = argparse.ArgumentParser(
         description="Supp Fig Sx: run tau=0.8 pipelines across gene set collections."
     )

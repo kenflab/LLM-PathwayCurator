@@ -1,7 +1,7 @@
 {
-  "disease": "HNSC",
-  "tissue": "oral_cavity",
-  "perturbation": "TP53_mut_vs_wt",
-  "comparison": "tumor",
-  "notes": "Demo sample card for LLM-PathwayCurator."
+  "condition": "BRCA",
+  "disease": "breast cancer",
+  "tissue": "breast",
+  "perturbation": "TP53 mutation",
+  "comparison": "TP53-mut vs TP53-wt"
 }
