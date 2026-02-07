@@ -1,0 +1,23 @@
+{
+  "benchmark_id": "PANCAN_TP53_v1",
+  "condition": "SKCM",
+  "context_swap_from": "",
+  "context_swap_to": "",
+  "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/SKCM.evidence_table.tsv",
+  "gate_mode": "hard",
+  "k_claims": 50,
+  "method": "ours",
+  "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/SKCM.hard.sample_card.json",
+  "seed": 42,
+  "stress": {
+    "contradictory_max_extra": 0,
+    "contradictory_p": 0.0,
+    "enabled": true,
+    "evidence_dropout_min_keep": 1,
+    "evidence_dropout_p": 0.05,
+    "recipe": "dropout"
+  },
+  "tau": 0.6,
+  "time_unix": 1770157575,
+  "variant": "stress"
+}

@@ -1,0 +1,20 @@
+{
+  "comparison": "TP53_mut_vs_TP53_wt",
+  "condition": "LUAD",
+  "extra": {
+    "audit_tau": 0.4,
+    "benchmark_id": "BEATAML_TP53_v1",
+    "context_gate_mode": "hard",
+    "context_review_mode": "off",
+    "context_swap_from": "BEATAML_AML",
+    "context_swap_to": "LUAD",
+    "context_swap_to_condition": "BEATAML_SWAP",
+    "gene_id_map_tsv": "resources/gene_id_maps/ensembl_id_map.tsv.gz",
+    "goal": "context-conditioned pathway claim selection with calibrated abstention",
+    "groups_tsv": "derived/groups/BEATAML.groups.tsv"
+  },
+  "k_claims": 50,
+  "notes": "BeatAML (waves 1\u20134). Groups from WES (TP53 protein-altering) mapped to RNA-seq sample IDs; clinical TP53 column used only for cohort QC and optional annotation.",
+  "perturbation": "genotype",
+  "tissue": "tumor"
+}

@@ -1,0 +1,19 @@
+{
+  "comparison": "TP53_mut_vs_TP53_wt",
+  "condition": "UCEC",
+  "extra": {
+    "audit_tau": 0.2,
+    "benchmark_id": "PANCAN_TP53_v1",
+    "context_gate_mode": "hard",
+    "context_review_mode": "off",
+    "context_swap_from": "SKCM",
+    "context_swap_to": "UCEC",
+    "context_swap_to_condition": "UCEC",
+    "gene_id_map_tsv": "resources/gene_id_maps/id_map.tsv.gz",
+    "goal": "context-conditioned pathway claim selection with calibrated abstention"
+  },
+  "k_claims": 50,
+  "notes": "TCGA Pan-Cancer; groups defined from MC3 TP53 PASS mutations.",
+  "perturbation": "genotype",
+  "tissue": "tumor"
+}

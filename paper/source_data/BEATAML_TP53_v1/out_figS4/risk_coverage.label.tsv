@@ -1,0 +1,16 @@
+benchmark_id	condition	method	variant	gate_mode	tau	coverage_pass	abstain_rate_total	fail_rate_total	fail_rate_answered	n_total	n_pass	n_abstain	n_fail	n_answered	risk_human_reject	risk_human_nonaccept	n_pass_labeled	risk_proxy	_src
+	BEATAML	ours	context_swap	hard	0.2	0.26	0.74	0.0	0.0	50.0	13.0	37.0	0.0	13.0	0.07692307692307693	0.3076923076923077	13.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.20/audit_log.tsv
+	BEATAML	ours	context_swap	hard	0.4	0.26	0.74	0.0	0.0	50.0	13.0	37.0	0.0	13.0	0.07692307692307693	0.3076923076923077	13.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.40/audit_log.tsv
+	BEATAML	ours	context_swap	hard	0.6	0.26	0.74	0.0	0.0	50.0	13.0	37.0	0.0	13.0	0.07692307692307693	0.3076923076923077	13.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.60/audit_log.tsv
+	BEATAML	ours	context_swap	hard	0.8	0.26	0.74	0.0	0.0	50.0	13.0	37.0	0.0	13.0	0.07692307692307693	0.3076923076923077	13.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.80/audit_log.tsv
+	BEATAML	ours	context_swap	hard	0.9	0.24	0.76	0.0	0.0	50.0	12.0	38.0	0.0	12.0	0.08333333333333333	0.3333333333333333	12.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.90/audit_log.tsv
+	BEATAML	ours	ours	hard	0.2	0.78	0.22	0.0	0.0	50.0	39.0	11.0	0.0	39.0	0.05128205128205128	0.28205128205128205	39.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/ours/gate_hard/tau_0.20/audit_log.tsv
+	BEATAML	ours	ours	hard	0.4	0.78	0.22	0.0	0.0	50.0	39.0	11.0	0.0	39.0	0.05128205128205128	0.28205128205128205	39.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/ours/gate_hard/tau_0.40/audit_log.tsv
+	BEATAML	ours	ours	hard	0.6	0.78	0.22	0.0	0.0	50.0	39.0	11.0	0.0	39.0	0.05128205128205128	0.28205128205128205	39.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/ours/gate_hard/tau_0.60/audit_log.tsv
+	BEATAML	ours	ours	hard	0.8	0.78	0.22	0.0	0.0	50.0	39.0	11.0	0.0	39.0	0.05128205128205128	0.28205128205128205	39.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/ours/gate_hard/tau_0.80/audit_log.tsv
+	BEATAML	ours	ours	hard	0.9	0.74	0.26	0.0	0.0	50.0	37.0	13.0	0.0	37.0	0.05405405405405406	0.2972972972972973	37.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/ours/gate_hard/tau_0.90/audit_log.tsv
+	BEATAML	ours	stress	hard	0.2	0.18	0.82	0.0	0.0	50.0	9.0	41.0	0.0	9.0	0.0	0.1111111111111111	9.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/stress/gate_hard/tau_0.20/audit_log.tsv
+	BEATAML	ours	stress	hard	0.4	0.18	0.82	0.0	0.0	50.0	9.0	41.0	0.0	9.0	0.0	0.1111111111111111	9.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/stress/gate_hard/tau_0.40/audit_log.tsv
+	BEATAML	ours	stress	hard	0.6	0.18	0.82	0.0	0.0	50.0	9.0	41.0	0.0	9.0	0.0	0.1111111111111111	9.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/stress/gate_hard/tau_0.60/audit_log.tsv
+	BEATAML	ours	stress	hard	0.8	0.18	0.82	0.0	0.0	50.0	9.0	41.0	0.0	9.0	0.0	0.1111111111111111	9.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/stress/gate_hard/tau_0.80/audit_log.tsv
+	BEATAML	ours	stress	hard	0.9	0.16	0.84	0.0	0.0	50.0	8.0	42.0	0.0	8.0	0.0	0.125	8.0	0.0	/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/stress/gate_hard/tau_0.90/audit_log.tsv
