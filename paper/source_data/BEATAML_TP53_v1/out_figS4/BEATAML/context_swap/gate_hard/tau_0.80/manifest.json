@@ -1,0 +1,91 @@
+{
+  "env": {
+    "LLMPATH_BACKEND": "ollama",
+    "LLMPATH_K_CLAIMS": "",
+    "LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA": "0",
+    "LLMPATH_STRESS_CONTRADICTORY_P": "0.0",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP": "1",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_P": "0.0",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONHASHSEED": "0",
+    "cwd": "/work",
+    "platform": "linux",
+    "python": "3.12.12"
+  },
+  "error": "",
+  "finished_unix": 1770166748,
+  "git_commit": "42b5a6755cbbd071952a2c1fd4ec12453d37d2a5",
+  "inputs": {
+    "evidence_table": {
+      "mtime_unix": 1769652162.2925508,
+      "path": "/work/paper/source_data/BEATAML_TP53_v1/evidence_tables/BEATAML.evidence_table.tsv",
+      "sha256": "d17bf654f40d5ea5e37f0a4a4b186e075e82b1033226b84b786aa8a0387e68b3",
+      "size_bytes": 48081
+    },
+    "sample_card": {
+      "mtime_unix": 1770166708.9653957,
+      "path": "/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.80/sample_card.context_swap.BEATAML_SWAP.hard.tau_0.80.json",
+      "sha256": "9f804a85db72b3072f12201ae4e3427e9bd0b7a4292095756571c812ee14ed5f",
+      "size_bytes": 791
+    }
+  },
+  "plan": {
+    "benchmark_id": "BEATAML_TP53_v1",
+    "conditions": [
+      "BEATAML"
+    ],
+    "force": true,
+    "gate_modes": [
+      "hard"
+    ],
+    "k_claims": 50,
+    "out_root": "/work/paper/source_data/BEATAML_TP53_v1/out",
+    "seed": 42,
+    "started_unix": 1770166745,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.05,
+      "recipe": "dropout"
+    },
+    "taus": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      0.9
+    ],
+    "variants": [
+      "ours",
+      "context_swap",
+      "stress"
+    ]
+  },
+  "run": {
+    "benchmark_id": "BEATAML_TP53_v1",
+    "condition": "BEATAML",
+    "context_swap_from": "BEATAML_AML",
+    "context_swap_to": "LUAD",
+    "gate_mode": "hard",
+    "k_claims": 50,
+    "method": "context_swap",
+    "seed": 42,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "enabled": false,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.0,
+      "recipe": "off"
+    },
+    "tau": 0.8,
+    "variant": "context_swap"
+  },
+  "script": "paper/scripts/run_fig2_pipeline.py",
+  "started_unix": 1770166745,
+  "status": "ok",
+  "tool": "llm-pathway-curator"
+}

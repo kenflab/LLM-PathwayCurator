@@ -1,0 +1,23 @@
+{
+  "benchmark_id": "PANCAN_TP53_v1",
+  "condition": "BRCA",
+  "context_swap_from": "",
+  "context_swap_to": "",
+  "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/BRCA.evidence_table.tsv",
+  "gate_mode": "hard",
+  "k_claims": 50,
+  "method": "ours",
+  "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/BRCA.hard.sample_card.json",
+  "seed": 42,
+  "stress": {
+    "contradictory_max_extra": 0,
+    "contradictory_p": 0.0,
+    "enabled": false,
+    "evidence_dropout_min_keep": 1,
+    "evidence_dropout_p": 0.0,
+    "recipe": "off"
+  },
+  "tau": 0.6,
+  "time_unix": 1770157516,
+  "variant": "ours"
+}

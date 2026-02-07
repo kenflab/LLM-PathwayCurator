@@ -1,0 +1,97 @@
+{
+  "env": {
+    "LLMPATH_BACKEND": "ollama",
+    "LLMPATH_K_CLAIMS": "",
+    "LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA": "0",
+    "LLMPATH_STRESS_CONTRADICTORY_P": "0.0",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP": "1",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_P": "0.05",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONHASHSEED": "0",
+    "cwd": "/work",
+    "platform": "linux",
+    "python": "3.12.12"
+  },
+  "error": "",
+  "finished_unix": 1770157557,
+  "git_commit": "42b5a6755cbbd071952a2c1fd4ec12453d37d2a5",
+  "inputs": {
+    "evidence_table": {
+      "mtime_unix": 1768958105.191019,
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/UCEC.evidence_table.tsv",
+      "sha256": "06c8f73d8acdfda19918e12494b90163821949b8f23881cb74dd105810d581ea",
+      "size_bytes": 13755
+    },
+    "sample_card": {
+      "mtime_unix": 1769270066.5743303,
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/UCEC.hard.sample_card.json",
+      "sha256": "c6eaa61985ceea0019e08ecbe6b4bd31660b611ec157997f8de8c71f2ae40275",
+      "size_bytes": 470
+    }
+  },
+  "plan": {
+    "benchmark_id": "PANCAN_TP53_v1",
+    "conditions": [
+      "HNSC",
+      "LUAD",
+      "LUSC",
+      "BRCA",
+      "OV",
+      "UCEC",
+      "SKCM"
+    ],
+    "force": true,
+    "gate_modes": [
+      "hard"
+    ],
+    "k_claims": 50,
+    "out_root": "/work/paper/source_data/PANCAN_TP53_v1/out",
+    "seed": 42,
+    "started_unix": 1770157556,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.05,
+      "recipe": "dropout"
+    },
+    "taus": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      0.9
+    ],
+    "variants": [
+      "ours",
+      "context_swap",
+      "stress"
+    ]
+  },
+  "run": {
+    "benchmark_id": "PANCAN_TP53_v1",
+    "condition": "UCEC",
+    "context_swap_from": "",
+    "context_swap_to": "",
+    "gate_mode": "hard",
+    "k_claims": 50,
+    "method": "ours",
+    "seed": 42,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "enabled": true,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.05,
+      "recipe": "dropout"
+    },
+    "tau": 0.6,
+    "variant": "stress"
+  },
+  "script": "paper/scripts/run_fig2_pipeline.py",
+  "started_unix": 1770157556,
+  "status": "ok",
+  "tool": "llm-pathway-curator"
+}

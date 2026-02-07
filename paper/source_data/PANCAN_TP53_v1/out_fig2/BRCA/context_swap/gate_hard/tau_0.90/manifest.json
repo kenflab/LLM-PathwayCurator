@@ -1,0 +1,97 @@
+{
+  "env": {
+    "LLMPATH_BACKEND": "ollama",
+    "LLMPATH_K_CLAIMS": "",
+    "LLMPATH_STRESS_CONTRADICTORY_MAX_EXTRA": "0",
+    "LLMPATH_STRESS_CONTRADICTORY_P": "0.0",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_MIN_KEEP": "1",
+    "LLMPATH_STRESS_EVIDENCE_DROPOUT_P": "0.0",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONHASHSEED": "0",
+    "cwd": "/work",
+    "platform": "linux",
+    "python": "3.12.12"
+  },
+  "error": "",
+  "finished_unix": 1770157528,
+  "git_commit": "42b5a6755cbbd071952a2c1fd4ec12453d37d2a5",
+  "inputs": {
+    "evidence_table": {
+      "mtime_unix": 1769108305.4108918,
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/BRCA.evidence_table.tsv",
+      "sha256": "88a8083558be231679102656200246e1a25e472ca05b57fe4562b7a700a5b567",
+      "size_bytes": 13022
+    },
+    "sample_card": {
+      "mtime_unix": 1770157452.4656649,
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/out/BRCA/context_swap/gate_hard/tau_0.90/sample_card.context_swap.HNSC.hard.tau_0.90.json",
+      "sha256": "b1162e479c533c267c6abe36cfbc15dc41f0507bb445fa6a9bc57f7914bb56be",
+      "size_bytes": 608
+    }
+  },
+  "plan": {
+    "benchmark_id": "PANCAN_TP53_v1",
+    "conditions": [
+      "HNSC",
+      "LUAD",
+      "LUSC",
+      "BRCA",
+      "OV",
+      "UCEC",
+      "SKCM"
+    ],
+    "force": true,
+    "gate_modes": [
+      "hard"
+    ],
+    "k_claims": 50,
+    "out_root": "/work/paper/source_data/PANCAN_TP53_v1/out",
+    "seed": 42,
+    "started_unix": 1770157526,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.05,
+      "recipe": "dropout"
+    },
+    "taus": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      0.9
+    ],
+    "variants": [
+      "ours",
+      "context_swap",
+      "stress"
+    ]
+  },
+  "run": {
+    "benchmark_id": "PANCAN_TP53_v1",
+    "condition": "BRCA",
+    "context_swap_from": "BRCA",
+    "context_swap_to": "HNSC",
+    "gate_mode": "hard",
+    "k_claims": 50,
+    "method": "context_swap",
+    "seed": 42,
+    "stress": {
+      "contradictory_max_extra": 0,
+      "contradictory_p": 0.0,
+      "enabled": false,
+      "evidence_dropout_min_keep": 1,
+      "evidence_dropout_p": 0.0,
+      "recipe": "off"
+    },
+    "tau": 0.9,
+    "variant": "context_swap"
+  },
+  "script": "paper/scripts/run_fig2_pipeline.py",
+  "started_unix": 1770157526,
+  "status": "ok",
+  "tool": "llm-pathway-curator"
+}

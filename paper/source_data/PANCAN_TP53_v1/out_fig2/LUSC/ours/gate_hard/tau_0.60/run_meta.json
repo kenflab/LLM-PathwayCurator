@@ -1,0 +1,364 @@
+{
+  "tool": "llm-pathway-curator",
+  "cmd": "run",
+  "run_id": "1770157497_453458d40a",
+  "status": "ok",
+  "started_epoch": 1770157497.8502889,
+  "config": {
+    "evidence_table": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.evidence_table.tsv",
+    "sample_card": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
+    "outdir": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60",
+    "force": true,
+    "seed": 42,
+    "run_meta_name": "run_meta.json",
+    "tau": 0.6,
+    "k_claims": 50,
+    "stress_evidence_dropout_p": 0.0,
+    "stress_evidence_dropout_min_keep": 1,
+    "stress_contradictory_p": 0.0,
+    "stress_contradictory_max_extra": 0
+  },
+  "env": {
+    "python": "3.12.12 | packaged by conda-forge | (main, Oct 22 2025, 23:16:53) [GCC 14.3.0]",
+    "platform": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.39",
+    "pandas": "2.3.3",
+    "tool_version": "0.0.0"
+  },
+  "inputs": {
+    "evidence_table": {
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/evidence_tables/LUSC.evidence_table.tsv",
+      "size_bytes": 13064,
+      "mtime_epoch": 1769108287.541945
+    },
+    "sample_card": {
+      "path": "/work/paper/source_data/PANCAN_TP53_v1/sample_cards/LUSC.hard.sample_card.json",
+      "size_bytes": 470,
+      "mtime_epoch": 1769270066.5571027
+    },
+    "sample_card_sha256": "7446bd59d577f9e419a4166bc7e344a67bc47cbfb490f1c545375297a9e4389f",
+    "evidence_summary": {
+      "contract_version": "v1",
+      "n_terms": 50,
+      "n_sources": 1,
+      "sources": [
+        "fgsea_msigdb_H_entrez"
+      ],
+      "direction_counts": {
+        "up": 33,
+        "down": 17
+      },
+      "genes_per_term_median": 30.5,
+      "genes_per_term_p90": 44.0,
+      "genes_per_term_p10": 10.0,
+      "n_terms_genes_le1": 0,
+      "read_mode": "tsv",
+      "qval_source_counts": {
+        "qval": 50
+      },
+      "health": {
+        "contract_version": "v1",
+        "n_terms": 50,
+        "n_terms_genes_le1": 0,
+        "genes_per_term_median": 30.5,
+        "qval_source_counts": {
+          "qval": 50
+        },
+        "n_invalid_total": 0,
+        "n_invalid_empty_evidence_genes": 0,
+        "invalid_sample": [],
+        "salvage_sample": [],
+        "drop_invalid": true,
+        "strict": false,
+        "bh_group_cols": [
+          "source",
+          "direction"
+        ],
+        "read_mode": "tsv",
+        "n_salvage_term_id_from_name": 0,
+        "n_salvage_term_name_from_id": 0,
+        "n_term_id_salvaged_kept": 0,
+        "n_term_name_salvaged_kept": 0
+      },
+      "aliasing": {
+        "raw_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ],
+        "normalized_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ],
+        "mapped_columns": [
+          "term_id",
+          "term_name",
+          "source",
+          "stat",
+          "qval",
+          "direction",
+          "evidence_genes"
+        ]
+      }
+    },
+    "evidence_normalized_sha256": "e75d7d0027a30bf38be4fed0b3cde09b9466d4b8430ef537b770982bd677abd3",
+    "sample": {
+      "condition": "LUSC",
+      "tissue": "tumor",
+      "perturbation": "genotype",
+      "comparison": "TP53_mut_vs_TP53_wt",
+      "species": ""
+    },
+    "sample_card_raw_sha256": "0f339b13cab925f242909b5367e17834aec2f9805e6dda1d8fd3169575ae38a8",
+    "sample_card_normalized_sha256": "0f339b13cab925f242909b5367e17834aec2f9805e6dda1d8fd3169575ae38a8",
+    "audit": {
+      "tau_cfg": 0.6,
+      "tau_card": 0.8,
+      "tau_effective": 0.6,
+      "min_gene_overlap": 1
+    },
+    "modules": {
+      "requested_method": "term_jaccard_cc",
+      "effective_method": "term_jaccard_cc",
+      "min_shared_genes": 3,
+      "jaccard_min": 0.1,
+      "term_id_col": "term_uid",
+      "genes_col": "evidence_genes",
+      "pair_stats_raw": {
+        "n_terms": 50,
+        "n_pairs_total": 1225,
+        "n_pairs_sampled": 1225,
+        "shared_pos_rate": 0.23673469387755103,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 2.0,
+        "shared_p95": 3.0,
+        "shared_p99": 6.759999999999991,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.029940298507462708,
+        "jaccard_p95": 0.048548199767711915,
+        "jaccard_p99": 0.10586921850079745
+      },
+      "pair_stats_filtered": {
+        "n_terms": 50,
+        "n_pairs_total": 1225,
+        "n_pairs_sampled": 1225,
+        "shared_pos_rate": 0.2236734693877551,
+        "shared_p50": 0.0,
+        "shared_p75": 0.0,
+        "shared_p90": 2.0,
+        "shared_p95": 2.0,
+        "shared_p99": 6.759999999999991,
+        "jaccard_p50": 0.0,
+        "jaccard_p75": 0.0,
+        "jaccard_p90": 0.027777777777777776,
+        "jaccard_p95": 0.04644007155635061,
+        "jaccard_p99": 0.1083881578947368
+      },
+      "pair_stats_for_tuning": "raw_pre_hub_filter",
+      "shared_pos_rate_for_tuning": 0.23673469387755103,
+      "sparsity_detected": false,
+      "n_terms": 50,
+      "n_pairs_est": 1225,
+      "max_terms_for_pairwise": 3500,
+      "singleton_frac": 0.8378378378378378,
+      "did_tune": false,
+      "effective_min_shared_genes": 3,
+      "effective_jaccard_min": 0.1,
+      "largest_component_frac": 0.16,
+      "giant_frac_threshold": 0.6
+    },
+    "modules_stats": {
+      "n_modules": 37,
+      "n_terms_median": 1.0,
+      "n_genes_median": 29.0,
+      "n_terms_max": 8,
+      "n_genes_max": 183
+    },
+    "claims": {
+      "context_gate_review_compat_final": {
+        "gate_mode": "hard",
+        "review_mode": "proxy",
+        "changed": false,
+        "updates": {},
+        "reasons": [],
+        "inputs": {
+          "gate_mode": "hard",
+          "review_mode": "proxy",
+          "swap_active": false
+        }
+      },
+      "k_source": "cfg",
+      "k_cfg": 50,
+      "k_env": "",
+      "k_card": "",
+      "k_effective": 50,
+      "k_env_raw": "",
+      "context_gate_mode": "hard",
+      "context_review_mode": "proxy",
+      "context_review_mode_effective_for_select": "proxy",
+      "context_ctx_id_original": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_ctx_id_effective": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
+      "context_swap_from": "",
+      "context_swap_to": "",
+      "context_weight_learning": {
+        "evaluated": false,
+        "reason": "disabled"
+      },
+      "context_score_proxy": {
+        "evaluated": true,
+        "ctx_id": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "weight_col": "weight_log_odds",
+        "reason": "EMPTY_WEIGHTS"
+      },
+      "context_rerank": {
+        "enabled": false,
+        "lambda": 0.25,
+        "timing": "post_review_context_score",
+        "rank_key": "survival_score*(1+lambda*context_score)"
+      },
+      "context_score_source": "proxy_review_confidence",
+      "n_proposed_rows": 50,
+      "n_proposed_cols": 72,
+      "claim_payload_col": "claim_json",
+      "claim_json_present": true,
+      "context_review_runtime": {
+        "evaluated": true,
+        "mode": "proxy_context_v2",
+        "gate_mode": "hard",
+        "ctx_id": "LUSC|tumor|genotype|TP53_mut_vs_TP53_wt",
+        "thresholds": {
+          "p_fail": 0.05,
+          "p_warn": 0.2
+        },
+        "anchor_used": false,
+        "anchor_info": {
+          "ok": true,
+          "reason": "NO_ANCHOR_TERMS_FOUND",
+          "has_anchors": false,
+          "tokens": [
+            "lusc",
+            "tumor",
+            "genotype",
+            "tp53",
+            "mut"
+          ],
+          "tokens_signature": "6717489acb32",
+          "tokens_meta": {
+            "version": "ctx_tokens_v1",
+            "tokens": [
+              "lusc",
+              "tumor",
+              "genotype",
+              "tp53",
+              "mut"
+            ],
+            "n": 5,
+            "signature": "6717489acb32",
+            "policy": {
+              "version": "ctx_tokens_v1",
+              "min_len": 3,
+              "max_tokens": 12,
+              "allow_numeric": true,
+              "lexicon_expand": false,
+              "stopwords_set": "default_v1"
+            }
+          },
+          "module_col": "module_id",
+          "n_anchor_terms": 0,
+          "n_anchor_modules": 0,
+          "anchor_terms_preview": []
+        },
+        "n_eval": 50,
+        "n_pass": 41,
+        "n_fail": 2,
+        "n_abstain": 7,
+        "n_anchor_downgrade": 0
+      },
+      "context_gate_pre_audit": {
+        "evaluated": true,
+        "gate_mode": "hard",
+        "reason": "OK",
+        "n_rows": 50,
+        "n_blocked": 9,
+        "eligible_written": true,
+        "preselect_tau_gate_written": true
+      }
+    },
+    "llm": {
+      "claim": {
+        "enabled": false,
+        "claim_mode_env": "",
+        "claim_mode_effective_for_select": "deterministic",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "review": {
+        "enabled": false,
+        "review_mode": "proxy",
+        "review_mode_effective_for_select": "proxy",
+        "backend_env": "ollama",
+        "backend_enabled": false,
+        "backend_notes": ""
+      },
+      "select_entrypoint": {
+        "backend_attached": false,
+        "backend_role": "none",
+        "backend_ok": false,
+        "requested_any_llm": false
+      }
+    },
+    "stress": {
+      "evidence_dropout_p": 0.0,
+      "evidence_dropout_min_keep": 1,
+      "contradictory_p": 0.0,
+      "contradictory_max_extra": 0,
+      "seed": 42
+    },
+    "stress_runtime": {
+      "dropout": {
+        "evaluated": true,
+        "enabled": false,
+        "p_drop": 0.0,
+        "min_keep": 1
+      },
+      "dropout_scoring": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "evidence_dropout_p==0"
+      },
+      "contradictory": {
+        "evaluated": true,
+        "enabled": false,
+        "reason": "contradictory_p==0",
+        "n_injected": 0
+      }
+    }
+  },
+  "artifacts": {
+    "evidence_normalized_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/evidence.normalized.tsv",
+    "sample_card_raw_json": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/sample_card.raw.json",
+    "sample_card_normalized_json": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/sample_card.normalized.json",
+    "distilled_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/distilled.tsv",
+    "modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/modules.tsv",
+    "term_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/term_modules.tsv",
+    "term_gene_edges_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/term_gene_edges.tsv",
+    "distilled_with_modules_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/distilled.with_modules.tsv",
+    "claims_proposed_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/claims.proposed.tsv",
+    "audit_log_tsv": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/audit_log.tsv",
+    "report_dir": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60",
+    "report_jsonl": "/work/paper/source_data/PANCAN_TP53_v1/out/LUSC/ours/gate_hard/tau_0.60/report.jsonl"
+  },
+  "step": "report_jsonl",
+  "finished_epoch": 1770157499.109675
+}

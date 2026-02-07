@@ -1,0 +1,23 @@
+{
+  "benchmark_id": "BEATAML_TP53_v1",
+  "condition": "BEATAML",
+  "context_swap_from": "BEATAML_AML",
+  "context_swap_to": "LUAD",
+  "evidence_table": "/work/paper/source_data/BEATAML_TP53_v1/evidence_tables/BEATAML.evidence_table.tsv",
+  "gate_mode": "hard",
+  "k_claims": 50,
+  "method": "context_swap",
+  "sample_card": "/work/paper/source_data/BEATAML_TP53_v1/out/BEATAML/context_swap/gate_hard/tau_0.80/sample_card.context_swap.BEATAML_SWAP.hard.tau_0.80.json",
+  "seed": 42,
+  "stress": {
+    "contradictory_max_extra": 0,
+    "contradictory_p": 0.0,
+    "enabled": false,
+    "evidence_dropout_min_keep": 1,
+    "evidence_dropout_p": 0.0,
+    "recipe": "off"
+  },
+  "tau": 0.8,
+  "time_unix": 1770166745,
+  "variant": "context_swap"
+}
