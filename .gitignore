@@ -65,3 +65,6 @@ paper/notebooks/**
 !paper/journal_source_data/SourceData_*.xlsx
 !paper/journal_source_data/*.xlsx
 
+# Excel temp files
+~$*.xlsx
+
