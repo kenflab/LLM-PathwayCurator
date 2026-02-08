@@ -61,3 +61,10 @@ paper/source_data/**/fig/* copy*.pdf
 paper/notebooks/**
 !paper/notebooks/README.md
 
+# keep journal Source Data workbooks
+!paper/journal_source_data/SourceData_*.xlsx
+!paper/journal_source_data/*.xlsx
+
+# Excel temp files
+~$*.xlsx
+
