@@ -1,10 +1,27 @@
-figure_id,panel,script,input_paths,output_paths,notes
-Fig2,fetch,paper/scripts/fig2_fetch_inputs.py,"Synapse:syn4976369.3; Synapse:syn7824274","paper/source_data/PANCAN_TP53_v1/raw/expression.*; paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.maf.gz","downloads raw inputs; requires Synapse auth"
-Fig2,groups,paper/scripts/fig2_make_groups.py,"paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.maf.gz","paper/source_data/PANCAN_TP53_v1/derived/groups/*.groups.tsv","TP53 mut/wt per cancer; FILTER=PASS"
-Fig2,cards,paper/scripts/fig2_make_sample_cards.py,"(none)","paper/source_data/PANCAN_TP53_v1/sample_cards/*.sample_card.json","template sample cards per cancer"
-Fig2,rank,paper/scripts/fig2_deg_rank.R,"paper/source_data/PANCAN_TP53_v1/raw/expression.*; paper/source_data/PANCAN_TP53_v1/derived/groups/<CANCER>.groups.tsv","paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv","DE ranking per cancer (TP53 mut vs wt)"
-Fig2,fgsea,paper/scripts/fig2_fgsea_to_evidence_table.R,"paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv","paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv","EvidenceTable: term_id,stat(NES),qval(padj),direction,evidence_genes(leadingEdge)"
-Fig2,run,paper/scripts/run_fig2_pipeline.py,"paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv; paper/source_data/PANCAN_TP53_v1/sample_cards/<CANCER>.sample_card.json","paper/source_data/PANCAN_TP53_v1/out/<CANCER>/<METHOD>/report.jsonl","METHOD in v1: ours, shuffled_context"
-Fig2,prep,paper/scripts/bench_fig2.py,"paper/source_data/PANCAN_TP53_v1/out/**/report.jsonl; paper/source_data/PANCAN_TP53_v1/labels.tsv","paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","tau sweep; label_policy=R1_only; FAIL from audit_flags"
-Fig2,A,paper/scripts/fig2_plot.py,"paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","paper/source_data/PANCAN_TP53_v1/fig/Fig2_HNSC.pdf","by_cancer main panel"
-FigS2,all,paper/scripts/fig2_plot_multipanel.py,"paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv","paper/source_data/PANCAN_TP53_v1/fig/Fig2_Supp_multipanel.pdf","multipanel across cancers"
+figure_id,panel,pipeline_id,kind,source_data_file,script,input_paths,output_paths,provenance_note,notes
+Fig1,all,None,biorender,None,None,None,paper/fig/Fig1.pdf,Created with BioRender.com,Workflow schematic
+Fig2,all,PANCAN_TP53_v1,fetch,None,paper/scripts/fig2_fetch_inputs.py,(public URLs; no auth),paper/source_data/PANCAN_TP53_v1/raw/expression.xena.gz;paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.xena.gz;paper/source_data/PANCAN_TP53_v1/raw/TCGA_phenotype_dense.tsv.gz,Downloads fixed UCSC Xena inputs,Do not re-download if present
+Fig2,all,PANCAN_TP53_v1,groups,None,paper/scripts/fig2_make_groups.py,paper/source_data/PANCAN_TP53_v1/raw/mc3.v0.2.8.PUBLIC.xena.gz,paper/source_data/PANCAN_TP53_v1/derived/groups/*.groups.tsv,TP53 mut/wt grouping per cancer,Primary-like filter applied
+Fig2,all,PANCAN_TP53_v1,rank,None,paper/scripts/fig2_deg_rank.R,paper/source_data/PANCAN_TP53_v1/raw/expression.xena.gz;paper/source_data/PANCAN_TP53_v1/derived/groups/<CANCER>.groups.tsv,paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv,DE ranking per cancer,TP53 mut vs wt
+Fig2,all,PANCAN_TP53_v1,evidence,None,paper/scripts/figS2_fgsea_to_evidence_table.R,paper/source_data/PANCAN_TP53_v1/derived/rankings/<CANCER>.deg_ranking.tsv,paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv,EvidenceTable construction,term_id/stat/qval/direction/evidence_genes
+Fig2,all,PANCAN_TP53_v1,run,None,paper/scripts/run_fig2_pipeline.py,paper/source_data/PANCAN_TP53_v1/evidence_tables/<CANCER>.evidence_table.tsv;paper/source_data/PANCAN_TP53_v1/sample_cards/<CANCER>.sample_card.json,paper/source_data/PANCAN_TP53_v1/out/<CANCER>/<METHOD>/report.jsonl,LLM-PathwayCurator run,"METHOD: ours, shuffled_context"
+Fig2,a,PANCAN_TP53_v1,panel_data,source_data/SourceData_Fig2.xlsx,paper/scripts/fig2_plot.py,paper/source_data/PANCAN_TP53_v1/risk_coverage.tsv,paper/source_data/PANCAN_TP53_v1/fig/Fig2_HNSC.pdf,Main panel plotting,By-cancer
+Fig2,b,PANCAN_TP53_v1,panel_data,source_data/SourceData_Fig2.xlsx,,,,,
+Fig2,c,PANCAN_TP53_v1,panel_data,source_data/SourceData_Fig2.xlsx,,,,,
+Fig2,d,PANCAN_TP53_v1,panel_data,source_data/SourceData_Fig2.xlsx,,,,,
+ExtFig1,"a,b,c",None,biorender,None,None,None,,Created with BioRender.com,
+ExtFig2,all,PANCAN_TP53_v1,,,,,,,
+ExtFig2,"a,b,c,d",PANCAN_TP53_v1,plot,,,,,,
+ExtFig3,all,PANCAN_TP53_v1,run,,,,,,
+ExtFig3,a,PANCAN_TP53_v1,plot,,,,,,
+ExtFig3,b,PANCAN_TP53_v1,plot,,,,,,
+ExtFig4,all,BEATAML_TP53_v1,fetch,None,paper/scripts/figS4_beataml_fetch_inputs.py,(public GitHub raw URLs; no auth),paper/source_data/BEATAML_TP53_v1/raw/beataml_waves1to4_counts_dbgap.txt;paper/source_data/BEATAML_TP53_v1/raw/beataml_wes_wv1to4_mutations_dbgap.txt;paper/source_data/BEATAML_TP53_v1/raw/beataml_wv1to4_clinical.xlsx,Downloads pinned BeatAML v2.0 inputs,Prints sha256 for provenance
+ExtFig4,all,BEATAML_TP53_v1,groups,None,paper/scripts/figS4_beataml_make_groups.py,paper/source_data/BEATAML_TP53_v1/raw/beataml_wes_wv1to4_mutations_dbgap.txt;paper/source_data/BEATAML_TP53_v1/raw/beataml_wv1to4_clinical.xlsx,paper/source_data/BEATAML_TP53_v1/derived/groups/AML.groups.tsv,TP53 mut/wt grouping for BeatAML,Inclusion: RNA-seq flagged for manuscript analysis; TP53-mut from protein-altering variants
+ExtFig4,all,BEATAML_TP53_v1,cards,None,paper/scripts/figS4_beataml_make_sample_cards.py,(none),paper/source_data/BEATAML_TP53_v1/sample_cards/AML.sample_card.json,Template Sample Card for BeatAML,Single condition (AML)
+ExtFig4,all,BEATAML_TP53_v1,rank,None,paper/scripts/figS4_beataml_deg_rank.R,paper/source_data/BEATAML_TP53_v1/raw/beataml_waves1to4_counts_dbgap.txt;paper/source_data/BEATAML_TP53_v1/derived/groups/AML.groups.tsv,paper/source_data/BEATAML_TP53_v1/derived/rankings/AML.deg_ranking.tsv,DE ranking (TP53 mut vs wt),Ranking method pinned by script
+ExtFig4,all,BEATAML_TP53_v1,evidence,None,paper/scripts/figS4_beataml_fgsea_to_evidence_table.R,paper/source_data/BEATAML_TP53_v1/derived/rankings/AML.deg_ranking.tsv,paper/source_data/BEATAML_TP53_v1/evidence_tables/AML.evidence_table.tsv,EvidenceTable construction (fgsea leadingEdge),term_id/stat/qval/direction/evidence_genes
+ExtFig4,all,BEATAML_TP53_v1,run,None,paper/scripts/fig2_run_pipeline.py,paper/source_data/BEATAML_TP53_v1/evidence_tables/AML.evidence_table.tsv;paper/source_data/BEATAML_TP53_v1/sample_cards/AML.sample_card.json,paper/source_data/BEATAML_TP53_v1/out/AML/<METHOD>/report.jsonl,LLM-PathwayCurator run on BeatAML,"METHOD: ours, shuffled_context (match paper settings)"
+ExtFig4,a,BEATAML_TP53_v1,panel_data,source_data/SourceData_FigS4.xlsx,paper/scripts/fig2_plot_multipanel.py,paper/source_data/BEATAML_TP53_v1/out/**/report.jsonl;pinned labels/policy inputs (if any),paper/source_data/BEATAML_TP53_v1/fig/FigS4.pdf,Panel rendering for BeatAML supplement,Output path/name adjust to your convention
+ExtFig4,b,BEATAML_TP53_v1,panel_data,,,,,,
+ExtFig4,c,BEATAML_TP53_v1,panel_data,,,,,,
+ExtFig4,d,BEATAML_TP53_v1,panel_data,,,,,,
