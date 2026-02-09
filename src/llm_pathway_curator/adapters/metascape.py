@@ -259,4 +259,4 @@ def convert_metascape_table_to_evidence_tsv(
     ev_out = ev.copy()
     ev_out["evidence_genes"] = ev_out["evidence_genes"].map(_shared.join_genes_tsv)
     ev_out.to_csv(out_path, sep="\t", index=False)
-    return ev
+    return ev_out

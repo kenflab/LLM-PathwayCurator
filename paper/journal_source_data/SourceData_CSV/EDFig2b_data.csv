@@ -1,0 +1,5 @@
+collection,median_genes_per_module,median_terms_per_module,n_modules_median
+Hallmark,30.0,1.0,39.0
+GO,4.0,1.0,298.0
+Reactome,4.0,1.0,96.0
+KEGG,6.0,1.0,41.0
