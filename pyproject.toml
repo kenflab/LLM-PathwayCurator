@@ -22,6 +22,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "ruff>=0.4",
+  "openpyxl>=3.1",
 ]
 
 bench = [

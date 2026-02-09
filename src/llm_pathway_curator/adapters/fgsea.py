@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,8 +72,16 @@ def _clean_gene_symbol(g: str) -> str:
     return s
 
 
+_R_C_WRAPPER_RE = re.compile(r"^\s*c\s*\((.*)\)\s*$", flags=re.IGNORECASE)
+
+
 def _split_genes(x: Any) -> list[str]:
     # Spec-level gene parsing lives in _shared (handles ',', ';', '|', bracketed lists, etc.).
+    # Also tolerate common R vector syntax like: c(10, 20, 30)
+    if isinstance(x, str):
+        m = _R_C_WRAPPER_RE.match(x)
+        if m:
+            x = m.group(1)
     return _shared.parse_genes(x)
 
 
@@ -273,4 +282,4 @@ def convert_fgsea_table_to_evidence_tsv(
     ev_out = ev.copy()
     ev_out["evidence_genes"] = ev_out["evidence_genes"].map(_shared.join_genes_tsv)
     ev_out.to_csv(out_path, sep="\t", index=False)
-    return ev
+    return ev_out

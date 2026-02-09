@@ -1,0 +1,11 @@
+benchmark_id,condition,tau,variant,reason,n_total,n_abstain_total,n_abstain_reason,frac_within_abstain
+PANCAN_TP53_v1,HNSC,0.9,Context swap,Context gate,50,36,2,0.055555556
+PANCAN_TP53_v1,HNSC,0.9,Context swap,Context-nonspecific,50,36,30,0.833333333
+PANCAN_TP53_v1,HNSC,0.9,Context swap,Unstable,50,36,4,0.111111111
+PANCAN_TP53_v1,HNSC,0.9,Evidence dropout,Context gate,50,40,4,0.1
+PANCAN_TP53_v1,HNSC,0.9,Evidence dropout,Context-nonspecific,50,40,2,0.05
+PANCAN_TP53_v1,HNSC,0.9,Evidence dropout,Inconclusive stress,50,40,30,0.75
+PANCAN_TP53_v1,HNSC,0.9,Evidence dropout,Unstable,50,40,4,0.1
+PANCAN_TP53_v1,HNSC,0.9,Proposed,Context gate,50,13,7,0.538461538
+PANCAN_TP53_v1,HNSC,0.9,Proposed,Context-nonspecific,50,13,2,0.153846154
+PANCAN_TP53_v1,HNSC,0.9,Proposed,Unstable,50,13,4,0.307692308

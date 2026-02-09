@@ -45,12 +45,9 @@ resources/gene_id_maps/*id_map.tsv
 # checksums (regen each time; not source)
 resources/gene_id_maps/checksums.sha256
 
+# Fig2 throwaway copies (including subfolders under fig/)
+paper/source_data/**/fig/**/* copy*.pdf
 
-# Fig2 throwaway copies
-paper/source_data/**/fig/* copy*.pdf
-
-# Fig2 throwaway copies
-paper/source_data/**/fig/* copy*.pdf
 # macOS / junk
 .Trash-*
 .DS_Store

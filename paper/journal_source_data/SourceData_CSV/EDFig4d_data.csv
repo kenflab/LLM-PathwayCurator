@@ -1,0 +1,11 @@
+benchmark_id,condition,tau,variant,reason,n_total,n_abstain_total,n_abstain_reason,frac_within_abstain
+BEATAML_TP53_v1,BEATAML,0.9,Context swap,Context gate,50,38,5,0.131578947
+BEATAML_TP53_v1,BEATAML,0.9,Context swap,Context-nonspecific,50,38,31,0.815789474
+BEATAML_TP53_v1,BEATAML,0.9,Context swap,Unstable,50,38,2,0.052631579
+BEATAML_TP53_v1,BEATAML,0.9,Evidence dropout,Context gate,50,42,2,0.047619048
+BEATAML_TP53_v1,BEATAML,0.9,Evidence dropout,Context-nonspecific,50,42,3,0.071428571
+BEATAML_TP53_v1,BEATAML,0.9,Evidence dropout,Inconclusive stress,50,42,35,0.833333333
+BEATAML_TP53_v1,BEATAML,0.9,Evidence dropout,Unstable,50,42,2,0.047619048
+BEATAML_TP53_v1,BEATAML,0.9,Proposed,Context gate,50,13,8,0.615384615
+BEATAML_TP53_v1,BEATAML,0.9,Proposed,Context-nonspecific,50,13,3,0.230769231
+BEATAML_TP53_v1,BEATAML,0.9,Proposed,Unstable,50,13,2,0.153846154
