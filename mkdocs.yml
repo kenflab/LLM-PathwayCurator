@@ -1,0 +1,57 @@
+# mkdocs.yml
+site_name: LLM-PathwayCurator
+site_description: "Enrichment interpretations → audited, decision-grade pathway claims."
+repo_name: kenflab/LLM-PathwayCurator
+repo_url: https://github.com/kenflab/LLM-PathwayCurator
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/LLM-PathwayCurator_logo.png
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - toc.integrate
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts: concepts.md
+  - User guide: user-guide.md
+  - Tutorials: tutorials.md
+  - R / reticulate: reticulate.md
+  - API reference: api-reference.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          # docs/ lives under repo root; keep paths relative to repo root.
+          paths: ["src"]
+          options:
+            show_source: false
+            show_root_heading: true
+            docstring_style: numpy
+
+            # --- look & readability ---
+            show_object_full_path: false
+            show_root_toc_entry: false
+            merge_init_into_class: true
+            show_signature: true
+            separate_signature: true
+            signature_crossrefs: true
+            heading_level: 2
+            docstring_section_style: list
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css

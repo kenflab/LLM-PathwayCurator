@@ -1,153 +1,103 @@
 <!-- paper/scripts/README.md -->
 # Figure reproduction scripts (canonical)
 
-This directory contains the **canonical, script-based** pipelines used to reproduce figures and tables for the manuscript.  
-For a complete mapping of **inputs ↔ scripts ↔ outputs**, see `paper/FIGURE_MAP.csv`. Notebooks are exploratory and are not required for reproduction.
+This directory contains the **canonical, script-based** pipelines used to reproduce manuscript figures and publication Source Data.
+For the authoritative mapping of **inputs ↔ scripts ↔ outputs**, see `paper/FIGURE_MAP.csv`.
+Notebooks are exploratory and are not required for reproduction.
 
-## Quick start (Fig. 2; Pan-cancer TP53 mut vs wt)
-Run from the repository root (e.g., `/work` in the paper container). Outputs are written under:
-`paper/source_data/PANCAN_TP53_v1/` (intermediates in `out/`, figures in `fig/`).
-
-1) Fetch inputs and define groups
-- `fig2_fetch_inputs.py`
-- `fig2_make_groups.py`
-
-2) Build Sample Cards and ranked gene lists
-- `fig2_make_sample_cards.py`
-- `fig2_deg_rank.R` (per cancer)
-
-3) Convert enrichment to EvidenceTable (Hallmark; fgsea/GSEA)
-- `fig2_fgsea_to_evidence_table.R` (per cancer)
-
-4) Run LLM-PathwayCurator + audits (Proposed / context swap / evidence-dropout stress)
-- `fig2_run_pipeline.py`
-
-5) Collect metrics and render panels
-- `fig2_collect_risk_coverage.py`
-- `fig2_plot_multipanel.py`
-- `fig2_plot_lines_status_by_tau.py`
-- `fig2_plot_scatter_human_risk.py` (requires labels; see below)
-- `fig2_plot_abstain_reasons.py`
-
-## Supplementary pipelines
-- **Fig. S2 (collections / thresholding):**
-  - `figS2_run_collections_pipeline.py`, `figS2_collect_collection_metrics.py`,
-    `figS2_collections_plot_hallmark_threshold.py`, `figS2_plot_collection_panels.py`
-- **Fig. S3 (LLM examples):**
-  - `figS3_make_llm_examples.py`
-- **Fig. S4 (BeatAML TP53 mut vs wt):**
-  - `figS4_beataml_fetch_inputs.py`, `figS4_beataml_make_groups.py`,
-    `figS4_beataml_make_sample_cards.py`, `figS4_beataml_deg_rank.R`,
-    `figS4_beataml_fgsea_to_evidence_table.R`
-
-## Human labels (optional)
-Human labels are used only to compute **decision-grade risk** (fraction of SHOULD_ABSTAIN/REJECT among audit-PASS).
-For public release, we provide a **template** generator:
-- `fig2_make_labels_template.py`
-and a merge/validation helper:
-- `fig2_check_labels_merge.py`
-
-If labels are not available, all figure panels except human-risk plots can be reproduced from the audit logs and derived metrics.
-
-## Notes
-- These scripts are intended to be run in the paper environment (Docker/Compose) with pinned dependencies.
-- Do not edit paths inside scripts; configure locations via `FIGURE_MAP.csv` and per-figure configs where applicable.
+## Conventions
+- Run from the repository root (e.g., `/work` in the paper container).
+- Do not edit paths inside scripts. Figure inputs/outputs are organized under `paper/source_data/<BENCHMARK_ID>/`.
+- Run outputs are written to figure-scoped directories (e.g., `out_fig2/`, `out_figS2/`, `out_figS3/`, `out_figS4/`) and include `run_meta*.json` for provenance.
 
 ---
 
-## Optional: LLM-assisted claim proposal (local Ollama)
+## Fig. 2 (PANCAN_TP53_v1; Pan-cancer TP53 mut vs wt)
 
-The main figure pipelines are fully reproducible in deterministic mode.  
-Optionally, we also ran an **LLM-assisted proposal** setting, where the LLM is used **only** for (i) context-conditioned representative selection and (ii) JSON claim typing; **PASS/ABSTAIN/FAIL are still decided mechanically by the audit suite**.
+Outputs live under `paper/source_data/PANCAN_TP53_v1/`:
+- Inputs: `raw/`, `derived/`, `sample_cards/`, `evidence_tables/`
+- Run outputs: `out_fig2/`
+- Figures: `fig/`
+- Publication Source Data workbook: `paper/journal_source_data/SourceData_Fig2.xlsx`
 
-### Run (example: HNSC; Ollama)
-Set the LLM backend via environment variables (example uses a local Ollama 8B model):
+### Pipeline (high level)
+1) Fetch inputs: `fig2_fetch_inputs.py`
+2) Define TP53 mut/wt groups: `fig2_make_groups.py`
+3) Generate Sample Cards: `fig2_make_sample_cards.py`
+4) Compute DE rankings (per cancer): `fig2_deg_rank.R`
+5) Build EvidenceTables (Hallmark; per cancer): `fig2_fgsea_to_evidence_table.R`
+6) Run LLM-PathwayCurator + mechanical audits: `run_fig2_pipeline.py`
+7) Aggregate + plot panels:  
+   `fig2_collect_risk_coverage.py`, `fig2_plot_multipanel.py`, `fig2_plot_lines_status_by_tau.py`,  
+   `fig2_plot_scatter_human_risk.py` (labels optional), `fig2_plot_abstain_reasons.py`
 
+---
+
+## Human labels (optional; decision-grade risk only)
+Human labels are used only to compute **human non-accept risk** among audit-PASS claims
+(`(SHOULD_ABSTAIN + REJECT) / audit-PASS among labeled`; Supplementary Table 5).
+
+Helpers:
+- Template generator: `fig2_make_labels_template.py`
+- Merge/validation: `fig2_check_labels_merge.py`
+
+If labels are unavailable or restricted, all panels **except human-risk plots** can be reproduced from audit logs and derived metrics.
+
+---
+
+## Optional: LLM-assisted proposal generation (local Ollama)
+
+Main figure pipelines are reproducible in deterministic mode.
+Optionally, we ran an **LLM-assisted proposal** setting where the LLM is used **only** for:
+(i) context-conditioned representative selection and (ii) schema-bounded JSON claim typing.
+**PASS/ABSTAIN/FAIL decisions are always mechanical (audit suite).**
+LLM-assisted runs are stored separately under `out_figS3/`.
+
+### Example (HNSC; τ=0.8; k=50)
 ```bash
 export LLMPATH_BACKEND=ollama
-export LLMPATH_LLM_ASSUME_SMALL_MODEL=1
 export LLMPATH_OLLAMA_HOST=http://ollama:11434
 export LLMPATH_OLLAMA_MODEL=llama3.1:8b
 export LLMPATH_CONTEXT_REVIEW_MODE=llm
 export LLMPATH_CONTEXT_GATE_MODE=hard
 export LLMPATH_CLAIM_MODE=llm
-export LLMPATH_DEBUG=1
 
-# timeouts / safety (adjust if needed)
-export LLMPATH_OLLAMA_READ_TIMEOUT=1500
-export LLMPATH_OLLAMA_READ_TIMEOUT_MAX=4000
-export LLMPATH_OLLAMA_TIMEOUT_ESCALATIONS=3
-export LLMPATH_OLLAMA_TIMEOUT_FACTOR=2.0
-
-# candidate budget
-export LLMPATH_LLM_TOPN=80
-export LLMPATH_LLM_MAX_CAND_LINES=80
-export LLMPATH_LLM_STRICT_K=1
-
-python paper/scripts/fig2_run_pipeline.py \
+python paper/scripts/run_fig2_pipeline.py \
   --cancers HNSC \
   --variants ours \
   --gate-modes hard \
   --taus 0.8 \
   --k-claims 50 \
   --context-review-mode llm \
-  --out-root /work/paper/source_data/PANCAN_TP53_v1/out_figS3 \
+  --out-root paper/source_data/PANCAN_TP53_v1/out_figS3 \
   --force
 ```
 
-### Outputs
-- LLM runs are kept separate under `out_figS3/`. Each run directory persists:
-- `llm_claims.prompt.json` (exact prompt + candidate pack)
-- `llm_claims.raw.json` (raw model output)
+### Outputs (within the run directory)
 - `audit_log.tsv` (mechanical decisions with reason codes)
-
-### Plotting / comparison
-To compare deterministic vs LLM-assisted runs in the same plot, merge the derived metrics tables (e.g., rename the LLM variant to `ours_llm`) and reuse the standard plotting scripts (e.g., `fig2_plot_scatter_human_risk.py`, `figS_plot_abstain_reasons.py`)
+- `run_meta.json`, `run_meta.runner.json` (configuration + runtime provenance)
+- `llm_claims.*.json` (prompt/meta/raw artifacts; present when LLM is enabled)
+To compare deterministic vs LLM-assisted runs, aggregate metrics into a single table (e.g., rename the LLM-assisted slice to `out_figS3/`) and reuse the standard plotting scripts.
 
 ---
 
-## Extended Data Fig. 2: Gene set collection sensitivity (Hallmark / GO BP / Reactome / KEGG)
+## Extended Data Fig. 2 (PANCAN_TP53_v1; collection sensitivity)
 
-This pipeline evaluates how audited decisions change across different gene set collections, using the same cohort construction and Sample Cards as Fig. 2 (Pan-cancer TP53 mut vs wt). We run LLM-PathwayCurator on EvidenceTables derived from each collection and summarize PASS/ABSTAIN/FAIL and module-level stability.
+This pipeline evaluates audited outcomes across gene set collections (Hallmark / GO BP / Reactome / KEGG) using the same cohort construction and Sample Cards as Fig. 2.
+
+### Key scripts:
+- Build EvidenceTables per collection: `figS2_fgsea_to_evidence_table.R`
+- Run collections pipeline: `figS2_run_collections_pipeline.py`
+- Collect metrics: `figS2_collect_collection_metrics.py`
+- Render panels: `figS2_plot_collection_panels.py`
+- Export per-panel Source Data CSVs: `figS2_export_panel_source_csv.py`
 
 ### Outputs
-- Run outputs (audit logs, intermediates):  
-  `paper/source_data/PANCAN_TP53_v1/out_figS2/`
-- Aggregated metrics (wide/long TSVs):  
-  `paper/source_data/PANCAN_TP53_v1/collection_metrics/`
-- Figure panels:  
-  `paper/source_data/PANCAN_TP53_v1/fig/FigS2/`
+- Run outputs (audit logs, intermediates): `paper/source_data/PANCAN_TP53_v1/out_figS2/`
+- Aggregated metrics (wide/long TSVs): `paper/source_data/PANCAN_TP53_v1/collection_metrics/`
+- Figure PDF: `paper/source_data/PANCAN_TP53_v1/fig/EDFig2.pdf`
+- Source Data workbook: `paper/journal_source_data/SourceData_EDFig2.xlsx`
 
-### Steps (run from repo root, e.g. `/work`)
-If you already reproduced Fig. 2, you can skip the fetch/groups/sample-card steps.
-
-1) Fetch inputs, define groups, and generate Sample Cards
-- `fig2_fetch_inputs.py`
-- `fig2_make_groups.py`
-- `fig2_make_sample_cards.py`
-
-2) Create ranked gene lists (per cancer)
-- `fig2_deg_rank.R` (HNSC, LUAD, LUSC, BRCA, OV, UCEC, SKCM)
-
-3) Build EvidenceTables for each gene set collection (per cancer)
-- Hallmark:
-  - `figS2_fgsea_to_evidence_table.R <CANCER> --collection H`
-- GO Biological Process:
-  - `figS2_fgsea_to_evidence_table.R <CANCER> --collection C5 --subcategory GO:BP`
-- Reactome and KEGG:
-  - `figS2_fgsea_to_evidence_table.R <CANCER> --collection C2 --subcategory CP:REACTOME`
-  - `figS2_fgsea_to_evidence_table.R <CANCER> --collection C2 --subcategory CP:KEGG_MEDICUS`
-
-4) Run the collections pipeline (τ fixed; audited hard gate)
-- `run_figS2_collections_pipeline.py`  
-  (example collections: `Hallmark,GO_BP,Reactome,KEGG_MEDICUS`)
-
-5) Collect summary metrics and render figure panels
-- `figS2_collect_collection_metrics.py`
-- `figS2_plot_collection_panels.py`
-- Optional Hallmark threshold diagnostic:
-  - `figS2_collections_plot_hallmark_threshold.py`
-
-Notes:
-- All acceptance decisions are mechanical (audit suite); collection choice affects EvidenceTable content and thus stability/modules and abstention patterns.
+### Notes:
+- All acceptance decisions are mechanical (audit suite).
 - Human labels are not required for this figure.
