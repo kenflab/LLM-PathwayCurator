@@ -25,6 +25,18 @@ EVIDENCE_COLS = ["Symbols", "Genes"]
 
 
 def _to_float(x: Any) -> float | None:
+    """Convert a scalar to a finite float.
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar. NA-like tokens and non-finite values return ``None``.
+
+    Returns
+    -------
+    float or None
+        Finite float value, otherwise ``None``.
+    """
     if _shared.is_na_scalar(x) or _shared.is_na_token(x):
         return None
     try:
@@ -37,12 +49,39 @@ def _to_float(x: Any) -> float | None:
 
 
 def _clean_str(x: Any) -> str:
+    """Normalize a scalar to a stripped string.
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar. NA-like tokens map to an empty string.
+
+    Returns
+    -------
+    str
+        Stripped string (or ``""`` for NA-like inputs).
+    """
     if _shared.is_na_scalar(x) or _shared.is_na_token(x):
         return ""
     return str(x).strip()
 
 
 def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
+    """Parse Metascape ``InTerm_InList`` values.
+
+    Metascape commonly encodes this column as ``"<n_in_term>/<n_in_list>"``.
+
+    Parameters
+    ----------
+    x : Any
+        Raw cell value.
+
+    Returns
+    -------
+    tuple of (int or None, int or None)
+        ``(n_in_term, n_in_list)``. Returns ``(None, None)`` when missing
+        or unparsable.
+    """
     s = _clean_str(x)
     if not s or "/" not in s:
         return (None, None)
@@ -56,11 +95,40 @@ def _parse_interm_inlist(x: Any) -> tuple[int | None, int | None]:
 
 
 def _is_summary_groupid(gid: str) -> bool:
+    """Return True if a GroupID denotes a summary row.
+
+    Parameters
+    ----------
+    gid : str
+        Metascape GroupID string.
+
+    Returns
+    -------
+    bool
+        True when the GroupID ends with ``"_Summary"``.
+    """
     s = (gid or "").strip()
     return s.endswith("_Summary")
 
 
 def _normalize_term_id(term: Any) -> str:
+    """Normalize Metascape term identifiers.
+
+    This is a best-effort normalization that primarily targets GO terms:
+    - keeps ``"GO:#######"`` as-is
+    - converts ``"GO#######"`` to ``"GO:#######"``
+    - otherwise returns the stripped original string
+
+    Parameters
+    ----------
+    term : Any
+        Raw term identifier.
+
+    Returns
+    -------
+    str
+        Normalized term identifier (or ``""`` if missing).
+    """
     s = _clean_str(term)
     if not s:
         return ""
@@ -73,11 +141,24 @@ def _normalize_term_id(term: Any) -> str:
 
 
 def _infer_q_from_logq(logq_val: Any) -> float | None:
-    """
-    Metascape 'Log(q-value)' is observed in the wild as either:
-      - log10(q)    (negative for q<1), or
-      - -log10(q)   (positive for q<1)
-    We infer convention by sign and reconstruct q in (0, 1].
+    """Reconstruct q-values from Metascape ``Log(q-value)``.
+
+    Metascape ``Log(q-value)`` is observed in the wild as either:
+    - ``log10(q)``    (negative when ``q < 1``), or
+    - ``-log10(q)``   (positive when ``q < 1``)
+
+    This helper infers the convention by sign and reconstructs ``q`` in
+    the open interval ``(0, 1]``.
+
+    Parameters
+    ----------
+    logq_val : Any
+        Raw cell value from the ``Log(q-value)`` column.
+
+    Returns
+    -------
+    float or None
+        Reconstructed q-value in ``(0, 1]`` if valid, otherwise ``None``.
     """
     vv = _to_float(logq_val)
     if vv is None:
@@ -97,6 +178,26 @@ def _infer_q_from_logq(logq_val: Any) -> float | None:
 
 @dataclass(frozen=True)
 class MetascapeAdapterConfig:
+    """Configuration for converting Metascape exports to an EvidenceTable.
+
+    Attributes
+    ----------
+    source_name : str
+        Value to populate the EvidenceTable ``source`` column.
+    sheet_name : str
+        Excel sheet to read when the input is ``.xlsx``/``.xls``.
+    include_summary : bool
+        Whether to include rows whose ``GroupID`` ends with ``"_Summary"``.
+        The default is False to avoid summary rows being treated as evidence.
+    prefer_symbols : bool
+        Prefer the ``Symbols`` column over ``Genes`` when both exist.
+    strict_qval : bool
+        If True, raise an error when ``Log(q-value)`` is present but no
+        valid q-values can be reconstructed.
+    drop_na_qval : bool
+        If True, drop rows whose reconstructed q-value is missing.
+    """
+
     source_name: str = "metascape"
     sheet_name: str = "Enrichment"  # use Enrichment sheet by default
     include_summary: bool = False  # IMPORTANT default: exclude *_Summary rows
@@ -106,9 +207,22 @@ class MetascapeAdapterConfig:
 
 
 def read_metascape_table(path: str, *, sheet_name: str = "Enrichment") -> pd.DataFrame:
-    """
-    Read Metascape export as either Excel (.xlsx/.xls) or delimited text.
-    For Excel exports, the 'Enrichment' sheet is the canonical input.
+    """Read a Metascape export file into a DataFrame.
+
+    Supports Excel exports (``.xlsx``/``.xls``) and delimited text inputs.
+    For Excel, the ``Enrichment`` sheet is the canonical input.
+
+    Parameters
+    ----------
+    path : str
+        Path to a Metascape export file.
+    sheet_name : str, optional
+        Sheet to read for Excel inputs. Default is ``"Enrichment"``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Parsed Metascape table.
     """
     ext = os.path.splitext(str(path))[1].lower()
     if ext in {".xlsx", ".xls"}:
@@ -129,6 +243,45 @@ def metascape_to_evidence_table(
     *,
     config: MetascapeAdapterConfig | None = None,
 ) -> pd.DataFrame:
+    """Convert a Metascape Enrichment table to the EvidenceTable contract.
+
+    The resulting EvidenceTable is term-centric (one row per term) and
+    carries evidence genes suitable for downstream factorization.
+
+    Parameters
+    ----------
+    metascape_df : pandas.DataFrame
+        Metascape "Enrichment" sheet as a DataFrame.
+    config : MetascapeAdapterConfig or None, optional
+        Conversion configuration. If None, defaults are used.
+
+    Returns
+    -------
+    pandas.DataFrame
+        EvidenceTable with (at minimum) these columns:
+
+        - ``term_id`` : str
+        - ``term_name`` : str
+        - ``source`` : str
+        - ``stat`` : float
+        - ``qval`` : float
+        - ``direction`` : str (Metascape ORA yields ``"na"``)
+        - ``evidence_genes`` : list[str]
+
+        Plus provenance/optional columns (e.g., ``group_id``, ``is_summary``).
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing, if evidence genes are empty for any
+        row, if ``Term``/``Description`` are empty, or if statistic columns
+        are non-numeric.
+    Notes
+    -----
+    - q-values are reconstructed from ``Log(q-value)`` using sign inference.
+    - ``stat`` is made monotone-positive by taking ``abs(...)`` of the chosen
+      log column, for ranking and paper-friendly plotting.
+    """
     if config is None:
         config = MetascapeAdapterConfig()
 
@@ -250,6 +403,31 @@ def convert_metascape_table_to_evidence_tsv(
     *,
     config: MetascapeAdapterConfig | None = None,
 ) -> pd.DataFrame:
+    """Read a Metascape export, convert it, and write an EvidenceTable TSV.
+
+    This is a convenience wrapper around:
+    ``read_metascape_table`` -> ``metascape_to_evidence_table`` -> TSV write.
+
+    Parameters
+    ----------
+    in_path : str
+        Path to the Metascape export (Excel or text).
+    out_path : str
+        Destination path for the EvidenceTable TSV.
+    config : MetascapeAdapterConfig or None, optional
+        Conversion configuration. If None, defaults are used.
+
+    Returns
+    -------
+    pandas.DataFrame
+        EvidenceTable as written, with ``evidence_genes`` serialized for TSV.
+
+    Raises
+    ------
+    ValueError
+        Propagated from ``metascape_to_evidence_table`` when inputs are
+        invalid or evidence cannot be constructed.
+    """
     if config is None:
         config = MetascapeAdapterConfig()
 

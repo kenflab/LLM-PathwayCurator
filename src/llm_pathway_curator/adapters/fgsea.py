@@ -39,21 +39,69 @@ PREFERRED_STAT = ["NES", "ES"]
 
 
 def _norm_colname(c: Any) -> str:
+    """Normalize a column name for alias matching.
+
+    Parameters
+    ----------
+    c : Any
+        Raw column label.
+
+    Returns
+    -------
+    str
+        Normalized key used to look up ``ALIASES``.
+        Strips BOM, removes spaces/underscores, lowercases.
+    """
     s = str(c).strip().lstrip("\ufeff")
     s = s.replace(" ", "").replace("_", "")
     return s.lower()
 
 
 def _is_na(x: Any) -> bool:
-    # Spec-level NA policy lives in _shared.
+    """Return True if a value is treated as NA by the tool contract.
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar.
+
+    Returns
+    -------
+    bool
+        True if NA-like per ``_shared`` (scalar NA or NA tokens).
+    """
     return _shared.is_na_scalar(x) or _shared.is_na_token(x)
 
 
 def _clean_str(x: Any) -> str:
+    """Convert a scalar to a stripped string with NA mapped to empty.
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar.
+
+    Returns
+    -------
+    str
+        Stripped string, or ``""`` if NA-like.
+    """
     return "" if _is_na(x) else str(x).strip()
 
 
 def _to_float(x: Any) -> float | None:
+    """Convert a scalar to a finite float.
+
+    Parameters
+    ----------
+    x : Any
+        Input scalar. NA-like, non-numeric, or non-finite values yield ``None``.
+
+    Returns
+    -------
+    float or None
+        Finite float value, otherwise ``None``.
+    """
     if _is_na(x):
         return None
     try:
@@ -66,6 +114,21 @@ def _to_float(x: Any) -> float | None:
 
 
 def _clean_gene_symbol(g: str) -> str:
+    """Clean a single gene symbol token.
+
+    This is a lightweight normalizer that trims whitespace/quotes and strips
+    common trailing separators.
+
+    Parameters
+    ----------
+    g : str
+        Raw gene token.
+
+    Returns
+    -------
+    str
+        Cleaned gene token.
+    """
     s = g.strip().strip('"').strip("'")
     s = " ".join(s.split())
     s = s.strip(",;|")
@@ -76,8 +139,22 @@ _R_C_WRAPPER_RE = re.compile(r"^\s*c\s*\((.*)\)\s*$", flags=re.IGNORECASE)
 
 
 def _split_genes(x: Any) -> list[str]:
-    # Spec-level gene parsing lives in _shared (handles ',', ';', '|', bracketed lists, etc.).
-    # Also tolerate common R vector syntax like: c(10, 20, 30)
+    """Parse evidence genes from an fgsea leading-edge cell.
+
+    Delegates to ``_shared.parse_genes`` for the spec-level parsing
+    (supports separators like ',', ';', '|', bracketed lists, etc.).
+    Additionally tolerates common R vector syntax such as ``c(a, b, c)``.
+
+    Parameters
+    ----------
+    x : Any
+        Raw leading-edge cell value.
+
+    Returns
+    -------
+    list of str
+        Parsed gene symbols/IDs (may be empty if input is missing).
+    """
     if isinstance(x, str):
         m = _R_C_WRAPPER_RE.match(x)
         if m:
@@ -86,7 +163,19 @@ def _split_genes(x: Any) -> list[str]:
 
 
 def _term_slug(s: str) -> str:
-    # minimal slug: keep alnum + _-. replace others with _
+    """Create a short, filesystem-safe slug for a term.
+
+    Parameters
+    ----------
+    s : str
+        Input term string.
+
+    Returns
+    -------
+    str
+        Slug containing only alnum and ``_-.`` characters, with other
+        characters replaced by ``_``. Output is capped to 80 chars.
+    """
     out = []
     for ch in s.strip():
         if ch.isalnum() or ch in {"_", "-", "."}:
@@ -101,19 +190,48 @@ def _term_slug(s: str) -> str:
 
 
 def _term_hash(s: str) -> str:
-    # Spec-level short hash (12-hex) to keep identity rules consistent across layers.
+    """Compute a stable short hash for a term.
+
+    Parameters
+    ----------
+    s : str
+        Input term string.
+
+    Returns
+    -------
+    str
+        Short 12-hex hash (sha256-derived) via ``_shared.sha256_12hex``.
+    """
     return _shared.sha256_12hex(s)
 
 
 @dataclass(frozen=True)
 class FgseaAdapterConfig:
-    """
-    Adapter configuration for converting an fgsea result table into EvidenceTable.
+    """Configuration for converting an fgsea result table to EvidenceTable.
 
-    Defaults are chosen to match the paper's R-side EvidenceTable behavior:
-    - term_id is human-readable (raw pathway name)
-    - rows are sorted by qval asc, abs(stat) desc
-    - qval NA rows are dropped
+    Attributes
+    ----------
+    source_name : str
+        Value to populate the EvidenceTable ``source`` column.
+    require_genes : bool
+        If True, raise an error when ``leadingEdge`` yields no genes.
+    keep_pval : bool
+        If True and ``pval`` exists, store it separately (does not replace qval).
+    term_id_mode : str
+        Term identifier policy.
+
+        - ``"raw"``: ``term_id == pathway`` (recommended; paper-aligned)
+        - ``"prefixed_hashed"``: ``term_id == "FGSEA:<slug>|<hash>"`` (legacy)
+    drop_na_qval : bool
+        If True, drop rows where qval (padj) is missing.
+    sort_output : bool
+        If True, sort output deterministically by ``qval`` asc then
+        ``abs(stat)`` desc.
+
+    Notes
+    -----
+    Defaults are chosen to match the paper-side EvidenceTable behavior:
+    human-readable term IDs, stable ordering, and dropping NA q-values.
     """
 
     source_name: str = "fgsea"
@@ -131,6 +249,21 @@ class FgseaAdapterConfig:
 
 
 def read_fgsea_table(path: str) -> pd.DataFrame:
+    """Read an fgsea result table from disk.
+
+    Supports TSV by default and falls back to delimiter sniffing or
+    whitespace parsing (best-effort).
+
+    Parameters
+    ----------
+    path : str
+        Path to an fgsea result file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Parsed fgsea table.
+    """
     df = pd.read_csv(path, sep="\t")
     if df.shape[1] > 1:
         return df
@@ -141,6 +274,22 @@ def read_fgsea_table(path: str) -> pd.DataFrame:
 
 
 def _rename_with_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename columns to the adapter's canonical schema using ``ALIASES``.
+
+    The first encountered column that maps to a canonical name wins.
+    Additional columns mapping to the same canonical name are recorded
+    in ``out.attrs["alias_conflicts"]`` for debugging.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with renamed columns (and possible ``.attrs`` metadata).
+    """
     used: set[str] = set()
     rename: dict[str, str] = {}
     conflicts: dict[str, list[str]] = {}
@@ -166,6 +315,44 @@ def fgsea_to_evidence_table(
     *,
     config: FgseaAdapterConfig | None = None,
 ) -> pd.DataFrame:
+    """Convert an fgsea result table to the EvidenceTable contract.
+
+    Parameters
+    ----------
+    fgsea_df : pandas.DataFrame
+        fgsea results table. Must contain (after aliasing) ``pathway`` and
+        ``leadingEdge`` plus at least one statistic column among ``NES``/``ES``.
+    config : FgseaAdapterConfig or None, optional
+        Conversion configuration. If None, defaults are used.
+
+    Returns
+    -------
+    pandas.DataFrame
+        EvidenceTable with core columns:
+
+        - ``term_id`` : str
+        - ``term_name`` : str
+        - ``source`` : str
+        - ``stat`` : float
+        - ``qval`` : float or NA (from padj only)
+        - ``direction`` : {"up", "down", "na"}
+        - ``evidence_genes`` : list[str]
+
+        Plus minimal provenance fields (e.g., ``pval``, ``term_id_h``).
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing, if no stat column is present,
+        if ``pathway`` is empty, if the stat column is non-numeric, or if
+        ``require_genes=True`` and evidence genes are empty.
+
+    Notes
+    -----
+    - Only ``padj`` is treated as q-value (FDR) and mapped to ``qval``.
+      ``pval`` is stored separately when present and enabled.
+    - Output ordering can be stabilized via ``sort_output``.
+    """
     if config is None:
         config = FgseaAdapterConfig()
 
@@ -276,6 +463,30 @@ def convert_fgsea_table_to_evidence_tsv(
     *,
     config: FgseaAdapterConfig | None = None,
 ) -> pd.DataFrame:
+    """Read an fgsea table, convert it, and write an EvidenceTable TSV.
+
+    This is a convenience wrapper around:
+    ``read_fgsea_table`` -> ``fgsea_to_evidence_table`` -> TSV write.
+
+    Parameters
+    ----------
+    in_path : str
+        Path to the fgsea result file.
+    out_path : str
+        Destination path for the EvidenceTable TSV.
+    config : FgseaAdapterConfig or None, optional
+        Conversion configuration. If None, defaults are used.
+
+    Returns
+    -------
+    pandas.DataFrame
+        EvidenceTable as written, with ``evidence_genes`` serialized for TSV.
+
+    Raises
+    ------
+    ValueError
+        Propagated from ``fgsea_to_evidence_table`` on invalid inputs.
+    """
     raw = read_fgsea_table(in_path)
     ev = fgsea_to_evidence_table(raw, config=config)
 

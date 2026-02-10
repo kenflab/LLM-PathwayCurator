@@ -13,14 +13,52 @@ import pandas as pd
 # Small helpers (minimal, deterministic)
 # -------------------------
 def _die(msg: str) -> None:
+    """Terminate execution with a user-facing error message.
+
+    Parameters
+    ----------
+    msg : str
+        Error message.
+
+    Raises
+    ------
+    SystemExit
+        Always raised with the provided message.
+    """
     raise SystemExit(msg)
 
 
 def _parse_csv(s: str) -> list[str]:
+    """Parse a comma-separated string into a list of non-empty tokens.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string.
+
+    Returns
+    -------
+    list of str
+        Trimmed tokens with empty entries removed.
+    """
     return [x.strip() for x in str(s).split(",") if x.strip()]
 
 
 def _ensure_file(p: Path, label: str) -> None:
+    """Validate that a path exists, is a file, and is non-empty.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Path to validate.
+    label : str
+        Label used in error messages (e.g., "TSV").
+
+    Raises
+    ------
+    SystemExit
+        If the path does not exist, is not a file, or is empty.
+    """
     if not p.exists():
         _die(f"[figS2_export] missing {label}: {p}")
     if not p.is_file():
@@ -30,6 +68,23 @@ def _ensure_file(p: Path, label: str) -> None:
 
 
 def _read_tsv(p: Path) -> pd.DataFrame:
+    """Read a TSV file into a DataFrame with basic validation.
+
+    Parameters
+    ----------
+    p : pathlib.Path
+        Input TSV path.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Loaded table.
+
+    Raises
+    ------
+    SystemExit
+        If the file is missing, not a file, or empty.
+    """
     _ensure_file(p, "TSV")
     return pd.read_csv(p, sep="\t")
 
@@ -42,12 +97,32 @@ def _filter_df(
     gate_modes: list[str] | None,
     taus: list[float] | None,
 ) -> pd.DataFrame:
-    """
-    Match the plot script behavior:
-    - condition: case-insensitive (upper compare)
-    - variant/gate_mode: exact string compare after stripping
-    - tau: numeric compare (rounded to 6 decimals)
-    - Missing columns => ignore that filter dimension
+    """Filter an input table using plot-aligned matching rules.
+
+    Filtering behavior matches the plotting scripts:
+
+    - ``condition``: case-insensitive (uppercased comparison)
+    - ``variant`` and ``gate_mode``: exact string comparison after stripping
+    - ``tau``: numeric comparison after rounding to 6 decimals
+    - Missing columns: the corresponding filter dimension is ignored
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+    conditions : list of str or None
+        Condition labels to keep (compares against ``condition``).
+    variants : list of str or None
+        Variant labels to keep (compares against ``variant``).
+    gate_modes : list of str or None
+        Gate mode labels to keep (compares against ``gate_mode``).
+    taus : list of float or None
+        Tau values to keep (compares against ``tau``).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered copy of the input table.
     """
     out = df.copy()
 
@@ -75,6 +150,25 @@ def _filter_df(
 
 
 def _infer_collection_col(df: pd.DataFrame) -> str:
+    """Infer the collection column name from known alternatives.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table expected to contain a collection-like column.
+
+    Returns
+    -------
+    str
+        The detected column name among:
+        ``collection``, ``gene_set_collection``, ``msig_collection``,
+        or ``collection_name``.
+
+    Raises
+    ------
+    SystemExit
+        If no supported collection column is found.
+    """
     for c in ["collection", "gene_set_collection", "msig_collection", "collection_name"]:
         if c in df.columns:
             return c
@@ -85,6 +179,19 @@ def _infer_collection_col(df: pd.DataFrame) -> str:
 
 
 def _pick_proxy_col(df: pd.DataFrame) -> str:
+    """Pick an optional proxy metric column if present.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table.
+
+    Returns
+    -------
+    str
+        First matching proxy column name from a known candidate list,
+        or ``""`` if none are present.
+    """
     candidates = [
         "bridge_gene_rate",
         "bridge_rate",
@@ -103,7 +210,23 @@ def _pick_proxy_col(df: pd.DataFrame) -> str:
 
 
 def _infer_reason_cols(df: pd.DataFrame) -> tuple[str, str]:
-    # Status column
+    """Infer (status, reason) column names in an audit reasons long table.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input audit reasons table.
+
+    Returns
+    -------
+    tuple of (str, str)
+        ``(status_col, reason_col)``.
+
+    Raises
+    ------
+    SystemExit
+        If a suitable status or reason column cannot be found.
+    """
     if "reason_type" in df.columns:
         status_col = "reason_type"
     else:
@@ -135,8 +258,21 @@ def _infer_reason_cols(df: pd.DataFrame) -> tuple[str, str]:
 
 
 def _order_collections(values: list[str]) -> list[str]:
-    """
-    Paper-stable ordering (optional). Unknown labels go to the end (lexicographic).
+    """Return a paper-stable ordering for collection labels.
+
+    Known labels are ordered as:
+    ``Hallmark``, ``GO``, ``Reactome``, ``KEGG``, ``Other``.
+    Unknown labels are appended in lexicographic order.
+
+    Parameters
+    ----------
+    values : list of str
+        Collection labels.
+
+    Returns
+    -------
+    list of str
+        Ordered collection labels.
     """
     preferred = ["Hallmark", "GO", "Reactome", "KEGG", "Other"]
     vset = set(values)
@@ -146,6 +282,15 @@ def _order_collections(values: list[str]) -> list[str]:
 
 
 def _write_csv(df: pd.DataFrame, out_path: Path) -> None:
+    """Write a DataFrame to CSV, creating parent directories as needed.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Table to write.
+    out_path : pathlib.Path
+        Output CSV path.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)
 
@@ -162,6 +307,39 @@ def build_edfig2b_outcomes_by_collection(
     taus: list[float] | None,
     strict_nonempty: bool,
 ) -> pd.DataFrame:
+    """Build EDFig2b source data: outcome composition per collection.
+
+    Aggregates counts across matching rows, then computes fractions:
+    ``frac_pass``, ``frac_abstain``, and ``frac_fail`` using ``n_total``.
+
+    Parameters
+    ----------
+    collections_summary_wide : pandas.DataFrame
+        Wide summary table produced by the collections metrics pipeline.
+        Must include a collection column and count columns.
+    conditions : list of str or None
+        Optional filter on ``condition``.
+    variants : list of str or None
+        Optional filter on ``variant``.
+    gate_modes : list of str or None
+        Optional filter on ``gate_mode``.
+    taus : list of float or None
+        Optional filter on ``tau`` (rounded to 6 decimals).
+    strict_nonempty : bool
+        If True, raise an error when filtering or aggregation yields no rows.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table with columns:
+        ``collection``, ``n_total``, ``n_pass``, ``n_abstain``, ``n_fail``,
+        ``frac_pass``, ``frac_abstain``, ``frac_fail``.
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or results are empty when strict.
+    """
     df = collections_summary_wide.copy()
     coll_col = _infer_collection_col(df)
 
@@ -219,6 +397,38 @@ def build_edfig2c_module_stats(
     taus: list[float] | None,
     strict_nonempty: bool,
 ) -> pd.DataFrame:
+    """Build EDFig2c source data: median module statistics per collection.
+
+    Computes per-collection medians for module summary columns and, if present,
+    includes the median of one proxy metric (e.g., hub/bridge rate).
+
+    Parameters
+    ----------
+    collections_summary_wide : pandas.DataFrame
+        Wide summary table produced by the collections metrics pipeline.
+    conditions : list of str or None
+        Optional filter on ``condition``.
+    variants : list of str or None
+        Optional filter on ``variant``.
+    gate_modes : list of str or None
+        Optional filter on ``gate_mode``.
+    taus : list of float or None
+        Optional filter on ``tau`` (rounded to 6 decimals).
+    strict_nonempty : bool
+        If True, raise an error when filtering or aggregation yields no rows.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table with columns:
+        ``collection``, ``median_genes_per_module``, ``median_terms_per_module``,
+        ``n_modules_median``, plus an optional ``<proxy>_median`` column.
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or results are empty when strict.
+    """
     df = collections_summary_wide.copy()
     coll_col = _infer_collection_col(df)
 
@@ -279,6 +489,48 @@ def build_edfig2d_abstain_reasons_by_collection(
     strict_nonempty: bool,
     include_fail_reasons: bool,
 ) -> pd.DataFrame:
+    """Build EDFig2d source data: reason composition per collection.
+
+    Produces per-collection reason breakdown within each reason type
+    (ABSTAIN always; FAIL optionally). Reasons are collapsed to Top-K
+    by total count within the selected subset, with the remainder mapped
+    to ``"Other"``.
+
+    Parameters
+    ----------
+    audit_reasons_long : pandas.DataFrame
+        Long-form table of audit reasons with one row per (grouping, reason)
+        or per claim, depending on the collector output.
+    conditions : list of str or None
+        Optional filter on ``condition``.
+    variants : list of str or None
+        Optional filter on ``variant``.
+    gate_modes : list of str or None
+        Optional filter on ``gate_mode``.
+    taus : list of float or None
+        Optional filter on ``tau`` (rounded to 6 decimals).
+    topk : int
+        Number of reasons to retain per reason type; remaining reasons map to
+        ``"Other"``.
+    strict_nonempty : bool
+        If True, raise an error when filtering yields no rows, or when there
+        are no ABSTAIN rows after filtering.
+    include_fail_reasons : bool
+        If True, also include FAIL reason breakdown when FAIL rows exist.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table with columns:
+        ``reason_type``, ``collection``, ``reason``, ``count``,
+        ``fraction_within_type``.
+
+    Raises
+    ------
+    SystemExit
+        If required columns are missing or results are empty when strict.
+    """
+
     df = audit_reasons_long.copy()
     coll_col = _infer_collection_col(df)
 
@@ -361,6 +613,21 @@ def build_edfig2d_abstain_reasons_by_collection(
 # Main
 # -------------------------
 def main() -> None:
+    """CLI entrypoint to export EDFig2b/c/d source-data CSVs.
+
+    Reads collection summary and audit reasons TSVs, applies optional filtering
+    (conditions/variants/gate modes/taus), and writes three CSV outputs:
+
+    - ``EDFig2b_data.csv``: outcomes by collection
+    - ``EDFig2c_data.csv``: median module stats by collection
+    - ``EDFig2d_data.csv``: reason composition by collection (Top-K + Other)
+
+    Raises
+    ------
+    SystemExit
+        On missing inputs, invalid schema expectations, or empty results when
+        ``--strict-nonempty`` is enabled.
+    """
     ap = argparse.ArgumentParser(
         description=(
             "Export EDFig2b/c/d source-data CSVs from collection_metrics TSVs (no plotting)."
