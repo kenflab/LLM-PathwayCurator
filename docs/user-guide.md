@@ -60,6 +60,70 @@ Decision objects for downstream consumption:
 * audit outcome and reason codes
 * provenance metadata
 
+## Optional: rank & visualize (`rank` / `plot-ranked`)
+
+If you want a **single ranked table** and **paper-ready plots** (bars / packed circles), use:
+
+- `llm-pathway-curator rank` → generates a ranked table (typically `claims_ranked.tsv`)
+- `llm-pathway-curator plot-ranked` → renders ranked terms/modules from `claims_ranked.tsv` (recommended) or `audit_log.tsv`
+
+### A) Rank (produce `claims_ranked.tsv`)
+
+Run `rank` on an existing run output directory (the directory that contains `audit_log.tsv`, `run_meta.json`, etc.).
+
+```bash
+llm-pathway-curator rank --help
+# Use --help to see the supported inputs and output path options.
+````
+
+### B) Plot ranked results (bars / packed circles)
+
+`plot-ranked` can auto-detect inputs under `--run-dir`.
+Packed circles require an extra dependency:
+
+```bash
+python -m pip install circlify
+```
+
+#### Bars (Metascape-like)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode bars \
+  --run-dir out/run1 \
+  --out-png out/run1/plots/ranked_bars.png \
+  --decision PASS \
+  --group-by-module \
+  --left-strip \
+  --strip-labels \
+  --bar-color-mode module
+```
+
+#### Packed circles (modules → terms)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode packed \
+  --run-dir out/run1 \
+  --out-png out/run1/plots/ranked_packed.png \
+  --decision PASS \
+  --term-color-mode module
+```
+
+#### Packed circles (direction shading)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode packed \
+  --run-dir out/run1 \
+  --out-png out/run1/plots/ranked_packed.direction.png \
+  --decision PASS \
+  --term-color-mode direction
+```
+
+**Tip (side-by-side layout):** `plot-ranked` uses a stable `module_id → M##` display rank and stable module colors,
+so bars and packed circles can be placed next to each other without label/color drift.
+
 ---
 
 ## 5) Tune conservativeness (τ)

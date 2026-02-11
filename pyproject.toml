@@ -32,6 +32,11 @@ bench = [
   "synapseclient>=2.0",
 ]
 
+viz = [
+  "matplotlib>=3.8",
+  "circlify>=0.15.1",
+]
+
 llm = [
   "openai>=1.0",
   "google-genai",
@@ -43,6 +48,7 @@ all = [
   "pytest>=8.0",
   "ruff>=0.4",
   "matplotlib>=3.8",
+  "circlify>=0.15.1",
   "pyyaml>=6.0",
   "tqdm>=4.66",
   "synapseclient>=2.0",
