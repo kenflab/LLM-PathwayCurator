@@ -29,7 +29,9 @@ from typing import Literal
 from .adapters.fgsea import convert_fgsea_table_to_evidence_tsv
 from .adapters.metascape import MetascapeAdapterConfig, convert_metascape_table_to_evidence_tsv
 from .pipeline import RunConfig, run_pipeline
+from .ranked import write_claims_ranked_tsv
 from .schema import EvidenceTable
+from .viz_ranked import PlotRankedConfig, plot_ranked
 
 
 def _p(path: str | Path) -> Path:
@@ -315,6 +317,78 @@ def cmd_adapt(args: argparse.Namespace) -> None:
     print(f"[OK] wrote EvidenceTable TSV: {out_path}")
 
 
+def cmd_rank(args: argparse.Namespace) -> None:
+    """
+    CLI entrypoint for `rank`.
+
+    Export claims_ranked.tsv from audit_log.tsv (+ optional evidence TSV).
+    """
+    out_tsv = _p(args.out_tsv)
+
+    run_dir = _p(args.run_dir) if args.run_dir else None
+    audit_log = _p(args.audit_log) if args.audit_log else None
+    evidence_tsv = _p(args.evidence_tsv) if args.evidence_tsv else None
+
+    if run_dir is None and audit_log is None:
+        raise SystemExit("[ERROR] rank requires --run-dir or --audit-log")
+
+    out_path = write_claims_ranked_tsv(
+        out_tsv=out_tsv,
+        run_dir=run_dir,
+        audit_log=audit_log,
+        evidence_tsv=evidence_tsv,
+        top_n=int(args.top_n or 0),
+        prefer_q=bool(args.prefer_q),
+        evidence_score_col=str(args.evidence_score_col or ""),
+        default_direction=str(args.default_direction or "na"),
+        fill_direction_if_na=bool(args.fill_direction_if_na),
+    )
+    print(f"[OK] wrote ranked claims TSV: {out_path}")
+
+
+def cmd_plot_ranked(args: argparse.Namespace) -> None:
+    """
+    CLI entrypoint for `plot-ranked`.
+
+    Render a ranked shortlist visualization from claims_ranked.tsv (preferred)
+    or audit_log.tsv (fallback).
+    """
+    cfg = PlotRankedConfig(
+        mode=str(args.mode),
+        in_tsv=str(args.in_tsv or ""),
+        run_dir=str(args.run_dir or ""),
+        out_png=str(args.out_png),
+        decision=str(args.decision),
+        drop_hallmark_prefix=bool(args.drop_hallmark_prefix),
+        dpi=int(args.dpi),
+        annotate=bool(args.annotate),
+        fontsize=int(args.fontsize),
+        top_modules=int(args.top_modules),
+        top_terms_per_module=int(args.top_terms_per_module),
+        size_gamma=float(args.size_gamma),
+        size_min_norm=float(args.size_min_norm),
+        min_term_label_r=float(args.min_term_label_r),
+        dark=bool(args.dark),
+        module_cmap=str(args.module_cmap),
+        term_color_mode=str(args.term_color_mode),
+        term_cmap=str(args.term_cmap),
+        term_vmin=float(args.term_vmin),
+        term_vmax=float(args.term_vmax),
+        top_n=int(args.top_n),
+        group_by_module=bool(args.group_by_module),
+        left_strip=bool(args.left_strip),
+        strip_labels=bool(args.strip_labels),
+        xlabel=str(args.xlabel),
+        bar_color_mode=str(args.bar_color_mode),
+        bar_cmap=str(args.bar_cmap),
+        bar_vmin=float(args.bar_vmin),
+        bar_vmax=float(args.bar_vmax),
+    )
+
+    out = plot_ranked(cfg)
+    print(f"[OK] wrote plot: {out}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """
     Build the top-level argument parser.
@@ -386,6 +460,68 @@ def build_parser() -> argparse.ArgumentParser:
         help="(metascape) override source field (default: metascape)",
     )
     p_adapt.set_defaults(func=cmd_adapt)
+
+    p_rank = sub.add_parser("rank", help="Export claims_ranked.tsv (audited shortlist table)")
+    p_rank.add_argument(
+        "--run-dir", default="", help="tau_xx directory containing audit_log.tsv, etc."
+    )
+    p_rank.add_argument(
+        "--audit-log", default="", help="audit_log.tsv (optional if --run-dir is set)"
+    )
+    p_rank.add_argument("--evidence-tsv", default="", help="evidence.normalized.tsv (optional)")
+    p_rank.add_argument("--out-tsv", required=True, help="Output claims_ranked.tsv")
+    p_rank.add_argument("--top-n", type=int, default=0, help="If >0, keep only top-N after ranking")
+    p_rank.add_argument("--prefer-q", action="store_true", help="Prefer -log10(q) if available")
+    p_rank.add_argument("--evidence-score-col", default="", help="Override evidence score column")
+    p_rank.add_argument("--default-direction", default="na", choices=["up", "down", "na"])
+    p_rank.add_argument("--fill-direction-if-na", action="store_true")
+    p_rank.set_defaults(func=cmd_rank)
+
+    p_plot = sub.add_parser("plot-ranked", help="Plot ranked claims (packed circles or bars)")
+    p_plot.add_argument("--mode", default="packed", choices=["packed", "bars"])
+    p_plot.add_argument(
+        "--in-tsv", default="", help="claims_ranked.tsv (recommended) or audit_log.tsv"
+    )
+    p_plot.add_argument("--run-dir", default="", help="Auto-detect TSV under this directory")
+    p_plot.add_argument("--out-png", required=True, help="Output PNG path")
+
+    p_plot.add_argument(
+        "--decision", default="PASS", help="Filter decision/status (e.g., PASS or PASS,ABSTAIN)"
+    )
+    p_plot.add_argument("--drop-hallmark-prefix", action="store_true")
+    p_plot.add_argument("--dpi", type=int, default=220)
+    p_plot.add_argument("--annotate", action="store_true")
+
+    # packed
+    p_plot.add_argument("--top-modules", type=int, default=12)
+    p_plot.add_argument("--top-terms-per-module", type=int, default=8)
+    p_plot.add_argument("--size-gamma", type=float, default=3.5)
+    p_plot.add_argument("--size-min-norm", type=float, default=0.03)
+    p_plot.add_argument("--min-term-label-r", type=float, default=0.09)
+    p_plot.add_argument("--dark", action="store_true")
+    p_plot.add_argument("--module-cmap", default="tab20")
+    p_plot.add_argument(
+        "--term-color-mode", default="module", choices=["score", "module", "direction"]
+    )
+    p_plot.add_argument("--term-cmap", default="coolwarm")
+    p_plot.add_argument("--term-vmin", type=float, default=float("nan"))
+    p_plot.add_argument("--term-vmax", type=float, default=float("nan"))
+
+    # bars
+    p_plot.add_argument("--top-n", type=int, default=50)
+    p_plot.add_argument("--group-by-module", action="store_true")
+    p_plot.add_argument("--left-strip", action="store_true")
+    p_plot.add_argument("--strip-labels", action="store_true")
+    p_plot.add_argument("--xlabel", default="")
+    p_plot.add_argument(
+        "--bar-color-mode", default="score", choices=["score", "module", "direction"]
+    )
+    p_plot.add_argument("--bar-cmap", default="coolwarm")
+    p_plot.add_argument("--bar-vmin", type=float, default=float("nan"))
+    p_plot.add_argument("--bar-vmax", type=float, default=float("nan"))
+    p_plot.add_argument("--fontsize", type=int, default=16, help="base font size (default 16)")
+
+    p_plot.set_defaults(func=cmd_plot_ranked)
 
     return p
 

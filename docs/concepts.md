@@ -8,6 +8,7 @@ It transforms EA outputs into **audited, decision-grade claims**.
 ---
 
 ## What it is (and is not)
+
 **It is:**
 - a framework to convert term lists → **typed, evidence-linked claims**
 - a **mechanical audit suite** producing PASS/ABSTAIN/FAIL with reason codes
@@ -21,8 +22,9 @@ It transforms EA outputs into **audited, decision-grade claims**.
 ---
 
 ## Objects
+
 ### EvidenceTable (term × gene contract)
-One row = one enriched term with explicit supporting genes.
+One row = one enriched term with explicit supporting genes.  
 This enables:
 - term–term overlap (e.g., Jaccard)
 - term–gene bipartite graph construction
@@ -30,22 +32,28 @@ This enables:
 - stable evidence linkage (hashable gene sets)
 
 ### Sample Card (study context contract)
-A structured record of study intent and context (e.g., condition/tissue/perturbation/comparison).
+A structured record of study intent and context (e.g., condition/tissue/perturbation/comparison).  
 Used for:
 - context-conditioned representative selection
 - context validity gates
 - context stress tests (e.g., context swap)
 
 ### Claim (typed JSON; evidence-linked)
-A claim is a **decision object**, not prose.
+A claim is a **decision object**, not prose.  
 It must contain resolvable references:
 - `term_id` / `module_id`
 - supporting-gene set identity (hash)
 - typed fields (schema-bounded)
 
+### Module IDs vs display ranks (`M##`)
+- `module_id` is the **stable identifier** produced by the tool and referenced by downstream artifacts.
+- `M01`, `M02`, ... are **display ranks** (human-facing labels) used for visualization and layout.
+  They must be consistent across plots but should not be treated as stable IDs.
+
 ---
 
 ## Pipeline responsibilities (A → B → C)
+
 ### A) Distill (stability distillation; “evidence hygiene”)
 - supporting-gene perturbations (seeded dropout / jitter)
 - survival-like stability proxies (LOO/jackknife, optional extras)
@@ -62,9 +70,17 @@ It must contain resolvable references:
 **C2 (audit):** mechanical gates assign PASS/ABSTAIN/FAIL + reason codes  
 **C3 (report):** decision-grade report + provenance
 
+### D) Ranked views (presentation utilities)
+These steps do **not** change evidence identity or decisions. They produce ranked summaries and plots for humans.
+
+- **`rank`**: derives a ranked table (e.g., `claims_ranked.tsv`) for inspection/plotting.
+- **`plot-ranked`**: renders Metascape-like bars or packed circles from `claims_ranked.tsv`
+  (recommended) or `audit_log.tsv` (fallback).
+
 ---
 
 ## Decisions
+
 ### PASS / ABSTAIN / FAIL
 - **FAIL**: auditable violations (evidence drift, contradictions, schema violations)
 - **ABSTAIN**: under-supported / unstable / context-nonspecific / stress-inconclusive
@@ -82,4 +98,3 @@ Stress tests are *specification-driven perturbations* (no external knowledge):
 - **evidence dropout**: remove supporting genes with probability p
 
 Expected outcome: coverage should decrease and ABSTAIN reasons should shift in a stress-specific way.
-

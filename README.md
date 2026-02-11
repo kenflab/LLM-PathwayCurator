@@ -100,6 +100,77 @@ llm-pathway-curator run \
 
 ---
 
+## 📊 Rank & visualize ranked terms (`rank` / `plot-ranked`)
+
+LLM-PathwayCurator includes two small post-processing commands for **ranking** and **publication-ready visualization**
+of ranked terms/modules:
+
+- `llm-pathway-curator rank` — produces a **ranked table** (`claims_ranked.tsv`) for downstream plots and summaries.
+- `llm-pathway-curator plot-ranked` — renders ranked terms/modules as either:
+  - **bars** (Metascape-like horizontal bars), or
+  - **packed circles** (module-level circle packing with term circles inside).
+
+### A) Rank (produce `claims_ranked.tsv`)
+
+Use `rank` to generate a deterministic ranked table from a run output directory.
+
+```bash
+llm-pathway-curator rank --help
+# Typical workflow: point rank to a run directory and write claims_ranked.tsv
+# (See --help for the exact flags supported by your installed version.)
+````
+
+### B) Plot (bars or packed circles)
+
+`plot-ranked` auto-detects `claims_ranked.tsv` (recommended) or falls back to `audit_log.tsv`
+under `--run-dir`.
+
+> Packed circles require an extra dependency:
+> `python -m pip install circlify`
+
+#### Bars (Metascape-like)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode bars \
+  --run-dir out/demo \
+  --out-png out/demo/plots/ranked_bars.png \
+  --decision PASS \
+  --group-by-module \
+  --left-strip \
+  --strip-labels \
+  --bar-color-mode module
+```
+
+#### Packed circles (modules → terms)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode packed \
+  --run-dir out/demo \
+  --out-png out/demo/plots/ranked_packed.png \
+  --decision PASS \
+  --term-color-mode module
+```
+
+#### Packed circles (direction shading)
+
+```bash
+llm-pathway-curator plot-ranked \
+  --mode packed \
+  --run-dir out/demo \
+  --out-png out/demo/plots/ranked_packed.direction.png \
+  --decision PASS \
+  --term-color-mode direction
+```
+
+### Consistent module labels/colors across plots
+
+`plot-ranked` assigns a single module display rank (**M01, M02, ...**) and a stable module color per `module_id`,
+so **bars** and **packed circles** can be placed side-by-side without label/color drift.
+
+---
+
 ## ⚖️ Inputs (contracts)
 
 ### EvidenceTable (minimum required columns)

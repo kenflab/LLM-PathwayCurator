@@ -4,6 +4,10 @@ pyyaml>=6.0
 tqdm>=4.66
 synapseclient>=2.0
 
+# Plotting (used by plot-ranked)
+matplotlib>=3.8
+circlify>=0.15.1
+
 # LLM SDKs (optional but handy in Docker)
 openai>=1.0
 google-genai
@@ -13,3 +17,4 @@ google-generativeai
 networkx>=3.2
 jsonschema>=4.21
 openpyxl>=3.1
+

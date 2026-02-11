@@ -16,6 +16,8 @@ dependencies = [
   "numpy>=1.24",
   "pydantic>=2.0",
   "tabulate>=0.9",
+  "matplotlib>=3.8",
+  "circlify>=0.15.1",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +28,6 @@ dev = [
 ]
 
 bench = [
-  "matplotlib>=3.8",
   "pyyaml>=6.0",
   "tqdm>=4.66",
   "synapseclient>=2.0",
@@ -38,11 +39,10 @@ llm = [
   "google-generativeai",
 ]
 
-# Convenience meta-extra: everything you need for paper+LLM+dev in one shot
 all = [
   "pytest>=8.0",
   "ruff>=0.4",
-  "matplotlib>=3.8",
+  "openpyxl>=3.1",
   "pyyaml>=6.0",
   "tqdm>=4.66",
   "synapseclient>=2.0",
@@ -58,7 +58,8 @@ llm-pathway-curator = "llm_pathway_curator.cli:main"
 line-length = 100
 target-version = "py310"
 extend-exclude = [
-  "paper/notebooks/*.ipynb",
+  "paper/notebooks/**/*.ipynb",
+  "paper/notebooks/_local/**",
 ]
 
 [tool.ruff.lint]
