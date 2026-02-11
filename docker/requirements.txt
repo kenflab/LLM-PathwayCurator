@@ -4,7 +4,7 @@ pyyaml>=6.0
 tqdm>=4.66
 synapseclient>=2.0
 
-# Plotting (used by paper/scripts and plot-ranked)
+# Plotting (used by plot-ranked)
 matplotlib>=3.8
 circlify>=0.15.1
 
@@ -17,3 +17,4 @@ google-generativeai
 networkx>=3.2
 jsonschema>=4.21
 openpyxl>=3.1
+
