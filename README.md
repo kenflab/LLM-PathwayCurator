@@ -1,7 +1,7 @@
 # LLM-PathwayCurator
 
 <p align="left">
-  <img src="docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator"
+  <img src="https://github.com/kenflab/LLM-PathwayCurator/blob/main/docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator"
        style="vertical-align: middle; margin-right: 10px;">
   <span style="font-size: 28px; font-weight: 700; vertical-align: middle;">
      Enrichment interpretations → audited, decision-grade pathway claims.
@@ -13,7 +13,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 - **Docs:** https://llm-pathway-curator.readthedocs.io/
-- **Paper reproducibility (canonical):** `paper/` (see `paper/README.md`; panel map in `paper/FIGURE_MAP.csv`)
+- **Paper reproducibility (canonical):** [`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) (see [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md); panel map in [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv))
 
 ---
 
@@ -29,10 +29,17 @@ It **does not** introduce a new enrichment statistic. Instead, it turns EA outpu
 > **Selective prediction for pathway interpretation:** calibrated abstention is a feature, not a failure.
 
 <p align="center">
-  <img src="docs/assets/LLM-PathwayCurator_Fig1_bioRxiv_2026.png" width="85%"
+  <img src="https://github.com/kenflab/LLM-PathwayCurator/blob/main/docs/assets/LLM-PathwayCurator_Fig1_bioRxiv_2026.png" width="85%"
        alt="LLM-PathwayCurator workflow: EvidenceTable → modules → claims → audits">
 </p>
-Fig. 1a. Overview of LLM-PathwayCurator (bioRxiv preprint)
+
+
+<p align="center">
+  <em>
+    Fig. 1a. Overview of LLM-PathwayCurator workflow: EvidenceTable → modules → claims → audits.
+    (<a href="to be added">bioRxiv preprint</a>)
+  </em>
+</p>
 
 ---
 
@@ -68,16 +75,16 @@ We transform ranked terms into **machine-auditable claims** by enforcing:
 
 **A) Stability distillation (evidence hygiene)**  
 Perturb supporting genes (seeded) to compute stability proxies (e.g., LOO/jackknife-like survival scores).  
-Output: `distilled.tsv`
+Output: [`distilled.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/distilled.tsv)
 
 **B) Evidence factorization (modules)**  
 Factorize the term–gene bipartite graph into **evidence modules** that preserve shared vs distinct support.  
-Outputs: `modules.tsv`, `term_modules.tsv`, `term_gene_edges.tsv`
+Outputs: [`modules.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/modules.tsv), [`term_modules.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/term_modules.tsv), [`term_gene_edges.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/term_gene_edges.tsv)
 
 **C) Claims → audit → report**  
 - **C1 (proposal-only):** deterministic baseline or optional LLM proposes **typed claims** with resolvable evidence links  
 - **C2 (audit/decider):** mechanical rules assign **PASS/ABSTAIN/FAIL** with precedence (FAIL > ABSTAIN > PASS)  
-- **C3 (report):** decision-grade report + audit log + provenance
+- **C3 (report):** decision-grade report + audit log(`audit_log.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/audit_log.tsv)) + provenance
 
 ---
 
@@ -92,12 +99,12 @@ llm-pathway-curator run \
 
 ### Key outputs (stable contract)
 
-* `audit_log.tsv` — PASS/ABSTAIN/FAIL + reason codes (mechanical)
-* `report.jsonl`, `report.md` — decision objects (evidence-linked)
-* `claims.proposed.tsv` — proposed candidates (proposal-only; auditable)
-* `distilled.tsv` — stability proxies / evidence hygiene outputs
-* `modules.tsv`, `term_modules.tsv`, `term_gene_edges.tsv` — evidence structure
-* `run_meta.json` (+ optional `manifest.json`) — pinned params + provenance
+* [`audit_log.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/audit_log.tsv) — PASS/ABSTAIN/FAIL + reason codes (mechanical)
+* [`report.jsonl`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/report.jsonl), [`report.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/report.md) — decision objects (evidence-linked)
+* [`claims.proposed.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/claims.proposed.tsv) — proposed candidates (proposal-only; auditable)
+* [`distilled.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/distilled.tsv) — stability proxies / evidence hygiene outputs
+* [`modules.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/modules.tsv), [`term_modules.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/term_modules.tsv), [`term_gene_edges.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/term_gene_edges.tsv) — evidence structure
+* [`run_meta.json`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/run_meta.json) (+ optional `manifest.json`) — pinned params + provenance
 
 ---
 
@@ -106,8 +113,8 @@ llm-pathway-curator run \
 LLM-PathwayCurator includes two small post-processing commands for **ranking** and **publication-ready visualization**
 of ranked terms/modules:
 
-- `llm-pathway-curator rank` — produces a **ranked table** (`claims_ranked.tsv`) for downstream plots and summaries.
-- `llm-pathway-curator plot-ranked` — renders ranked terms/modules as either:
+- [`llm-pathway-curator rank`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/ranked.py) — produces a **ranked table** (`claims_ranked.tsv`) for downstream plots and summaries.
+- [`llm-pathway-curator plot-ranked`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/viz_ranked.py) — renders ranked terms/modules as either:
   - **bars** (Metascape-like horizontal bars), or
   - **packed circles** (module-level circle packing with term circles inside).
 
@@ -190,7 +197,7 @@ Structured context record used for proposal and context gating, e.g.:
 
 * `condition/disease`, `tissue`, `perturbation`, `comparison`
 
-Adapters for common tools live under `src/llm_pathway_curator/adapters/`.
+Adapters for common tools live under [`src/llm_pathway_curator/adapters/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/src/llm_pathway_curator/adapters).
 
 ---
 
@@ -202,7 +209,7 @@ Adapters are intentionally conservative:
 * avoid destructive parsing
 * keep TSV **round-trips stable** (contract drift is treated as a bug)
 
-See: `src/llm_pathway_curator/adapters/README.md`
+See: [`src/llm_pathway_curator/adapters/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/adapters/README.md)
 
 ---
 
@@ -237,10 +244,10 @@ LLM-PathwayCurator is deterministic by default:
 * fixed seeds (CLI + library defaults)
 * pinned parsing + hashing utilities
 * stable output schemas and reason codes
-* run metadata persisted to `run_meta.json` (and runner-level `manifest.json` when used)
+* run metadata persisted to [`run_meta.json`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/run_meta.json) (and runner-level `manifest.json` when used)
 
-Paper-side runners (e.g., `paper/scripts/run_fig2_pipeline.py`) **orchestrate** reproducible sweeps
-and do not implement scientific logic; they call the library entrypoint (`llm_pathway_curator.pipeline.run_pipeline`).
+Paper-side runners (e.g., [`paper/scripts/fig2_run_pipeline.py`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/scripts/fig2_run_pipeline.py)) **orchestrate** reproducible sweeps
+and do not implement scientific logic; they call the library entrypoint ([`llm_pathway_curator.pipeline.run_pipeline`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/pipeline.py)).
 
 ---
 
@@ -255,7 +262,7 @@ pip install llm-pathway-curator
 ### Option B: From source (development)
 
 ```bash
-git clone https://github.com/<ORG>/LLM-PathwayCurator.git
+git clone https://github.com/kenflab/LLM-PathwayCurator.git
 cd LLM-PathwayCurator
 pip install -e .
 ```
@@ -263,17 +270,98 @@ pip install -e .
 ---
 
 ## 🐳 Docker (recommended for reproducibility)
+We provide an official Docker environment (Python + R + Jupyter), sufficient to run LLM-PathwayCurator and most paper figure generation.  
+Optionally includes **Ollama** for local LLM annotation (no cloud API key required).
 
-```bash
-docker compose -f docker/docker-compose.yml up -d
-docker compose -f docker/docker-compose.yml logs -f --tail=50 llm-pathway-curator
-```
+- #### Option A: Prebuilt image (recommended)
+  Use the published image from GitHub Container Registry (GHCR).
+  
+  ```bash
+  # from the repo root (optional, for notebooks / file access)
+  docker pull ghcr.io/kenflab/llm-pathway-curator:official
+  ```
 
-(If you publish GHCR images)
+  Run Jupyter:
+  ```
+  docker run --rm -it \
+    -p 8888:8888 \
+    -v "$PWD":/work \
+    -e GEMINI_API_KEY \
+    -e OPENAI_API_KEY \
+    ghcr.io/kenflab/llm-pathway-curator:official
+  ```
+  Open Jupyter:
+  [http://localhost:8888](http://localhost:8888) <br>  
+  (Use the token printed in the container logs.)
+  <br>  
+  Notes:
+  > For manuscript reproducibility, we also provide versioned tags (e.g., :0.1.0). Prefer a version tag when matching a paper release.
 
-```bash
-docker pull ghcr.io/<ORG>/llm-pathway-curator:<TAG>
-```
+
+- #### Option B: Build locally (development)
+
+  - ##### Option B-1: Build locally with Compose (recommended for dev)
+    ```bash
+    # from the repo root
+    docker compose -f docker/docker-compose.yml build
+    docker compose -f docker/docker-compose.yml up
+    ```
+
+    **B-1.1) Open Jupyter**
+    - [http://localhost:8888](http://localhost:8888) 
+      Workspace mount: `/work`
+
+    **B-1.2) If prompted for "Password or token"**
+    - Get the tokenized URL from container logs:
+      ```bash
+      docker compose -f docker/docker-compose.yml logs -f llm-pathway-curator
+      ```
+    - Then either:
+      - open the printed URL (contains `?token=...`) in your browser, or
+      - paste the token value into the login prompt.
+
+  - ##### Option B-2: Build locally without Compose (alternative)
+    ```bash
+    # from the repo root
+    docker build -f docker/Dockerfile -t llm-pathway-curator:official .
+    ```
+
+    **B-2.1) Run Jupyter**
+    ```bash
+    docker run --rm -it \
+      -p 8888:8888 \
+      -v "$PWD":/work \
+      -e GEMINI_API_KEY \
+      -e OPENAI_API_KEY \
+      llm-pathway-curator:official
+    ```
+
+    **B-2.2) Open Jupyter**
+    - [http://localhost:8888](http://localhost:8888)
+      Workspace mount: `/work`  
+ 
+
+---
+## 🖥️ Apptainer / Singularity (HPC)
+- #### Option A: Prebuilt image (recommended)
+  Use the published image from GitHub Container Registry (GHCR).
+  ```bash
+  apptainer build llm-pathway-curator.sif docker://ghcr.io/kenflab/llm-pathway-curator:official
+  ```
+
+- #### Option B:  a .sif from the Docker image (development)
+  ```bash
+  docker compose -f docker/docker-compose.yml build
+  apptainer build llm-pathway-curator.sif docker-daemon://llm-pathway-curator:official
+  ```
+
+Run Jupyter (either image):
+  ```bash
+  apptainer exec --cleanenv \
+    --bind "$PWD":/work \
+    llm-pathway-curator.sif \
+    bash -lc 'jupyter lab --ip=0.0.0.0 --port=8888 --no-browser 
+  ```
 
 ---
 
@@ -284,28 +372,27 @@ with **resolvable EvidenceTable links**.
 
 Backends (example):
 
-* OpenAI: `OPENAI_API_KEY`
-* Gemini: `GEMINI_API_KEY`
 * Ollama: `LLMPATH_OLLAMA_HOST`, `LLMPATH_OLLAMA_MODEL`
+* Gemini: `GEMINI_API_KEY`
+* OpenAI: `OPENAI_API_KEY`
 
 Typical environment:
 
 ```bash
-export LLMPATH_BACKEND="openai"   # openai|gemini|ollama
-export OPENAI_API_KEY="sk-..."
+export LLMPATH_BACKEND="ollama"   # ollama|gemini|openai
 ```
 
 Deterministic settings are used by default (e.g., temperature=0), and runs persist
-prompt/raw/meta artifacts alongside `run_meta.json`.
+prompt/raw/meta artifacts alongside [`run_meta.json`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/run_meta.json).
 
 ---
 
 ## 📄 Manuscript reproduction
 
-`paper/` contains manuscript-facing scripts, Source Data exports, and frozen/derived artifacts (when redistributable).
+[`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) contains manuscript-facing scripts, Source Data exports, and frozen/derived artifacts (when redistributable).
 
-* `paper/README.md` — how to reproduce figures
-* `paper/FIGURE_MAP.csv` — canonical mapping: panel ↔ inputs ↔ scripts ↔ outputs
+* [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md) — how to reproduce figures
+* [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv) — canonical mapping: panel ↔ inputs ↔ scripts ↔ outputs
 
 ---
 
