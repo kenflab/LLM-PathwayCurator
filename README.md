@@ -84,7 +84,7 @@ Outputs: [`modules.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main
 **C) Claims → audit → report**  
 - **C1 (proposal-only):** deterministic baseline or optional LLM proposes **typed claims** with resolvable evidence links  
 - **C2 (audit/decider):** mechanical rules assign **PASS/ABSTAIN/FAIL** with precedence (FAIL > ABSTAIN > PASS)  
-- **C3 (report):** decision-grade report + audit log(`audit_log.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/audit_log.tsv)) + provenance
+- **C3 (report):** decision-grade report + audit log ([`audit_log.tsv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/examples/demo/expected/audit_log.tsv)) + provenance
 
 ---
 
