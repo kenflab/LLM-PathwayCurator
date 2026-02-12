@@ -1,13 +1,13 @@
 [build-system]
-requires = ["hatchling>=1.24"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=80", "wheel", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-pathway-curator"
-version = "0.0.0"
-description = "Convert enrichment outputs into verifiable, auditable pathway claims with calibrated abstention."
+dynamic = ["version"]  
+description = "Transform enrichment outputs into verifiable, auditable pathway claims with calibrated abstention."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "Ken Furudate"}]
 
@@ -56,7 +56,7 @@ llm-pathway-curator = "llm_pathway_curator.cli:main"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 extend-exclude = [
   "paper/notebooks/**/*.ipynb",
   "paper/notebooks/_local/**",
@@ -72,3 +72,15 @@ addopts = "-q"
 markers = [
   "smoke: developer-facing adapter smoke tests (contract checks)",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:a\\d+|b\\d+|rc\\d+)?)$"
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
+fallback_version = "0.0.0"
