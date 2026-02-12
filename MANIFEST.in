@@ -1,0 +1,9 @@
+prune paper
+prune docs
+exclude mkdocs.yml
+prune out
+prune dist
+prune build
+global-exclude *.ipynb
+global-exclude __pycache__ *.py[cod] .DS_Store
+
