@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +89,7 @@ def _json_sanitize(x: Any) -> Any:
 
     if isinstance(x, datetime):
         try:
-            return x.astimezone(timezone.utc).isoformat()
+            return x.astimezone(UTC).isoformat()
         except Exception:
             return x.isoformat()
 
@@ -1050,7 +1050,7 @@ def write_report_jsonl(
     out_path.mkdir(parents=True, exist_ok=True)
 
     if not run_id:
-        run_id = datetime.now(timezone.utc).isoformat()
+        run_id = datetime.now(UTC).isoformat()
 
     claim_json_col = _pick_claim_json_col(audit_log)
     if claim_json_col is None:
@@ -1110,7 +1110,7 @@ def write_report_jsonl(
         species = ""
 
     jsonl_path = out_path / "report.jsonl"
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     dev_meta_enabled = _get_dev_meta_enabled()
     schema_version_internal = _get_schema_version(card, default="v1")
 

@@ -1,0 +1,73 @@
+# .github/workflows/pypi-release.yml
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: python -m pip install -U pip
+      - run: python -m pip install -U build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Twine check
+        run: python -m twine check dist/*
+
+      - name: Upload dists
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/llm-pathway-curator
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Guard (stable tag only)
+        id: guard
+        run: |
+          python - <<'PY'
+          import os, re
+          tag=os.environ.get("GITHUB_REF_NAME","")
+          stable=bool(re.fullmatch(r"v\d+\.\d+\.\d+", tag))
+          print(f"tag={tag} stable={stable}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"stable={'true' if stable else 'false'}\n")
+          PY
+
+      - name: Publish to PyPI
+        if: steps.guard.outputs.stable == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+

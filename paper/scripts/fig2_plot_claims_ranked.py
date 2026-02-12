@@ -59,6 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--module-font-scale", type=float, default=34.0)
     p.add_argument("--module-font-min", type=float, default=10.0)
     p.add_argument("--module-font-max", type=float, default=20.0)
+    p.add_argument(
+        "--hide-module-labels", action="store_true", help="Hide module M## labels (packed)"
+    )
 
     # bars
     p.add_argument("--top-n", type=int, default=50)
@@ -118,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         bar_cmap=str(a.bar_cmap),
         bar_vmin=float(a.bar_vmin),
         bar_vmax=float(a.bar_vmax),
+        hide_module_labels=bool(a.hide_module_labels),
     )
 
     out = plot_ranked(cfg)

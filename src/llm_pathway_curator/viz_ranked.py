@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 
-def apply_pub_style(fontsize: int = 16) -> None:
+def apply_pub_style(fontsize: int = 20) -> None:
     """Apply publication-style matplotlib rcParams.
 
     Parameters
@@ -1051,7 +1051,7 @@ class PlotRankedConfig:
     mode: str = "packed"  # packed|bars
     in_tsv: str = ""
     run_dir: str = ""
-    out_png: str = ""
+    out_png: str = ""  # output figure path (.png or .pdf)
 
     decision: str = "PASS"
     drop_hallmark_prefix: bool = False
@@ -1077,6 +1077,7 @@ class PlotRankedConfig:
     module_font_scale: float = 34.0
     module_font_min: float = 10.0
     module_font_max: float = 20.0
+    hide_module_labels: bool = False  # packed: hide M## labels
 
     # bars
     top_n: int = 50
@@ -1102,7 +1103,7 @@ def plot_ranked(cfg: PlotRankedConfig) -> Path:
     Returns
     -------
     pathlib.Path
-        Output PNG path that was written.
+        Output figure path that was written (.png or .pdf).
 
     Notes
     -----
@@ -1125,7 +1126,7 @@ def plot_ranked(cfg: PlotRankedConfig) -> Path:
         _die(f"[plot-ranked] invalid mode={cfg.mode!r} (use packed|bars)")
 
     if not cfg.out_png:
-        _die("[plot-ranked] missing out_png")
+        _die("[plot-ranked] missing out_png (use --out-png out.png or --out-png out.pdf)")
 
     in_tsv = Path(cfg.in_tsv) if cfg.in_tsv else None
     if in_tsv is None:
@@ -1255,6 +1256,83 @@ def _plot_packed(
         vmax = vmin + 1e-9
     term_norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
 
+    # --- collect term-circle geometry per module (for collision-aware module label placement)
+    term_geom: dict[str, list[tuple[float, float, float]]] = {}
+    for cc in circles:
+        if cc.level == 2:
+            mid, _d, _sc, _lab = _parse_term_id(cc.ex.get("id", "NA||na||nan||"))
+            term_geom.setdefault(str(mid), []).append((float(cc.x), float(cc.y), float(cc.r)))
+
+    def _min_clearance(
+        x: float, y: float, terms: list[tuple[float, float, float]], margin: float
+    ) -> float:
+        """Return min(distance - (term_r + margin)) over term circles; >=0 means no overlap."""
+        if not terms:
+            return float("inf")
+        best = float("inf")
+        for tx, ty, tr in terms:
+            d = ((x - tx) ** 2 + (y - ty) ** 2) ** 0.5
+            best = min(best, d - (tr + margin))
+        return best
+
+    def _place_module_label(
+        cx: float,
+        cy: float,
+        cr: float,
+        module_id: str,
+        *,
+        prefer_center: bool,
+    ) -> tuple[float, float, str, str, bool, tuple[float, float] | None]:
+        """
+        Try legacy position; if collides with term circles, try other corners;
+        if still colliding, place just outside with optional leader.
+        Returns: (x, y, ha, va, outside, leader_xy_or_None)
+        """
+        terms = term_geom.get(str(module_id), [])
+        terms = [t for t in terms if t[2] >= float(cfg.min_term_label_r)]
+
+        margin = max(0.012, 0.08 * float(cr))
+        inset = 0.72
+
+        candidates: list[tuple[float, float, str, str]] = []
+        if prefer_center:
+            candidates.append((cx, cy, "center", "center"))
+        else:
+            candidates.append((cx - inset * cr, cy + inset * cr, "left", "top"))  # legacy
+
+        candidates.extend(
+            [
+                (cx + inset * cr, cy + inset * cr, "right", "top"),
+                (cx - inset * cr, cy - inset * cr, "left", "bottom"),
+                (cx + inset * cr, cy - inset * cr, "right", "bottom"),
+            ]
+        )
+
+        # 1) keep legacy if ok
+        x0, y0, ha0, va0 = candidates[0]
+        if _min_clearance(x0, y0, terms, margin) >= 0:
+            return x0, y0, ha0, va0, False, None
+
+        # 2) choose best corner
+        scored = []
+        for x, y, ha, va in candidates:
+            scored.append((_min_clearance(x, y, terms, margin), x, y, ha, va))
+        scored.sort(key=lambda z: (-float(z[0]), str(z[3]) + str(z[4])))  # deterministic
+        best_clear, x, y, ha, va = scored[0]
+        if best_clear >= 0:
+            return x, y, ha, va, False, None
+
+        # 3) place outside
+        dx = -1.0 if ha == "left" else (1.0 if ha == "right" else -1.0)
+        dy = 1.0 if va == "top" else (-1.0 if va == "bottom" else 1.0)
+        leader = (cx + dx * 0.92 * cr, cy + dy * 0.92 * cr)
+        xo = cx + dx * 1.06 * cr
+        yo = cy + dy * 1.06 * cr
+        return xo, yo, ha, va, True, leader
+
+    # -------------------------
+    # DRAW (this must be OUTSIDE helper defs)
+    # -------------------------
     for c in circles:
         if c.level == 1:
             module_id, mlabel = _parse_id(c.ex.get("id", "NA||M??"))
@@ -1271,33 +1349,45 @@ def _plot_packed(
                 )
             )
 
-            fs = _clamp(c.r * cfg.module_font_scale, cfg.module_font_min, cfg.module_font_max)
+            if not bool(getattr(cfg, "hide_module_labels", False)):
+                fs = _clamp(c.r * cfg.module_font_scale, cfg.module_font_min, cfg.module_font_max)
+                prefer_center = bool(c.r < 0.16)
 
-            # Place module label well INSIDE the circle to reduce clipping.
-            inset_frac = 0.72
-            x = c.x - inset_frac * c.r
-            y = c.y + inset_frac * c.r
-            ha = "left"
-            va = "top"
+                x, y, ha, va, outside, leader = _place_module_label(
+                    float(c.x), float(c.y), float(c.r), str(module_id), prefer_center=prefer_center
+                )
 
-            if c.r < 0.16:
-                x = c.x
-                y = c.y
-                ha = "center"
-                va = "center"
+                bbox = None
+                if outside:
+                    if leader is not None:
+                        ax.plot(
+                            [leader[0], x],
+                            [leader[1], y],
+                            linewidth=1.1,
+                            alpha=0.65,
+                            color=color if not cfg.dark else "white",
+                            zorder=9,
+                        )
+                    bbox = dict(
+                        facecolor=("white" if not cfg.dark else "#0b0f14"),
+                        edgecolor="none",
+                        alpha=(0.75 if not cfg.dark else 0.55),
+                        boxstyle="round,pad=0.18",
+                    )
 
-            t = ax.text(
-                x,
-                y,
-                mlabel,
-                ha=ha,
-                va=va,
-                fontsize=fs,
-                fontweight="bold",
-                color=color if cfg.dark else "#111111",
-                zorder=10,
-            )
-            t.set_path_effects(_outline_for_fs(fs))
+                t = ax.text(
+                    x,
+                    y,
+                    mlabel,
+                    ha=ha,
+                    va=va,
+                    fontsize=fs,
+                    fontweight="bold",
+                    color=color if cfg.dark else "#111111",
+                    zorder=10,
+                    bbox=bbox,
+                )
+                t.set_path_effects(_outline_for_fs(fs))
 
         elif c.level == 2:
             module_id, d, sc, label = _parse_term_id(c.ex.get("id", "NA||na||nan||"))
@@ -1354,7 +1444,11 @@ def _plot_packed(
     ax.set_ylim(-lim, lim)
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=int(cfg.dpi))
+    save_kw: dict = {"dpi": int(cfg.dpi)}
+    # Keep existing PNG outputs unchanged; tighten only for vector outputs.
+    if out_png.suffix.lower() == ".pdf":
+        save_kw.update({"bbox_inches": "tight", "pad_inches": 0.02})
+    fig.savefig(out_png, **save_kw)
     plt.close(fig)
 
 
@@ -1524,7 +1618,10 @@ def _plot_bars(
         )
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=int(cfg.dpi))
+    save_kw: dict = {"dpi": int(cfg.dpi)}
+    if out_png.suffix.lower() == ".pdf":
+        save_kw.update({"bbox_inches": "tight", "pad_inches": 0.02})
+    fig.savefig(out_png, **save_kw)
     plt.close(fig)
 
 
@@ -1555,7 +1652,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--in-tsv", type=str, default="", help="claims_ranked.tsv (recommended) or audit_log.tsv"
     )
     p.add_argument("--run-dir", type=str, default="", help="Auto-detect TSV under this directory")
-    p.add_argument("--out-png", type=str, required=True)
+    p.add_argument(
+        "--out-png",
+        type=str,
+        required=True,
+        help="Output figure path. Use .png or .pdf (e.g., out/fig.pdf).",
+    )
 
     p.add_argument(
         "--decision",
@@ -1594,7 +1696,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bar-cmap", type=str, default="coolwarm")
     p.add_argument("--bar-vmin", type=float, default=float("nan"))
     p.add_argument("--bar-vmax", type=float, default=float("nan"))
-    p.add_argument("--fontsize", type=int, default=16, help="base font size (default 16)")
+    p.add_argument("--fontsize", type=int, default=16, help="base font size (default 20)")
+    p.add_argument(
+        "--hide-module-labels", action="store_true", help="Hide module M## labels (packed)"
+    )
+
     return p
 
 
@@ -1651,6 +1757,7 @@ def main(argv: list[str] | None = None) -> int:
         bar_cmap=str(a.bar_cmap),
         bar_vmin=float(a.bar_vmin),
         bar_vmax=float(a.bar_vmax),
+        hide_module_labels=bool(a.hide_module_labels),
     )
 
     out = plot_ranked(cfg)
