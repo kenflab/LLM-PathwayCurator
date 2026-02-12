@@ -21,7 +21,6 @@ nav:
   - Concepts: concepts.md
   - User guide: user-guide.md
   - Tutorials: tutorials.md
-  - R / reticulate: reticulate.md
   - API reference: api-reference.md
 
 plugins:
