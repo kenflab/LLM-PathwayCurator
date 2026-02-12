@@ -5,4 +5,8 @@ from .pipeline import RunConfig, RunResult, run_pipeline
 
 __all__ = ["__version__", "RunConfig", "RunResult", "run_pipeline"]
 
-__version__ = "0.0.0"
+try:
+    from importlib.metadata import PackageNotFoundError, version
+    __version__ = version("llm-pathway-curator")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
