@@ -9,8 +9,10 @@
 </p>
 
 [![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://llm-pathway-curator.readthedocs.io/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18625777.svg)](https://doi.org/10.5281/zenodo.18625777)
+[![RRID](https://img.shields.io/badge/RRID-SCR_027964-blue)](https://scicrunch.org/resolver/SCR_027964)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
 - **Docs:** https://llm-pathway-curator.readthedocs.io/
 - **Paper reproducibility (canonical):** [`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) (see [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md); panel map in [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv))
@@ -397,10 +399,9 @@ prompt/raw/meta artifacts alongside [`run_meta.json`](https://github.com/kenflab
 ---
 
 ## 🧾 Citation
-
 If you use LLM-PathwayCurator, please cite:
-
-* **Preprint:** *Transforming enrichment terms into audit-gated decision-grade claims with LLM-PathwayCurator*, bioRxiv (2026). DOI: *(to be added)*
-* **Software:** LLM-PathwayCurator (v0.1.0). Zenodo. DOI: *(to be added)*
-
+- bioRxiv preprint: planned (DOI to be added upon posting)
+- Zenodo archive (v0.1.0): [10.5281/zenodo.18625777](https://doi.org/10.5281/zenodo.18625777)
+- GitHub release tag: [v0.1.0](https://github.com/kenflab/LLM-PathwayCurator/releases/tag/v0.1.0)
+- Software RRID: [RRID:SCR_027964](https://scicrunch.org/resolver/SCR_027964)
 ---
