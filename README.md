@@ -37,8 +37,9 @@ It **does not** introduce a new enrichment statistic. Instead, it turns EA outpu
 
 
 <p align="center">
-  <em>
-    Fig. 1a. Overview of LLM-PathwayCurator workflow: EvidenceTable → modules → claims → audits.
+  <em style="max-width: 600px; display: inline-block; line-height: 1.6;">
+    Fig. 1a. Overview of LLM-PathwayCurator workflow:<br>
+    <strong>EvidenceTable</strong> → <strong>modules</strong> → <strong>claims</strong> → <strong>audits</strong>
     (<a href="to be added">bioRxiv preprint</a>)
   </em>
 </p>
