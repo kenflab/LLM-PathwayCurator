@@ -8,11 +8,11 @@
   </span>
 </p>
 
-[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://llm-pathway-curator.readthedocs.io/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18625777.svg)](https://doi.org/10.5281/zenodo.18625777)
-[![RRID](https://img.shields.io/badge/RRID-SCR_027964-blue)](https://scicrunch.org/resolver/SCR_027964)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathway-curator.readthedocs.io/)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18625777-6f42c1?style=flat&logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.18625777)
+[![RRID](https://img.shields.io/badge/RRID-SCR_027964-2ea44f?style=flat)](https://scicrunch.org/resolver/SCR_027964)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f1c40f?style=flat)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.11%2B-555555?style=flat&logo=python&logoColor=white)](https://www.python.org/downloads/)
 
 - **Docs:** https://llm-pathway-curator.readthedocs.io/
 - **Paper reproducibility (canonical):** [`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) (see [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md); panel map in [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv))
