@@ -254,13 +254,18 @@ and do not implement scientific logic; they call the library entrypoint ([`llm_p
 ---
 
 ## 📦 Installation
+[![PyPI](https://img.shields.io/badge/PyPI-llm--pathway--curator-3776AB?style=flat&logo=pypi&logoColor=white)](https://pypi.org/project/llm-pathway-curator/)
+[![PyPI version](https://img.shields.io/pypi/v/llm-pathway-curator?style=flat&logo=pypi&logoColor=white)](https://pypi.org/project/llm-pathway-curator/)
+[![Docker (GHCR)](https://img.shields.io/badge/ghcr.io-llm--pathway--curator-2496ED?style=flat&logo=github&logoColor=white)](https://github.com/kenflab/LLM-PathwayCurator/pkgs/container/llm-pathway-curator)
+[![Jupyter](https://img.shields.io/badge/Jupyter-F37626?style=flat&logo=jupyter&logoColor=white)](https://jupyter.org/)
 
 ### Option A: PyPI (recommended)
 
 ```bash
 pip install llm-pathway-curator
 ```
-
+  (See PyPI project page: [https://pypi.org/project/llm-pathway-curator/](https://pypi.org/project/llm-pathway-curator/))
+  
 ### Option B: From source (development)
 
 ```bash
