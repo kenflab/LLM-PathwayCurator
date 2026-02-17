@@ -1,4 +1,4 @@
-## `docs/index.md`
+<!-- docs/index.md -->
 
 # LLM-PathwayCurator
 
