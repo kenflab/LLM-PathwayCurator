@@ -1,20 +1,20 @@
 # LLM-PathwayCurator
 
 <p align="left">
-  <img src="https://github.com/kenflab/LLM-PathwayCurator/blob/main/docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator"
+  <img src="https://raw.githubusercontent.com/kenflab/LLM-PathwayCurator/main/docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator"
        style="vertical-align: middle; margin-right: 10px;">
   <span style="font-size: 28px; font-weight: 700; vertical-align: middle;">
      Enrichment interpretations → audited, decision-grade pathway claims.
   </span>
 </p>
 
-[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathway-curator.readthedocs.io/)
+[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathwaycurator.readthedocs.io/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18625777-6f42c1?style=flat&logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.18625777)
 [![RRID](https://img.shields.io/badge/RRID-SCR_027964-2ea44f?style=flat)](https://scicrunch.org/resolver/SCR_027964)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f1c40f?style=flat)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.11%2B-555555?style=flat&logo=python&logoColor=white)](https://www.python.org/downloads/)
 
-- **Docs:** https://llm-pathway-curator.readthedocs.io/
+- **Docs:** [https://llm-pathwaycurator.readthedocs.io/](https://llm-pathwaycurator.readthedocs.io/)
 - **Paper reproducibility (canonical):** [`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) (see [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md); panel map in [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv))
 
 ---
@@ -31,7 +31,7 @@ It **does not** introduce a new enrichment statistic. Instead, it turns EA outpu
 > **Selective prediction for pathway interpretation:** calibrated abstention is a feature, not a failure.
 
 <p align="center">
-  <img src="https://github.com/kenflab/LLM-PathwayCurator/blob/main/docs/assets/LLM-PathwayCurator_Fig1_bioRxiv_2026.png" width="85%"
+  <img src="https://raw.githubusercontent.com/kenflab/LLM-PathwayCurator/main/docs/assets/LLM-PathwayCurator_Fig1_bioRxiv_2026.png" width="85%"
        alt="LLM-PathwayCurator workflow: EvidenceTable → modules → claims → audits">
 </p>
 
