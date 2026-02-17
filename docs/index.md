@@ -52,7 +52,7 @@ llm-pathway-curator run \
   --sample-card examples/demo/sample_card.json \
   --evidence-table examples/demo/evidence_table.tsv \
   --out out/demo/
-````
+```
 
 Key outputs:
 * `audit_log.tsv` (PASS/ABSTAIN/FAIL + reason codes)
@@ -64,10 +64,11 @@ Key outputs:
 
 ## Next
 
-* Start here: **Getting started**
-* Learn the contracts: **Concepts**
-* End-to-end usage: **User guide**
-* Adapters (inputs → EvidenceTable): see package docs / source
+* Start here: **[Getting started](getting-started.md)**
+* Learn the contracts: **[Concepts](concepts.md)**
+* End-to-end usage: **[User guide](user-guide.md)**
+* Adapters (inputs → EvidenceTable): see [package](https://github.com/kenflab/LLM-PathwayCurator/tree/main/src/llm_pathway_curator/adapters)
+* API docs: **[API reference](api-reference.md)**
 
 ---
 
