@@ -1,4 +1,4 @@
-## `docs/getting-started.md`
+<!-- docs/getting-started.md -->
 
 # Getting started
 This page gets you from “EA term list” to “audited decision objects” in minutes.
@@ -9,7 +9,7 @@ This page gets you from “EA term list” to “audited decision objects” in 
 ### Option A: PyPI (recommended)
 ```bash
 pip install llm-pathway-curator
-````
+```
 
 ### Option B: from source
 
@@ -99,3 +99,13 @@ mkdocs serve
 Open: [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
 
+---
+
+## Next
+
+* Learn the contracts: **[Concepts](concepts.md)**
+* End-to-end usage: **[User guide](user-guide.md)**
+* Adapters (inputs → EvidenceTable): see [package](https://github.com/kenflab/LLM-PathwayCurator/tree/main/src/llm_pathway_curator/adapters)
+* API docs: **[API reference](api-reference.md)**
+
+---
