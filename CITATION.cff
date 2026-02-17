@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use LLM-PathwayCurator in your research, please cite it."
+title: "LLM-PathwayCurator: Audit-gated decision-grade pathway claims from enrichment outputs"
+type: software
+version: 0.1.0
+authors:
+  - family-names: "Furudate"
+    given-names: "Ken"
+    orcid: "https://orcid.org/0000-0003-1272-5490"
+  - family-names: "Takahashi"
+    given-names: "Koichi"
+    orcid: "https://orcid.org/0000-0002-8027-9659"
+repository-code: "https://github.com/kenflab/LLM-PathwayCurator"
+url: "https://github.com/kenflab/LLM-PathwayCurator"
+license: "MIT"
+keywords:
+  - "reproducible research"
+  - "computational biology"
+  - "quality assurance"
+  - "pathway analysis"
+  - "enrichment analysis"
+  - "fgsea"
+  - "GSEA"
+  - "Metascape"
+  - "abstention"
+  - "selective prediction"
+  - "LLM"
+  - "bioinformatics tool"
+abstract: >
+  Enrichment interpretations invite plausible narratives. LLM-PathwayCurator
+  transforms enrichment outputs into auditable, evidence-linked claims with
+  redundancy-highlighting module mapping; across The Cancer Genome Atlas’s seven
+  cohorts, it achieved qualified coverage of 0.66–0.80 under matched context but
+  dropped to 0.20–0.42 under context swap and 0.20–0.30 after supporting-gene
+  dropout, reflecting contract violations or weakened gene support. By
+  transforming narratives into decision-grade claims with audit-gated
+  abstention, it establishes a reproducible quality-assurance layer for omics
+  interpretation.
+preferred-citation:
+  type: software
+  title: "LLM-PathwayCurator: Audit-gated decision-grade pathway claims from enrichment outputs"
+  authors:
+    - family-names: "Furudate"
+      given-names: "Ken"
+    - family-names: "Takahashi"
+      given-names: "Koichi"
+  year: 2026
+  version: 0.1.0
+  doi: "10.5281/zenodo.18625777"
+  url: "https://github.com/kenflab/LLM-PathwayCurator"
+  repository-code: "https://github.com/kenflab/LLM-PathwayCurator"
