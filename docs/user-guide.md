@@ -1,4 +1,4 @@
-## `docs/user-guide.md`
+<!-- docs/user-guide.md -->
 
 # User guide
 
@@ -7,6 +7,8 @@ This guide shows how to use LLM-PathwayCurator on your own enrichment results.
 ---
 
 ## 1) Create an EvidenceTable
+**Recommended:** Use a built-in adapter to generate `evidence_table.tsv`. See the [adapter docs]( https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/adapters/README.md)
+
 You can generate an EvidenceTable via:
 - adapters (recommended), or
 - manual TSV export if your pipeline already has term × genes.
@@ -37,7 +39,7 @@ llm-pathway-curator run \
   --sample-card sample_card.json \
   --evidence-table evidence_table.tsv \
   --out out/run1/
-````
+```
 
 ---
 
@@ -162,3 +164,7 @@ All decisions remain mechanical and are logged.
 * archive inputs (EvidenceTable + Sample Card)
 * prefer Docker / pinned environment for paper matching
 
+## Notes
+
+- For the underlying design, see **[Concepts](concepts.md)**.
+- For deterministic reproduction (benchmarks/figures/Source Data), follow **[paper/README.md](https://github.com/kenflab/LLM-scCurator/blob/main/paper/README.md)**.
