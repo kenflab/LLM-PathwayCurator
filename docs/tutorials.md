@@ -12,7 +12,7 @@ llm-pathway-curator run \
   --sample-card examples/demo/sample_card.json \
   --evidence-table examples/demo/evidence_table.tsv \
   --out out/demo/
-````
+```
 
 Check:
 
@@ -41,7 +41,7 @@ llm-pathway-curator run \
 Run the same EvidenceTable under a swapped Sample Card (e.g., BRCA → LUAD).
 Expected behavior: PASS coverage decreases; ABSTAIN reasons shift toward context issues.
 
-(Exact CLI depends on your stress runner / paper scripts. See `paper/scripts/` for reproducible sweeps.)
+(Exact CLI depends on your stress runner / paper scripts. See [`paper/scripts/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper/scripts) for reproducible sweeps.)
 
 ---
 
@@ -61,3 +61,11 @@ Do a τ sweep and summarize:
 * (optional) human-labeled risk among audit-PASS
 
 Then lock τ for your analysis or deployment run.
+
+
+---
+
+## Notes
+
+- For the underlying design, see **[Concepts](concepts.md)**.
+- For deterministic reproduction (benchmarks/figures/Source Data), follow **[paper/README.md](https://github.com/kenflab/LLM-scCurator/blob/main/paper/README.md)**.
