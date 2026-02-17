@@ -1,4 +1,4 @@
-## `docs/concepts.md`
+<!-- docs/concepts.md　-->
 
 # Concepts
 
@@ -98,3 +98,12 @@ Stress tests are *specification-driven perturbations* (no external knowledge):
 - **evidence dropout**: remove supporting genes with probability p
 
 Expected outcome: coverage should decrease and ABSTAIN reasons should shift in a stress-specific way.
+
+---
+
+## Next
+
+* Start here: **[Getting started](getting-started.md)**
+* End-to-end usage: **[User guide](user-guide.md)**
+* Adapters (inputs → EvidenceTable): see [package](https://github.com/kenflab/LLM-PathwayCurator/tree/main/src/llm_pathway_curator/adapters)
+* API docs: **[API reference](api-reference.md)**
