@@ -21,10 +21,10 @@
 
 ## 🚀 What this is
 
-**LLM-PathwayCurator is an interpretation QA layer for enrichment analysis (EA).**  
+**LLM-PathwayCurator is an interpretation quality-assurance (QA) layer for enrichment analysis.**  
 It **does not** introduce a new enrichment statistic. Instead, it turns EA outputs into **auditable decision objects**:
 
-- **Input:** enrichment term lists (ORA, fgsea/GSEA, etc.)
+- **Input:** enrichment term lists from ORA (e.g., Metascape) or rank-based enrichment (e.g., fgsea, an implementation of the GSEA method)
 - **Output:** **typed, evidence-linked claims** + **PASS/ABSTAIN/FAIL** decisions + **reason-coded audit logs**
 - **Promise:** we **abstain** when claims are **unstable**, **under-supported**, **contradictory**, or **context-nonspecific**
 
