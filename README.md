@@ -40,7 +40,7 @@ It **does not** introduce a new enrichment statistic. Instead, it turns EA outpu
   <em style="max-width: 600px; display: inline-block; line-height: 1.6;">
     Fig. 1a. Overview of LLM-PathwayCurator workflow:<br>
     <strong>EvidenceTable</strong> → <strong>modules</strong> → <strong>claims</strong> → <strong>audits</strong>
-    (<a href="to be added">bioRxiv preprint</a>)
+    (bioRxiv preprint: DOI/link will be added)
   </em>
 </p>
 
@@ -406,7 +406,7 @@ prompt/raw/meta artifacts alongside [`run_meta.json`](https://github.com/kenflab
 
 ## 🧾 Citation
 If you use LLM-PathwayCurator, please cite:
-- bioRxiv preprint: planned (DOI to be added upon posting)
+- bioRxiv preprint: planned (DOI/link will be added)
 - Zenodo archive (v0.1.0): [10.5281/zenodo.18625777](https://doi.org/10.5281/zenodo.18625777)
 - GitHub release tag: [v0.1.0](https://github.com/kenflab/LLM-PathwayCurator/releases/tag/v0.1.0)
 - Software RRID: [RRID:SCR_027964](https://scicrunch.org/resolver/SCR_027964)
