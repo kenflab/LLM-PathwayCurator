@@ -167,4 +167,6 @@ All decisions remain mechanical and are logged.
 ## Notes
 
 - For the underlying design, see **[Concepts](concepts.md)**.
-- For deterministic reproduction (benchmarks/figures/Source Data), follow **[paper/README.md](https://github.com/kenflab/LLM-scCurator/blob/main/paper/README.md)**.
+- For deterministic reproduction (benchmarks/figures/Source Data), follow **[paper/README.md](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper#readme)**.
+
+
