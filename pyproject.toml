@@ -110,6 +110,6 @@ where = ["src"]
 
 [tool.setuptools_scm]
 tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:\\.post\\d+)?(?:a\\d+|b\\d+|rc\\d+)?)$"
-version_scheme = "no-guess-dev"
+version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
 fallback_version = "0.0.0"
