@@ -12,6 +12,29 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Ken Furudate"}]
 
+keywords = [
+  "bioinformatics",
+  "computational-biology",
+  "enrichment-analysis",
+  "pathway-analysis",
+  "quality-assurance",
+  "selective-prediction",
+  "abstention",
+  "gsea",
+  "fgsea",
+  "reproducible-research",
+  "llm",
+]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
 dependencies = [
   "pandas>=2.0",
   "numpy>=1.24",
@@ -20,6 +43,12 @@ dependencies = [
   "matplotlib>=3.8",
   "circlify>=0.15.1",
 ]
+
+[project.urls]
+Documentation = "https://llm-pathwaycurator.readthedocs.io/"
+Repository = "https://github.com/kenflab/LLM-PathwayCurator"
+Issues = "https://github.com/kenflab/LLM-PathwayCurator/issues"
+Preprint = "https://doi.org/10.64898/2026.02.18.706381"
 
 [project.optional-dependencies]
 dev = [
