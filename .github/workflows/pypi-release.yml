@@ -61,7 +61,7 @@ jobs:
           python - <<'PY'
           import os, re
           tag=os.environ.get("GITHUB_REF_NAME","")
-          stable=bool(re.fullmatch(r"v\d+\.\d+\.\d+", tag))
+          stable=bool(re.fullmatch(r"v\d+\.\d+\.\d+(?:\.post\d+)?", tag))
           print(f"tag={tag} stable={stable}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"stable={'true' if stable else 'false'}\n")
