@@ -9,6 +9,7 @@
 </p>
 
 [![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathwaycurator.readthedocs.io/)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-preprint-B31B1B.svg)](https://doi.org/10.64898/2026.02.18.706381)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18625777-6f42c1?style=flat&logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.18625777)
 [![RRID](https://img.shields.io/badge/RRID-SCR_027964-2ea44f?style=flat)](https://scicrunch.org/resolver/SCR_027964)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f1c40f?style=flat)](https://opensource.org/licenses/MIT)
@@ -16,6 +17,7 @@
 
 - **Docs:** [https://llm-pathwaycurator.readthedocs.io/](https://llm-pathwaycurator.readthedocs.io/)
 - **Paper reproducibility (canonical):** [`paper/`](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper) (see [`paper/README.md`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/README.md); panel map in [`paper/FIGURE_MAP.csv`](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/FIGURE_MAP.csv))
+- **Cite:** bioRxiv preprint (DOI: [10.64898/2026.02.18.706381](https://doi.org/10.64898/2026.02.18.706381)).
 
 ---
 
@@ -40,7 +42,7 @@ It **does not** introduce a new enrichment statistic. Instead, it turns EA outpu
   <em style="max-width: 600px; display: inline-block; line-height: 1.6;">
     Fig. 1a. Overview of LLM-PathwayCurator workflow:<br>
     <strong>EvidenceTable</strong> → <strong>modules</strong> → <strong>claims</strong> → <strong>audits</strong>
-    (bioRxiv preprint: DOI/link will be added)
+    (<a href="https://doi.org/10.64898/2026.02.18.706381">bioRxiv preprint</a>)
   </em>
 </p>
 
@@ -406,7 +408,7 @@ prompt/raw/meta artifacts alongside [`run_meta.json`](https://github.com/kenflab
 
 ## 🧾 Citation
 If you use LLM-PathwayCurator, please cite:
-- bioRxiv preprint: planned (DOI/link will be added)
+- bioRxiv preprint (doi: [10.64898/2026.02.18.706381](https://doi.org/10.64898/2026.02.18.706381))
 - Zenodo archive (v0.1.0): [10.5281/zenodo.18625777](https://doi.org/10.5281/zenodo.18625777)
 - GitHub release tag: [v0.1.0](https://github.com/kenflab/LLM-PathwayCurator/releases/tag/v0.1.0)
 - Software RRID: [RRID:SCR_027964](https://scicrunch.org/resolver/SCR_027964)
