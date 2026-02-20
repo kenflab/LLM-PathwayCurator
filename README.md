@@ -1,12 +1,9 @@
 # LLM-PathwayCurator
 
-<p align="left">
-  <img src="https://raw.githubusercontent.com/kenflab/LLM-PathwayCurator/main/docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator"
-       style="vertical-align: middle; margin-right: 10px;">
-  <span style="font-size: 28px; font-weight: 700; vertical-align: middle;">
-     Enrichment interpretations → audited, decision-grade pathway claims.
-  </span>
+<p>
+  <img src="https://raw.githubusercontent.com/kenflab/LLM-PathwayCurator/main/docs/assets/LLM-PathwayCurator_logo.png" width="90" alt="LLM-PathwayCurator">
 </p>
+<h2>Enrichment interpretations → audit-gated, decision-grade claims.</h2>
 
 [![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathwaycurator.readthedocs.io/)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-preprint-B31B1B.svg)](https://doi.org/10.64898/2026.02.18.706381)
