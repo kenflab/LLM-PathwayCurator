@@ -17,4 +17,6 @@ For work on `CRM_R1` or revision Priorities 1-5, first read:
 5. `paper/FIGURE_MAP.csv`
 
 Do not calculate the Priority 1 held-out 72 h endpoint while the protocol status is
-`DRAFT_NOT_FROZEN`.
+`DRAFT_NOT_FROZEN`. Status `FROZEN` is still insufficient until
+`paper/revision/CRM_R1/scripts/17_check_priority1_freeze.py` passes against the immutable external
+freeze manifest.

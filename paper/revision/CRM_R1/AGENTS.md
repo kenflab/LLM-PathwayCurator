@@ -27,7 +27,8 @@ Do not reorder these priorities to improve a result. Follow the dependencies and
 - The primary context is ENDO.
 - The discovery contrast is evaluated at 48 h only.
 - The 72 h data are a held-out temporal replication endpoint.
-- Do not inspect or optimize against 72 h pathway results before the frozen manifest is signed.
+- Do not inspect or optimize against 72 h pathway results before the τ=0.80 frozen manifest exists
+  and `17_check_priority1_freeze.py` passes.
 - The primary input is the raw integer-count matrix.
 - Use the repository-proven edgeR TMM + voom-limma workflow; do not add DESeq2 solely for this
   benchmark.
@@ -44,8 +45,8 @@ Do not reorder these priorities to improve a result. Follow the dependencies and
   biological validation set.
 - Compare empirical-stability PASS membership with coverage-matched q-value selection and a
   leading-edge-size-matched q-value sensitivity analysis.
-- Complete the full 48 h tau grid before selecting an operating point, and describe that point as
-  discovery-calibrated rather than independently prespecified.
+- The full 48 h tau grid is complete and `tau = 0.80` is frozen. Describe that point as
+  discovery-calibrated rather than independently prespecified; do not change it after 72 h release.
 - Raw-versus-PASS alone is not the primary comparison.
 - PASS is a reporting disposition, not biological truth or causality.
 

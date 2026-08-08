@@ -70,10 +70,18 @@ prespecified. The selected tau must provide nondegenerate coverage and a meaning
 difference from the coverage-matched q-value baseline. The full risk-coverage curve remains a
 prespecified sensitivity analysis.
 
-The machine-readable specification is `config/priority1_protocol.json`. Its `primary_tau` remains
-`null` and its status remains `DRAFT_NOT_FROZEN` in this scaffold. A later signed freeze step must
-record the selected tau, exact claim membership, input hashes, and comparator membership before any
-script may calculate the 72 h replication endpoint.
+The discovery-only calibration was completed on 2026-08-08. `tau = 0.80` is frozen as the primary
+operating point: 23 of 50 pathways PASS (coverage 0.46), compared with 15, 10, and 5 at `tau =`
+0.90, 0.95, and 0.98. The empirical selection overlaps the coverage-matched q-value selection for
+16 of 23 claims and the leading-edge-size-matched selection for 17 of 23 claims. Empirical survival
+has Spearman correlations of -0.166 with full pathway size and 0.079 with full-discovery
+leading-edge count, resolving the material size association seen with the V3 synthetic proxy.
+
+The machine-readable specification is `config/priority1_protocol.json`. It records
+`primary_tau = 0.80` and status `FROZEN`. This protocol status alone does not release the held-out
+endpoint. `16_freeze_priority1_membership.py` must write the exact empirical, q-value, size-matched,
+and tau-grid memberships plus their SHA-256 inventory, and `17_check_priority1_freeze.py` must pass
+before any script may calculate a 72 h pathway statistic.
 
 ### Methods compared
 
@@ -100,6 +108,19 @@ After protocol and membership freeze, the primary replication endpoint is same-d
 full-discovery gene universe but recalculates TMM normalization and fits the interaction model using
 72 h samples only.
 
+The primary estimand is the empirical-selection replication fraction minus the q-value-matched
+replication fraction at the identical frozen `K = 23`. Method-specific fractions receive Wilson
+95% confidence intervals. Because 16 pathways are shared, the methods are not independent groups;
+an overlap-aware exact label-randomization reference is calculated on the symmetric difference and
+is interpreted descriptively. The Stop gate is based on the direction of the frozen point estimate,
+not on post hoc endpoint or threshold changes.
+
+Across all 50 pathways, a frozen continuous secondary analysis asks whether 48 h empirical survival
+predicts the binary 72 h replication endpoint. It reports AUROC with a label-permutation reference
+and bootstrap 95% confidence interval. A fixed exploratory logistic sensitivity includes empirical
+survival, negative log10 48 h q-value, and log1p full-discovery leading-edge count; separation or
+non-estimability is reported rather than repaired by changing the model.
+
 ### Analysis boundary
 
 - Priority 1 tests whether empirical discovery-resampling stability predicts held-out temporal
@@ -121,7 +142,10 @@ full-discovery gene universe but recalculates TMM normalization and fits the int
 - `output/priority1/GSE146225_TP53_v1/evidence_tables/discovery_48h_empirical_replicates.tsv`
 - `output/priority1/GSE146225_TP53_v1/sample_cards/discovery_48h_empirical.sample_card.json`
 - `output/priority1/GSE146225_TP53_v1/metrics/empirical_stability_calibration_preview.tsv`
-- `output/priority1/GSE146225_TP53_v1/metrics/selection_membership_empirical_*.tsv`
+- `output/priority1/GSE146225_TP53_v1/metrics/selection_membership_frozen_tau0p80.tsv`
+- `output/priority1/GSE146225_TP53_v1/metrics/selection_membership_tau_grid_frozen.tsv`
+- `output/priority1/GSE146225_TP53_v1/metrics/priority1_freeze_manifest.json`
+- `output/priority1/GSE146225_TP53_v1/metrics/priority1_freeze_manifest.sha256`
 - `output/priority1/GSE146225_TP53_v1/validation/pathway_statistics_72h.tsv`
 - `output/priority1/GSE146225_TP53_v1/metrics/replication_by_method.tsv`
 - `output/priority1/GSE146225_TP53_v1/source_data/figure4.tsv`

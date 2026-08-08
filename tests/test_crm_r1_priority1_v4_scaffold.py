@@ -28,17 +28,20 @@ def load_evidence_module():
     return module
 
 
-def test_v4_protocol_is_discovery_only_and_unfrozen() -> None:
+def test_v5_protocol_preserves_empirical_design_and_freezes_tau() -> None:
     config = json.loads((CRM / "config" / "priority1_protocol.json").read_text())
 
-    assert config["protocol_version"] == "CRM_R1_PRIORITY1_v4"
-    assert config["status"] == "DRAFT_NOT_FROZEN"
+    assert config["protocol_version"] == "CRM_R1_PRIORITY1_v5"
+    assert config["status"] == "FROZEN"
     assert config["primary_analysis"]["context_review_mode"] == "off"
     assert config["primary_analysis"]["context_gate_mode"] == "note"
     assert config["empirical_stability"]["expected_resamples"] == 81
     assert config["empirical_stability"]["distill_mode"] == "replicates_proxy"
-    assert config["empirical_stability"]["primary_tau"] is None
+    assert config["empirical_stability"]["primary_tau"] == 0.8
     assert config["empirical_stability"]["calibration_tau_grid"] == [0.8, 0.9, 0.95, 0.98]
+    assert config["freeze_decision"]["selected_k"] == 23
+    assert config["freeze_decision"]["expected_empirical_q_value_overlap"] == 16
+    assert config["freeze_decision"]["expected_empirical_size_matched_overlap"] == 17
 
 
 def test_resampling_script_has_no_held_out_analysis_path() -> None:

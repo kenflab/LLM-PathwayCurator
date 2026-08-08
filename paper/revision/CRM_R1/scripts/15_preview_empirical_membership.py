@@ -119,10 +119,17 @@ def main() -> None:
     metrics_dir = benchmark_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
-    require(config["status"] == "DRAFT_NOT_FROZEN", "Preview requires draft protocol")
+    require(
+        config["status"] in {"DRAFT_NOT_FROZEN", "FROZEN"},
+        "Preview requires a draft or frozen Priority 1 protocol",
+    )
     require(primary["context_review_mode"] == "off", "Context review must be off")
     require(primary["context_gate_mode"] == "note", "Context gate must be note")
-    require(empirical["primary_tau"] is None, "Config primary_tau must remain null in preview")
+    frozen_tau = empirical["primary_tau"]
+    if config["status"] == "DRAFT_NOT_FROZEN":
+        require(frozen_tau is None, "Draft config primary_tau must remain null")
+    else:
+        require(frozen_tau is not None, "Frozen config primary_tau must be set")
     tau_grid = [float(value) for value in empirical["calibration_tau_grid"]]
     require(len(tau_grid) >= 2, "Calibration grid requires at least two tau values")
     require(tau_grid == sorted(set(tau_grid)), "Calibration tau grid must be sorted and unique")
@@ -229,6 +236,11 @@ def main() -> None:
         matching_tau = [tau for tau in tau_grid if math.isclose(tau, primary_tau, abs_tol=1e-12)]
         require(len(matching_tau) == 1, "--primary-tau must be in the prespecified grid")
         primary_tau = matching_tau[0]
+        if frozen_tau is not None:
+            require(
+                math.isclose(primary_tau, float(frozen_tau), abs_tol=1e-12),
+                "Preview tau cannot differ from the frozen primary tau",
+            )
         audit = pd.read_csv(audit_paths[primary_tau], sep="\t")
         fgsea_path = benchmark_dir / "derived" / "fgsea" / "discovery_48h.tsv"
         require(fgsea_path.is_file(), f"Missing baseline fgsea: {fgsea_path}")

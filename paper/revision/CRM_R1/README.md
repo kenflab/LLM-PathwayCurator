@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_EMPIRICAL81_V4_20260808`
+> Build: `CRM_R1_FREEZE_TAU080_V5_20260808`
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
 This directory contains the minimal code and analysis protocol for the Cell Reports Methods major
@@ -37,7 +37,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
-| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | V4 81-resample scaffold; protocol draft | Figure 4 |
+| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | τ=0.80 frozen; manifest gate ready | Figure 4 |
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Planned | Figure 2 |
 | P3 | Source-masked external database and literature evidence grading | Planned | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | Planned | Figure 2 |
@@ -239,11 +239,25 @@ python paper/revision/CRM_R1/scripts/14_build_empirical_evidence.py \
 Expected stacked EvidenceTable size: one full baseline plus 81 resamples, each containing 50
 pathways, for 4,100 rows.
 
-## 6. Run the discovery-only empirical calibration
+## 6. Completed discovery-only empirical calibration
 
-The protocol contains a fixed calibration grid but intentionally leaves `primary_tau` unset. Run
-all four values before choosing an operating point. Context evaluation is disabled and cannot block
-a claim.
+The fixed calibration grid was completed using only 48 h results. Context evaluation was disabled
+and did not block a claim. The frozen result is:
+
+| tau | PASS | ABSTAIN | coverage |
+| ---: | ---: | ---: | ---: |
+| 0.80 | 23 | 27 | 0.46 |
+| 0.90 | 15 | 35 | 0.30 |
+| 0.95 | 10 | 40 | 0.20 |
+| 0.98 | 5 | 45 | 0.10 |
+
+`tau = 0.80` is the discovery-calibrated primary operating point. At `K = 23`, its overlap is 16
+with the q-value-matched comparator and 17 with the q-value-plus-leading-edge-size-matched
+comparator. Empirical survival has Spearman correlations of -0.166 with pathway size and 0.079 with
+leading-edge count, so the V3 size dependence is not present in the V4 empirical measure.
+
+The commands below are retained only to reproduce the completed calibration. Do not use them to
+select a different operating point after 72 h is released.
 
 ```bash
 export CRM_R1_BENCH="$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1"
@@ -269,21 +283,41 @@ python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
   --data-root "$CRM_R1_DATA_ROOT"
 ```
 
-After reviewing coverage, membership differences, and correlations with full pathway size and
-leading-edge gene count, preview one candidate operating point without freezing it. Replace `0.95`
-only if the complete 48 h calibration supports another prespecified grid value.
+The completed pre-freeze preview was:
 
 ```bash
 python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
   --data-root "$CRM_R1_DATA_ROOT" \
-  --primary-tau 0.95 \
+  --primary-tau 0.80 \
   --force
 ```
 
-This writes q-value matched and q-value-plus-leading-edge-size-matched membership columns. It does
-not update the protocol, freeze membership, or read a 72 h expression outcome.
+This preview does not update the protocol or read a 72 h expression outcome.
 
-## 7. Development checks
+## 7. Create and verify the immutable freeze bundle
+
+Apply and locally commit the V5 code before freezing. The freeze script rejects tracked uncommitted
+changes and refuses to overwrite an existing freeze. `--freeze-label` is a short, public-safe label
+for the deliberate lock; it is not a cryptographic signature.
+
+```bash
+git status --short
+
+python paper/revision/CRM_R1/scripts/16_freeze_priority1_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260808"
+
+python paper/revision/CRM_R1/scripts/17_check_priority1_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The checker must print `[GO]` before any 72 h pathway statistic is calculated. It verifies the
+frozen protocol, `tau = 0.80`, all three exact `K = 23` memberships, the complete tau grid, and every
+recorded input/code SHA-256. It also confirms that no known 72 h validation output existed at
+freeze. The four freeze files beneath `metrics/` are immutable; do not rerun with a different label
+or edit them by hand.
+
+## 8. Development checks
 
 ```bash
 ruff format --check paper/revision/CRM_R1
@@ -302,8 +336,10 @@ revision outputs outside Git.
 4. Run all 81 balanced 48 h delete-one-per-cell analyses.
 5. Build the replicate-stacked EvidenceTable with the production fgsea adapter.
 6. Run the context-off empirical tau calibration and inspect size dependence.
-7. Freeze the selected tau and exact matched memberships without inspecting 72 h outcomes.
-8. After protocol freeze, run 72 h replication, aggregate metrics, and export Figure 4 source data.
+7. Freeze `tau = 0.80`, the exact matched memberships, and the input/code hashes without inspecting
+   72 h outcomes.
+8. Pass the immutable freeze checker.
+9. Run 72 h replication once, apply Stop gate P1, aggregate metrics, and export Figure 4 source data.
 
 Active outputs use the canonical benchmark layout below:
 
@@ -327,7 +363,7 @@ metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/ou
 
 ## Next decision gate
 
-Complete all 81 resamples and all four tau runs, then review the discovery-only calibration and
-membership previews. Do not choose tau automatically. A later freeze update must set `primary_tau`,
-record exact empirical/q-value/size-matched memberships and hashes, and change the protocol to
-`FROZEN`. Do not implement or run 72 h validation before that signed freeze.
+The scientific choice is now frozen at `tau = 0.80`. Generate the immutable freeze bundle and pass
+`17_check_priority1_freeze.py`. Only then implement and run the held-out 72 h endpoint once. If the
+empirical-selection replication point estimate is not greater than the q-value-matched estimate,
+apply Stop gate P1 without using literature or human ratings to rescue the result.

@@ -91,10 +91,16 @@ primary <- config$primary_analysis
 empirical <- config$empirical_stability
 benchmark_id <- config$benchmark_id
 
-require_true(identical(config$status, "DRAFT_NOT_FROZEN"), paste(
-  "V4 resampling scaffold expects DRAFT_NOT_FROZEN; observed:",
+require_true(config$status %in% c("DRAFT_NOT_FROZEN", "FROZEN"), paste(
+  "Empirical resampling expects a draft or frozen Priority 1 protocol; observed:",
   config$status
 ))
+if (identical(config$status, "FROZEN")) {
+  require_true(
+    isTRUE(all.equal(as.numeric(empirical$primary_tau), 0.8)),
+    "Frozen Priority 1 protocol must retain primary_tau = 0.80"
+  )
+}
 require_true(identical(as.integer(primary$discovery_time_h), 48L), "Discovery time must be 48 h")
 require_true(identical(as.integer(empirical$expected_resamples), 81L), "Expected 81 resamples")
 require_true(

@@ -71,7 +71,12 @@ def main() -> None:
     benchmark_id = str(config["benchmark_id"])
     benchmark_dir = data_root / "output" / "priority1" / benchmark_id
 
-    require(config["status"] == "DRAFT_NOT_FROZEN", "V4 evidence build expects draft protocol")
+    require(
+        config["status"] in {"DRAFT_NOT_FROZEN", "FROZEN"},
+        "Empirical evidence build expects a draft or frozen Priority 1 protocol",
+    )
+    if config["status"] == "FROZEN":
+        require(float(empirical["primary_tau"]) == 0.8, "Frozen primary_tau must remain 0.80")
     require(empirical["distill_mode"] == "replicates_proxy", "Unexpected distill mode")
     expected_resamples = int(empirical["expected_resamples"])
     expected_pathways = int(primary["candidate_pool_size"])
