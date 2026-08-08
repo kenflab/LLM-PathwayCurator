@@ -1,0 +1,64 @@
+{
+  "protocol_version": "CRM_R1_PRIORITY1_v3",
+  "scaffold_build": "CRM_R1_DISCOVERY48_V3_20260808",
+  "benchmark_id": "GSE146225_TP53_v1",
+  "status": "DRAFT_NOT_FROZEN",
+  "freeze_rule": "Change status to FROZEN before calculating any 72 h pathway endpoint.",
+  "dataset": {
+    "accession": "GSE146225",
+    "expression_file": "GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+    "expression_sha256": "8f712a3c2a63b4b43b76f1748f24ac9620a26bd66b15fb17af373e816fb76500",
+    "metadata_file": "GSE146225_series_matrix.txt",
+    "metadata_sha256": "0c0646a44c0290c1c22706c2088717dc16c9b98b247731dd96592778f1be11f3",
+    "expected_gene_rows": 39376,
+    "expected_samples": 60
+  },
+  "primary_analysis": {
+    "cell_state": "ENDO",
+    "discovery_time_h": 48,
+    "validation_time_h": 72,
+    "expression_input": "raw non-negative integer counts",
+    "gene_filter": "edgeR::filterByExpr using the 48 h ENDO discovery subset only",
+    "gene_universe_rule": "freeze the 48 h filtered genes and apply the same universe at 72 h",
+    "normalization": "edgeR TMM, calculated separately within each time point",
+    "model": "voom-limma 2 x 2 interaction model, fitted separately at 48 h and 72 h",
+    "fgsea_ranking_statistic": "moderated t-statistic for the interaction contrast",
+    "contrast": "(WT_MMS - WT_UT) - (TP53_KO_MMS - TP53_KO_UT)",
+    "positive_direction": "stronger MMS response in WT than TP53_KO",
+    "gene_set_collection": "MSigDB Hallmark",
+    "gene_id_type": "NCBI Gene/Entrez",
+    "fgsea_algorithm": "fgseaMultilevel",
+    "fgsea_min_size": 15,
+    "fgsea_max_size": 500,
+    "fgsea_seed": 2026,
+    "primary_proposal_mode": "deterministic LLM-free",
+    "secondary_proposal_mode": "LLM-assisted, analyzed separately",
+    "context_gate_mode": "hard",
+    "audit_tau": 0.8,
+    "candidate_pool_size": 50,
+    "replication_fdr_threshold": 0.05,
+    "replication_rule": "same 48 h and 72 h NES sign and 72 h BH FDR < 0.05"
+  },
+  "primary_comparison": "full_audit versus q_value_matched",
+  "methods": [
+    "raw_pool",
+    "q_value_matched",
+    "stability_only_matched",
+    "full_audit",
+    "random_matched_secondary"
+  ],
+  "secondary_endpoints": [
+    "same_direction_without_72h_fdr_requirement",
+    "spearman_correlation_of_48h_and_72h_nes",
+    "coverage_versus_non_replication_risk"
+  ],
+  "guardrails": [
+    "Do not use a normalized expression matrix as the primary differential-expression input.",
+    "Do not add DESeq2 solely for this benchmark; reuse the existing edgeR, voom, and limma pattern.",
+    "Do not use 72 h counts to choose the discovery gene filter or gene-set universe.",
+    "Do not use an LLM-assisted proposal run as the primary Priority 1 analysis.",
+    "Do not optimize candidate generation, tau, gene sets, or replication rules using 72 h outcomes.",
+    "Do not describe 72 h as an independent cohort.",
+    "Do not interpret audit PASS as biological truth, mechanism, causality, or clinical utility."
+  ]
+}
