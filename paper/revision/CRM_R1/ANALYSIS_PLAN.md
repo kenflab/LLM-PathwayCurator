@@ -10,12 +10,12 @@ This is a working analysis protocol, not a rebuttal letter. It may become part o
 reproducibility record after the analyses are frozen and internal editorial notes are excluded.
 Pushing it to any branch of the public repository would make it public immediately.
 
-## Priority 1: direct-perturbation temporal replication
+## Priority 1: empirical discovery stability and held-out temporal replication
 
-This is the first go/no-go analysis because it is objective, the data are available, and the held-out
-endpoint does not require human plausibility judgments.
+This is the first go/no-go analysis because it uses an objective discovery-only resampling measure
+and a held-out expression time point. It does not require human plausibility judgments.
 
-### Prespecified design
+### Full 48 h discovery analysis
 
 - Dataset: GSE146225, human hiPSCs with WT or TP53 knockout, untreated or MMS treated.
 - Benchmark ID: `GSE146225_TP53_v1`.
@@ -28,43 +28,87 @@ endpoint does not require human plausibility judgments.
 
 - Positive values mean a stronger MMS response in WT than in TP53-knockout cells.
 - Expression input: supplied raw integer-count matrix.
-- Gene filtering and normalization: edgeR `filterByExpr` and TMM on the 48 h discovery subset.
-- Expression model: voom-limma 2 x 2 interaction, ranked by the moderated t-statistic.
-- The 48 h-filtered gene universe is frozen and applied unchanged at 72 h; normalization and model
-  fitting are performed separately at each time point.
-- Primary gene-set collection: MSigDB Hallmark.
-- Gene identifiers: NCBI Gene/Entrez IDs in the count matrix and Hallmark gene sets.
-- Primary proposal mode: deterministic and LLM-free; LLM-assisted proposal generation is secondary.
-- Audit operating point: tau = 0.8.
-- Primary replication endpoint: the 72 h pathway has the same NES direction as at 48 h and
-  Benjamini-Hochberg FDR < 0.05.
+- Gene filtering: edgeR `filterByExpr` on the twelve 48 h ENDO discovery samples.
+- Normalization and model: edgeR TMM followed by a voom-limma 2 x 2 interaction model.
+- Ranking statistic: moderated t-statistic for the interaction contrast.
+- The full 48 h-filtered gene universe is frozen before resampling and later applied unchanged at
+  72 h. Normalization and model fitting are performed separately in each analysis.
+- Primary gene-set collection: the full-discovery MSigDB Hallmark snapshot.
+- Gene identifiers: NCBI Gene/Entrez IDs.
+- Primary proposal mode: deterministic and LLM-free.
 
-The machine-readable specification is `config/priority1_protocol.json`. Its status must be changed
-from `DRAFT_NOT_FROZEN` to `FROZEN` before a script may calculate the 72 h replication endpoint.
-All PASS/ABSTAIN/FAIL decisions are mechanical in both deterministic and optional LLM-assisted runs.
+### Empirical 48 h stability
+
+The V3 synthetic evidence-set perturbation was associated with pathway size and is not used as the
+primary Priority 1 stability measure. It remains a secondary implementation stress test only.
+
+The V4 primary discovery stability is calculated by exhaustive balanced deletion:
+
+1. Each of the four genotype-treatment cells contains three discovery samples.
+2. One sample is deleted from each cell and the other two are retained.
+3. All `3^4 = 81` balanced combinations are analyzed.
+4. Every resample uses the full-discovery frozen gene universe.
+5. TMM normalization and the same voom-limma interaction are refitted within each resample.
+6. `fgseaMultilevel` is rerun against the frozen Hallmark snapshot.
+7. Production `replicates_proxy` distillation compares each resample with the full 48 h baseline.
+
+A pathway survives a resample when its enrichment direction agrees with the full analysis and its
+leading-edge evidence meets the frozen Jaccard, recall, and precision thresholds. Empirical term
+survival is the fraction of the 81 resamples that survive. This is sample-resampling stability, not
+independent biological replication.
+
+Context review is disabled for Priority 1 because neither a deterministic hash proxy nor an LLM
+plausibility judgment is an objective held-out biological endpoint. The context gate is nonblocking
+(`note`), and the stability gate remains mechanical (`hard`).
+
+### Discovery-only operating-point calibration
+
+The empirical calibration grid is `tau = 0.80, 0.90, 0.95, 0.98`. All four runs must be completed
+using only 48 h outputs. The primary tau is then selected and recorded before any 72 h pathway
+statistic is calculated. The choice is described as discovery-calibrated, not independently
+prespecified. The selected tau must provide nondegenerate coverage and a meaningful membership
+difference from the coverage-matched q-value baseline. The full risk-coverage curve remains a
+prespecified sensitivity analysis.
+
+The machine-readable specification is `config/priority1_protocol.json`. Its `primary_tau` remains
+`null` and its status remains `DRAFT_NOT_FROZEN` in this scaffold. A later signed freeze step must
+record the selected tau, exact claim membership, input hashes, and comparator membership before any
+script may calculate the 72 h replication endpoint.
 
 ### Methods compared
 
-All methods start from the identical 48 h Hallmark candidate pool.
+All methods start from the identical full-discovery 48 h Hallmark candidate pool.
 
 1. Raw pool: descriptive reference only.
-2. q-value matched: top K pathways by 48 h q-value, where K equals full-audit PASS coverage.
-3. Stability-only matched: top K pathways by supporting-gene stability; q-value breaks ties.
-4. Full audit: the prespecified LLM-PathwayCurator PASS set at tau = 0.8.
-5. Random matched: repeated random K-pathway selections; secondary reference only.
+2. q-value matched: top K pathways by 48 h q-value, where K equals empirical-audit PASS coverage.
+3. Empirical-stability audit: PASS claims based on 81 balanced 48 h resamples.
+4. q-value and leading-edge-size matched: lowest-q pathways within four deterministic
+   equal-frequency leading-edge-size strata, matching the empirical selection count in every
+   stratum; sensitivity analysis.
+5. Synthetic evidence perturbation: implementation stress test only; not a primary biological
+   stability measure.
+6. Random matched: repeated random K-pathway selections; secondary reference only.
 
-The primary comparison is full audit versus q-value matched. Stability-only is the mechanistic
-ablation. Raw versus PASS is not sufficient because it confounds quality with reporting fewer
-claims.
+The primary comparison is empirical-stability audit versus q-value matched at identical K. The
+size-matched comparator tests whether any difference can be explained by supporting-gene-set size.
+Raw versus PASS alone is insufficient because it confounds quality with reporting fewer claims.
+
+### Held-out endpoint
+
+After protocol and membership freeze, the primary replication endpoint is same-direction 48 h and
+72 h NES together with 72 h Benjamini-Hochberg FDR below 0.05. The 72 h analysis uses the frozen
+full-discovery gene universe but recalculates TMM normalization and fits the interaction model using
+72 h samples only.
 
 ### Analysis boundary
 
-- Priority 1 tests held-out temporal replication after a direct TP53 perturbation.
+- Priority 1 tests whether empirical discovery-resampling stability predicts held-out temporal
+  replication after a direct TP53 perturbation.
+- It validates one objective audit component, not the complete semantic audit workflow.
 - It does not establish independent-cohort replication.
 - It does not prove mechanism, causality beyond the experimental contrast, or clinical utility.
-- Context swap and supporting-gene dropout remain internal stress tests, not external validation.
-- Human ratings and literature grading belong to later priorities and must not define or rescue this
-  endpoint.
+- Context review, human ratings, and literature grading belong to later priorities and must not
+  define or rescue this endpoint.
 - A normalized expression matrix is not used in the primary differential-expression analysis.
 
 ### Required outputs
@@ -72,10 +116,12 @@ claims.
 - `output/priority1/GSE146225_TP53_v1/preflight/sample_metadata.normalized.tsv`
 - `output/priority1/GSE146225_TP53_v1/derived/rankings/discovery_48h.tsv`
 - `output/priority1/GSE146225_TP53_v1/derived/fgsea/discovery_48h.tsv`
-- `output/priority1/GSE146225_TP53_v1/evidence_tables/discovery_48h.tsv`
-- `output/priority1/GSE146225_TP53_v1/sample_cards/discovery_48h.sample_card.json`
-- `output/priority1/GSE146225_TP53_v1/out_audit/discovery_48h/audit_log.tsv`
-- `output/priority1/GSE146225_TP53_v1/metrics/selection_membership.tsv`
+- `output/priority1/GSE146225_TP53_v1/derived/empirical_resampling_48h/resample_manifest.tsv`
+- `output/priority1/GSE146225_TP53_v1/derived/empirical_resampling_48h/fgsea_resamples.tsv`
+- `output/priority1/GSE146225_TP53_v1/evidence_tables/discovery_48h_empirical_replicates.tsv`
+- `output/priority1/GSE146225_TP53_v1/sample_cards/discovery_48h_empirical.sample_card.json`
+- `output/priority1/GSE146225_TP53_v1/metrics/empirical_stability_calibration_preview.tsv`
+- `output/priority1/GSE146225_TP53_v1/metrics/selection_membership_empirical_*.tsv`
 - `output/priority1/GSE146225_TP53_v1/validation/pathway_statistics_72h.tsv`
 - `output/priority1/GSE146225_TP53_v1/metrics/replication_by_method.tsv`
 - `output/priority1/GSE146225_TP53_v1/source_data/figure4.tsv`
@@ -85,16 +131,16 @@ membership.
 
 ### Planned Figure 4 panels
 
-- A: experimental design and 48 h discovery / 72 h validation split.
-- B: 48 h versus 72 h NES with audit disposition highlighted.
-- C: held-out replication fraction for matched methods, with 95% confidence intervals.
-- D: coverage versus non-replication risk, with the frozen operating point marked.
+- A: full 48 h discovery, 81 balanced resamples, freeze, and held-out 72 h validation.
+- B: empirical survival versus held-out replication, with the frozen threshold marked.
+- C: held-out replication fraction for empirical and matched methods with 95% confidence intervals.
+- D: coverage versus non-replication risk across the frozen tau grid.
 
 ### Stop gate P1
 
-If full audit does not improve the point estimate over the coverage-matched q-value baseline, do not
-add human rating or literature work to rescue Priority 1. Narrow or revise the manuscript claim
-before proceeding.
+If empirical-stability selection does not improve the held-out replication point estimate over the
+coverage-matched q-value baseline, do not use literature or human ratings to rescue Priority 1.
+Report the negative component-validation result and narrow the manuscript claim before proceeding.
 
 ## Priority 2: same-pool audit benchmark
 

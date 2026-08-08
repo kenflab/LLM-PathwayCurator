@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_DISCOVERY48_V3_20260808`  
+> Build: `CRM_R1_EMPIRICAL81_V4_20260808`
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
 This directory contains the minimal code and analysis protocol for the Cell Reports Methods major
@@ -37,7 +37,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
-| P1 | GSE146225 direct-perturbation 48 h to held-out 72 h replication | 48 h scripts ready; protocol draft | Figure 4 |
+| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | V4 81-resample scaffold; protocol draft | Figure 4 |
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Planned | Figure 2 |
 | P3 | Source-masked external database and literature evidence grading | Planned | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | Planned | Figure 2 |
@@ -185,16 +185,21 @@ $CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/sample_metadata.n
 $CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/design_counts.tsv
 ```
 
-## 4. Run the 48 h discovery pipeline
+## 4. Reuse the verified V3 full-discovery outputs
 
-The following commands calculate only the prespecified ENDO 48 h discovery analysis. The DE script
-streams only the twelve 48 h discovery columns from the raw count matrix; it does not load the 72 h
-expression columns.
+V4 does not replace the verified full 48 h ranking or fgsea result. Reuse these existing files:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/rankings/discovery_48h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/rankings/discovery_48h_gene_universe.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/fgsea/discovery_48h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/fgsea/hallmark_gene_sets.tsv
+```
+
+If they do not exist, run the V3-compatible full-discovery scripts once. Both scripts load only the
+twelve ENDO 48 h discovery columns.
 
 ```bash
-python paper/revision/CRM_R1/scripts/10_make_sample_card.py \
-  --data-root "$CRM_R1_DATA_ROOT"
-
 Rscript paper/revision/CRM_R1/scripts/11_discovery_48h.R \
   --data-root "$CRM_R1_DATA_ROOT"
 
@@ -202,33 +207,83 @@ Rscript paper/revision/CRM_R1/scripts/12_fgsea_48h.R \
   --data-root "$CRM_R1_DATA_ROOT"
 ```
 
-`12_fgsea_48h.R` writes the raw fgsea result, the complete Hallmark Entrez gene-set snapshot, the
-ranking-overlap table, run metadata, and R session information. Convert the raw result through the
-production adapter:
+Do not rerun these verified outputs merely because V4 was installed.
+
+## 5. Run the V4 81-resample discovery analysis
+
+Create a new empirical-resampling Sample Card. Its filename is different from the V3 card, so the
+earlier synthetic-perturbation artifact remains intact.
 
 ```bash
-llm-pathway-curator adapt --format fgsea \
-  --input "$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/fgsea/discovery_48h.tsv" \
-  --output "$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/evidence_tables/discovery_48h.tsv"
+python paper/revision/CRM_R1/scripts/10_make_sample_card.py \
+  --data-root "$CRM_R1_DATA_ROOT"
 ```
 
-Then run the deterministic primary proposal and mechanical audit at the prespecified operating
-point:
+Run all balanced combinations obtained by deleting one sample from each of the four 48 h factorial
+cells. Each run retains eight samples, recalculates TMM normalization, refits voom-limma, and reruns
+fgsea using the frozen full-discovery gene universe and Hallmark snapshot.
 
 ```bash
-llm-pathway-curator run \
-  --evidence-table "$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/evidence_tables/discovery_48h.tsv" \
-  --sample-card "$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/sample_cards/discovery_48h.sample_card.json" \
-  --outdir "$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/out_audit/discovery_48h" \
-  --tau 0.8 \
-  --k-claims 50 \
-  --seed 42
+Rscript paper/revision/CRM_R1/scripts/13_resample_discovery_48h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
 ```
 
-Do not add `--force` on a first run. Use it only for an intentional rerun after preserving or
-removing the earlier output.
+The expected output is 81 resamples x 50 pathways = 4,050 fgsea rows. Build a replicate-stacked
+EvidenceTable through the production fgsea adapter:
 
-## 5. Development checks
+```bash
+python paper/revision/CRM_R1/scripts/14_build_empirical_evidence.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Expected stacked EvidenceTable size: one full baseline plus 81 resamples, each containing 50
+pathways, for 4,100 rows.
+
+## 6. Run the discovery-only empirical calibration
+
+The protocol contains a fixed calibration grid but intentionally leaves `primary_tau` unset. Run
+all four values before choosing an operating point. Context evaluation is disabled and cannot block
+a claim.
+
+```bash
+export CRM_R1_BENCH="$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1"
+
+for TAU in 0.80 0.90 0.95 0.98; do
+  TAG="${TAU/./p}"
+  LLMPATH_CONTEXT_REVIEW_MODE=off \
+  LLMPATH_CONTEXT_GATE_MODE=note \
+  llm-pathway-curator run \
+    --evidence-table "$CRM_R1_BENCH/evidence_tables/discovery_48h_empirical_replicates.tsv" \
+    --sample-card "$CRM_R1_BENCH/sample_cards/discovery_48h_empirical.sample_card.json" \
+    --outdir "$CRM_R1_BENCH/out_audit/discovery_48h_empirical_ctxoff_note_tau_${TAG}_calibration_v1" \
+    --tau "$TAU" \
+    --k-claims 50 \
+    --seed 42
+done
+```
+
+Validate monotonic membership and write the discovery-only calibration table:
+
+```bash
+python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+After reviewing coverage, membership differences, and correlations with full pathway size and
+leading-edge gene count, preview one candidate operating point without freezing it. Replace `0.95`
+only if the complete 48 h calibration supports another prespecified grid value.
+
+```bash
+python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --primary-tau 0.95 \
+  --force
+```
+
+This writes q-value matched and q-value-plus-leading-edge-size-matched membership columns. It does
+not update the protocol, freeze membership, or read a 72 h expression outcome.
+
+## 7. Development checks
 
 ```bash
 ruff format --check paper/revision/CRM_R1
@@ -242,12 +297,13 @@ This follows the same organization as `paper/scripts/README.md` while keeping ra
 revision outputs outside Git.
 
 1. Validate inputs and normalize metadata: `00_preflight.py`.
-2. Generate the GSE146225 Sample Card.
-3. Compute the 48 h edgeR/voom-limma interaction ranking.
-4. Run Hallmark `fgseaMultilevel`, then adapt its result to an EvidenceTable.
-5. Run LLM-PathwayCurator and mechanical audits.
-6. Freeze claim-pool and matched-method membership without inspecting 72 h outcomes.
-7. After protocol freeze, run 72 h replication, aggregate metrics, and export Figure 4 source data.
+2. Reuse or compute the full 48 h ranking, frozen gene universe, and Hallmark fgsea snapshot.
+3. Generate the V4 empirical-resampling Sample Card.
+4. Run all 81 balanced 48 h delete-one-per-cell analyses.
+5. Build the replicate-stacked EvidenceTable with the production fgsea adapter.
+6. Run the context-off empirical tau calibration and inspect size dependence.
+7. Freeze the selected tau and exact matched memberships without inspecting 72 h outcomes.
+8. After protocol freeze, run 72 h replication, aggregate metrics, and export Figure 4 source data.
 
 Active outputs use the canonical benchmark layout below:
 
@@ -271,8 +327,7 @@ metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/ou
 
 ## Next decision gate
 
-Review the 48 h discovery outputs, freeze the claim-pool and matched-method membership without
-calculating a 72 h pathway statistic, and sign the protocol manifest. The production adapter only
-converts fgsea output to the EvidenceTable contract; it does not perform differential expression or
-fgsea. Do not implement or run 72 h validation until `config/priority1_protocol.json` has been
-scientifically reviewed and changed to `FROZEN`.
+Complete all 81 resamples and all four tau runs, then review the discovery-only calibration and
+membership previews. Do not choose tau automatically. A later freeze update must set `primary_tau`,
+record exact empirical/q-value/size-matched memberships and hashes, and change the protocol to
+`FROZEN`. Do not implement or run 72 h validation before that signed freeze.

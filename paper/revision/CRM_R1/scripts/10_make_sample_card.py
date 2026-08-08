@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the prespecified Priority 1 discovery Sample Card."""
+"""Create the V4 empirical-resampling Priority 1 discovery Sample Card."""
 
 from __future__ import annotations
 
@@ -66,6 +66,7 @@ def main() -> None:
     config_path = args.config.expanduser().resolve()
     config = read_json(config_path)
     primary = config["primary_analysis"]
+    empirical = config["empirical_stability"]
     benchmark_id = str(config["benchmark_id"])
     discovery_time_h = int(primary["discovery_time_h"])
     primary_state = str(primary["cell_state"])
@@ -105,9 +106,9 @@ def main() -> None:
         / "priority1"
         / benchmark_id
         / "sample_cards"
-        / "discovery_48h.sample_card.json"
+        / "discovery_48h_empirical.sample_card.json"
     )
-    meta_path = output_path.with_name("discovery_48h.sample_card.run_meta.json")
+    meta_path = output_path.with_name("discovery_48h_empirical.sample_card.run_meta.json")
     existing = [path for path in (output_path, meta_path) if path.exists()]
     require(args.force or not existing, f"Outputs already exist; use --force: {existing}")
 
@@ -120,8 +121,9 @@ def main() -> None:
         "comparison": contrast,
         "k_claims": int(primary["candidate_pool_size"]),
         "notes": (
-            "GSE146225 discovery analysis restricted to ENDO at 48 h. Positive enrichment "
-            f"means {positive_direction}. The 72 h endpoint remains held out."
+            "GSE146225 discovery analysis restricted to ENDO at 48 h. Empirical stability is "
+            "calculated from 81 balanced delete-one-per-factorial-cell reanalyses. Positive "
+            f"enrichment means {positive_direction}. The 72 h endpoint remains held out."
         ),
         "context_tokens_text": (
             "human induced pluripotent stem cell definitive endoderm DNA damage MMS TP53 knockout"
@@ -129,12 +131,22 @@ def main() -> None:
         "extra": {
             "accession": str(config["dataset"]["accession"]),
             "audit_tau": float(primary["audit_tau"]),
+            "audit_tau_status": str(primary["audit_tau_status"]),
             "benchmark_id": benchmark_id,
             "cell_state": primary_state,
             "context_gate_mode": str(primary["context_gate_mode"]),
+            "context_review_mode": str(primary["context_review_mode"]),
             "contrast": contrast,
             "discovery_only": True,
             "discovery_time_h": discovery_time_h,
+            "distill_evidence_jaccard_min": float(empirical["evidence_jaccard_min"]),
+            "distill_evidence_precision_min": float(empirical["evidence_precision_min"]),
+            "distill_evidence_recall_min": float(empirical["evidence_recall_min"]),
+            "distill_loo_baseline_id": str(empirical["baseline_replicate_id"]),
+            "distill_loo_direction_match": bool(empirical["require_direction_match"]),
+            "distill_mode": str(empirical["distill_mode"]),
+            "empirical_resampling_expected": int(empirical["expected_resamples"]),
+            "empirical_resampling_method": str(empirical["method_id"]),
             "gene_id_map_tsv": "resources/gene_id_maps/id_map.tsv.gz",
             "gene_id_type": str(primary["gene_id_type"]),
             "gene_set_collection": str(primary["gene_set_collection"]),
@@ -144,6 +156,7 @@ def main() -> None:
             "proposal_mode": str(primary["primary_proposal_mode"]),
             "protocol_status": str(config["status"]),
             "protocol_version": str(config["protocol_version"]),
+            "stability_gate_mode": str(primary["stability_gate_mode"]),
             "validation_time_h": int(primary["validation_time_h"]),
         },
     }
@@ -153,6 +166,14 @@ def main() -> None:
     parsed = SampleCard.from_json(output_path)
     require(parsed.k_claims() == int(primary["candidate_pool_size"]), "Sample Card k mismatch")
     require(parsed.audit_tau() == float(primary["audit_tau"]), "Sample Card tau mismatch")
+    require(
+        parsed.extra.get("distill_mode") == "replicates_proxy",
+        "Sample Card must use replicates_proxy",
+    )
+    require(
+        parsed.extra.get("context_review_mode") == "off",
+        "Priority 1 context review must be off",
+    )
 
     metadata = {
         "benchmark_id": benchmark_id,
@@ -171,8 +192,9 @@ def main() -> None:
     }
     write_json(meta_path, metadata)
 
-    print("[PASS] Priority 1 discovery Sample Card")
+    print("[PASS] Priority 1 V4 empirical-resampling Sample Card")
     print(f"[INFO] Discovery samples encoded: {len(discovery)} ({primary_state}, 48 h)")
+    print(f"[INFO] Expected balanced resamples: {int(empirical['expected_resamples'])}")
     print("[INFO] Held-out expression outcomes calculated: false")
     print(f"[INFO] Wrote: {output_path}")
 

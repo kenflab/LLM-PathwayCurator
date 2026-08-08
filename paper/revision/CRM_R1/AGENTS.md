@@ -38,7 +38,14 @@ Do not reorder these priorities to improve a result. Follow the dependencies and
 - Run `fgseaMultilevel` in R, then use the production fgsea adapter to create the EvidenceTable.
 - Use deterministic proposal generation as the primary Priority 1 run. Any LLM-assisted proposal
   run is secondary and stored separately; PASS/ABSTAIN/FAIL always remains mechanical.
-- Compare the full audit with coverage-matched q-value and stability-only baselines.
+- For Priority 1, use the 81-run balanced empirical-resampling stability as the primary audit
+  component and keep synthetic evidence-set perturbation secondary.
+- Disable context review for Priority 1; a hash proxy or LLM judgment must not define the held-out
+  biological validation set.
+- Compare empirical-stability PASS membership with coverage-matched q-value selection and a
+  leading-edge-size-matched q-value sensitivity analysis.
+- Complete the full 48 h tau grid before selecting an operating point, and describe that point as
+  discovery-calibrated rather than independently prespecified.
 - Raw-versus-PASS alone is not the primary comparison.
 - PASS is a reporting disposition, not biological truth or causality.
 
