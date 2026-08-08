@@ -576,6 +576,20 @@ def _is_na_scalar(x: Any) -> bool:
     return _shared.is_na_scalar(x)
 
 
+def _context_evaluated_bool(value: Any, *, default: bool = False) -> bool:
+    """Normalize a scalar context-evaluated flag without treating ``"False"`` as true."""
+    if _is_na_scalar(value):
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return bool(default)
+
+
 def _parse_ids(x: Any) -> list[str]:
     """
     Parse an ID list from flexible inputs.
@@ -1152,18 +1166,41 @@ def _synthesize_claim_json_row(row: pd.Series, card: SampleCard) -> str:
         "context_notes",
     ]
     ctx_review: dict[str, Any] = {}
-    for c in ctx_review_cols:
-        if c in row.index and not _is_na_scalar(row.get(c)):
-            value = row.get(c)
-            if c == "context_evaluated":
-                value = bool(value)
-            else:
-                value = str(value).strip()
-            if c == "context_method" and value == "proxy_context_v2":
-                value = "proxy"
-            if c == "context_status" and value == "ABSTAIN":
-                value = "WARN"
-            ctx_review[c] = value
+    if any(c in row.index for c in ctx_review_cols):
+        evaluated = _context_evaluated_bool(row.get("context_evaluated"), default=False)
+        ctx_review["context_evaluated"] = evaluated
+        if not evaluated:
+            ctx_review.update(
+                {
+                    "context_method": "none",
+                    "context_status": None,
+                    "context_reason": None,
+                    "context_notes": None,
+                }
+            )
+        else:
+            method = str(row.get("context_method", "") or "").strip().lower()
+            method = "llm" if method.startswith("llm") else "proxy"
+            status = str(row.get("context_status", "") or "").strip().upper()
+            status = "WARN" if status == "ABSTAIN" else status
+            if status not in {"PASS", "WARN", "FAIL"}:
+                status = "WARN"
+
+            def _optional_text(name: str, limit: int) -> str | None:
+                value = row.get(name)
+                if _is_na_scalar(value):
+                    return None
+                text = str(value).strip()
+                return text[:limit] if text else None
+
+            ctx_review.update(
+                {
+                    "context_method": method,
+                    "context_status": status,
+                    "context_reason": _optional_text("context_reason", 160),
+                    "context_notes": _optional_text("context_notes", 400),
+                }
+            )
 
     claim_id = str(row.get("claim_id", "") or "").strip()
     if not claim_id:
@@ -2892,16 +2929,6 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
     if "claim_json" not in out.columns:
         return out
 
-    # Only fields declared by Claim belong in claim_json. Confidence, gate mode,
-    # and review mode remain explicit columns and run metadata.
-    fields = [
-        "context_evaluated",
-        "context_method",
-        "context_status",
-        "context_reason",
-        "context_notes",
-    ]
-
     def _merge_row(s: str, row: pd.Series) -> str:
         s = str(s or "").strip()
         if not s:
@@ -2913,24 +2940,42 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(obj, dict):
             return s
 
-        for k in fields:
-            if k in row.index and not _is_na_scalar(row.get(k)):
-                v = row.get(k)
+        # Remove legacy extras that are row/run metadata rather than Claim fields.
+        for extra_key in (
+            "context",
+            "context_confidence",
+            "context_gate_mode",
+            "context_review_mode",
+        ):
+            obj.pop(extra_key, None)
 
-                # Pandas frequently stores booleans as numpy.bool_, which is not
-                # JSON serializable. Normalize every strict Claim field explicitly.
-                if k == "context_evaluated":
-                    v = bool(v)
+        evaluated = _context_evaluated_bool(
+            row.get("context_evaluated", obj.get("context_evaluated", False)),
+            default=False,
+        )
+        obj["context_evaluated"] = evaluated
+        if not evaluated:
+            obj["context_method"] = "none"
+            obj["context_status"] = None
+            obj["context_reason"] = None
+            obj["context_notes"] = None
+        else:
+            method = str(row.get("context_method", obj.get("context_method", "")) or "")
+            method = method.strip().lower()
+            obj["context_method"] = "llm" if method.startswith("llm") else "proxy"
+
+            status = str(row.get("context_status", obj.get("context_status", "")) or "")
+            status = status.strip().upper()
+            status = "WARN" if status == "ABSTAIN" else status
+            obj["context_status"] = status if status in {"PASS", "WARN", "FAIL"} else "WARN"
+
+            for name, limit in (("context_reason", 160), ("context_notes", 400)):
+                value = row.get(name, obj.get(name))
+                if _is_na_scalar(value):
+                    obj[name] = None
                 else:
-                    v = str(v).strip()
-
-                if isinstance(v, (pd.Timestamp,)):
-                    v = str(v)
-                if isinstance(v, (bytes, bytearray)):
-                    v = v.decode("utf-8", errors="replace")
-                if isinstance(v, (pd.Series, pd.DataFrame)):
-                    v = str(v)
-                obj[k] = v
+                    text = str(value).strip()
+                    obj[name] = text[:limit] if text else None
 
         try:
             return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
@@ -4494,6 +4539,24 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         context_review_mode = _norm_review_mode(
             compat_final.get("review_mode", context_review_mode), default="proxy"
         )
+
+        # Propagate the effective modes into the card used by every downstream
+        # component, including audit.py, which resolves modes from card.extra.
+        try:
+            card_effective = card.model_copy(deep=True)
+        except Exception:
+            card_effective = card
+        effective_extra = dict(getattr(card_effective, "extra", {}) or {})
+        effective_extra["context_gate_mode"] = context_gate_mode
+        effective_extra["context_review_mode"] = context_review_mode
+        card_effective.extra = effective_extra
+        card = card_effective
+
+        sc_effective_path = outdir / "sample_card.effective.json"
+        _write_json(sc_effective_path, _dump_model(card))
+        meta["artifacts"]["sample_card_effective_json"] = str(sc_effective_path)
+        meta.setdefault("inputs", {}).setdefault("sample", {})
+        meta["inputs"]["sample"]["sample_card_effective_sha256"] = _sha256_file(sc_effective_path)
 
         meta.setdefault("inputs", {}).setdefault("claims", {})
         meta["inputs"]["claims"]["context_gate_review_compat_final"] = compat_final

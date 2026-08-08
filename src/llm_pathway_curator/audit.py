@@ -2486,7 +2486,12 @@ def audit_claims(
         #     (context_score / proxy mode).
         #     This restores swap effect (swap_penalty) and avoids row_fallback masking it.
         if (not c_eval) and (not str(c_status or "").strip()):
-            if (context_review_mode == "proxy") or (cs_val is not None):
+            # An explicit review=off must remain off even when a numeric proxy
+            # score is present for ranking or provenance.
+            proxy_requested = context_review_mode == "proxy" or (
+                context_review_mode not in {"off", "llm"} and cs_val is not None
+            )
+            if proxy_requested:
                 # If row has true LLM outputs (context_review_*), we must NOT override them.
                 has_llm_cols = (
                     ("context_review_evaluated" in row.index)

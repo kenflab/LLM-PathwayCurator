@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -8,9 +9,12 @@ import pytest
 from llm_pathway_curator.audit import audit_claims
 from llm_pathway_curator.claim_schema import Claim
 from llm_pathway_curator.pipeline import (
+    RunConfig,
     _apply_context_gate_to_audited,
+    _apply_context_review,
     _proxy_context_review,
     _synthesize_claim_json_row,
+    run_pipeline,
 )
 from llm_pathway_curator.sample_card import SampleCard
 
@@ -125,6 +129,106 @@ def test_synthesized_claim_json_contains_only_strict_claim_fields():
     assert "context_confidence" not in payload
     assert "context_gate_mode" not in payload
     assert "context_review_mode" not in payload
+
+
+def test_off_mode_writes_schema_valid_unevaluated_claim_and_does_not_reproxy():
+    claim, term_uid, genes = _base_claim()
+    proposed = pd.DataFrame(
+        [
+            {
+                "claim_id": claim.claim_id,
+                "claim_json": claim.model_dump_json(by_alias=True),
+                "entity": term_uid,
+                "direction": "up",
+                "term_uid": term_uid,
+                "context_gate_hit": False,
+                # A ranking/provenance score must not reactivate review=off.
+                "context_score": 0.01,
+            }
+        ]
+    )
+    card = SampleCard(
+        condition="ENDO",
+        extra={"context_gate_mode": "note", "context_review_mode": "off"},
+    )
+
+    reviewed, meta = _apply_context_review(
+        proposed,
+        card,
+        gate_mode="note",
+        review_mode="off",
+        backend=None,
+        seed=42,
+        distilled_for_proxy=None,
+    )
+
+    assert meta["evaluated"] is False
+    assert reviewed.loc[0, "context_method"] == "off"
+    assert reviewed.loc[0, "context_status"] == "UNEVALUATED"
+
+    parsed = Claim.model_validate_json(reviewed.loc[0, "claim_json"])
+    assert parsed.context_evaluated is False
+    assert parsed.context_method == "none"
+    assert parsed.context_status is None
+    assert parsed.context_reason is None
+    assert parsed.context_notes is None
+
+    distilled = pd.DataFrame(
+        [
+            {
+                "term_uid": term_uid,
+                "term_id": "HALLMARK_P53_PATHWAY",
+                "source": "fgsea",
+                "evidence_genes": genes,
+                "term_survival": 1.0,
+            }
+        ]
+    )
+    audited = audit_claims(reviewed, distilled, card, tau=0.8)
+    row = audited.iloc[0]
+    assert row["status"] == "PASS"
+    assert bool(row["context_evaluated"]) is False
+    assert row["context_status"] == ""
+    assert bool(row["context_gate_blocked"]) is False
+    assert bool(row["context_gate_hit"]) is False
+
+
+def test_pipeline_effective_context_modes_reach_audit(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLMPATH_CONTEXT_REVIEW_MODE", "off")
+    monkeypatch.setenv("LLMPATH_CONTEXT_GATE_MODE", "note")
+    repository = Path(__file__).resolve().parents[1]
+    demo = repository / "examples" / "demo"
+    outdir = tmp_path / "context_off_note"
+
+    run_pipeline(
+        RunConfig(
+            evidence_table=str(demo / "evidence_table.tsv"),
+            sample_card=str(demo / "sample_card.json"),
+            outdir=str(outdir),
+            force=True,
+            seed=42,
+            tau=0.8,
+            k_claims=20,
+        )
+    )
+
+    proposed = pd.read_csv(outdir / "claims.proposed.tsv", sep="\t")
+    audit = pd.read_csv(outdir / "audit_log.tsv", sep="\t")
+    effective_card = json.loads((outdir / "sample_card.effective.json").read_text())
+
+    for value in proposed["claim_json"]:
+        parsed = Claim.model_validate_json(value)
+        assert parsed.context_evaluated is False
+        assert parsed.context_method == "none"
+        assert parsed.context_status is None
+
+    assert effective_card["extra"]["context_review_mode"] == "off"
+    assert effective_card["extra"]["context_gate_mode"] == "note"
+    assert not audit["context_evaluated"].astype(bool).any()
+    assert not audit["context_gate_blocked"].astype(bool).any()
+    assert not audit["context_gate_hit"].astype(bool).any()
+    assert not audit["abstain_reason"].fillna("").str.contains("context").any()
+    assert not audit["fail_reason"].fillna("").str.contains("context").any()
 
 
 @pytest.mark.parametrize(
