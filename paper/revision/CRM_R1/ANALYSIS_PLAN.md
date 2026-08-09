@@ -121,6 +121,23 @@ and bootstrap 95% confidence interval. A fixed exploratory logistic sensitivity 
 survival, negative log10 48 h q-value, and log1p full-discovery leading-edge count; separation or
 non-estimability is reported rather than repaired by changing the model.
 
+### Frozen Priority 1 result
+
+The held-out endpoint was released once after the operational freeze and evaluated without changing
+tau, membership, endpoint, or comparators. At `tau = 0.80`, 18 of 23 empirical-stability claims
+replicated at 72 h, compared with 17 of 23 coverage-matched q-value claims and 16 of 23
+q-value-plus-leading-edge-size-matched claims. The frozen empirical-minus-q-value difference was
+`+1/23` (`+0.0435`), so the prespecified point-estimate Stop gate passed. The overlap-aware exact
+reference was not significant (one-sided `P = 0.50`; two-sided `P = 1.00`) and remains descriptive.
+
+Across all 50 pathways, empirical survival discriminated the held-out binary replication endpoint
+with AUROC `0.713` (stratified-bootstrap 95% CI `0.558-0.857`; label-permutation `P = 0.0055`). The
+fixed adjusted logistic coefficient for standardized empirical survival was positive but did not
+reach conventional significance (`P = 0.065`). These results support empirical stability as an
+objective component-level ranking signal; they do not establish a statistically detectable
+discrete-set advantage, independent-cohort replication, or validation of the complete semantic
+audit workflow.
+
 ### Analysis boundary
 
 - Priority 1 tests whether empirical discovery-resampling stability predicts held-out temporal
@@ -153,18 +170,30 @@ non-estimability is reported rather than repaired by changing the model.
 No plotting script may recompute differential expression, enrichment, audit decisions, or method
 membership.
 
-### Planned Figure 4 panels
+### Frozen Figure 4 panels
 
 - A: full 48 h discovery, 81 balanced resamples, freeze, and held-out 72 h validation.
-- B: empirical survival versus held-out replication, with the frozen threshold marked.
-- C: held-out replication fraction for empirical and matched methods with 95% confidence intervals.
-- D: coverage versus non-replication risk across the frozen tau grid.
+- B: empirical survival versus held-out replication across all 50 pathways, with the frozen
+  threshold, AUROC, bootstrap interval, and permutation reference shown.
+- C: held-out replication fraction for empirical, q-value-matched, and
+  q-value-plus-leading-edge-size-matched methods with Wilson 95% confidence intervals; the primary
+  overlap-aware exact `P = 0.50` is shown without a significance symbol.
+- D: coverage versus non-replication risk across the frozen tau grid, including the non-monotonic
+  sensitivity pattern and the frozen primary point.
+
+The Figure 4 message is: **Empirical discovery stability stratifies held-out temporal pathway
+replication.** The plotting layer reads only the frozen `source_data/figure4.tsv` and evaluation
+summary and must not recalculate an analytical endpoint.
 
 ### Stop gate P1
 
 If empirical-stability selection does not improve the held-out replication point estimate over the
 coverage-matched q-value baseline, do not use literature or human ratings to rescue Priority 1.
 Report the negative component-validation result and narrow the manuscript claim before proceeding.
+
+The observed point estimate was positive (`18/23` versus `17/23`), so Priority 1 passed this
+prespecified operational gate. The small effect and descriptive exact result must remain visible;
+the gate is not interpreted as proof of statistical superiority.
 
 ## Priority 2: same-pool audit benchmark
 

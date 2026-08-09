@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_HELDOUT72_V6_20260808`
+> Build: `CRM_R1_FIG4_RENDER_V7_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -38,7 +38,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
-| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | τ=0.80 frozen; V6 held-out code ready | Figure 4 |
+| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | Complete; Stop gate PASS; V7 render ready | Figure 4 |
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Planned | Figure 2 |
 | P3 | Source-masked external database and literature evidence grading | Planned | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | Planned | Figure 2 |
@@ -374,7 +374,38 @@ values are secondary and cannot reverse the gate.
 Neither script has a `--force` path. Do not delete, rename, overwrite, or manually edit a completed
 72 h output to rerun the endpoint.
 
-## 10. Development checks
+## 10. Render frozen Figure 4
+
+Figure 4 rendering is deliberately separated from endpoint calculation. The plotting script reads
+only the SHA-256-verified `source_data/figure4.tsv`, the frozen replication summary, and the
+evaluation run metadata. It does not read expression, fgsea, audit, or membership inputs and does
+not recalculate an endpoint.
+
+Commit V7 locally and leave tracked files clean, then run:
+
+```bash
+python paper/revision/CRM_R1/scripts/90_plot_priority1_figure4.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Outputs:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.pdf
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.png
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.run_meta.json
+```
+
+The default is an 8-by-8-inch, four-panel figure with a 12-point base font, embedded TrueType fonts
+in PDF, a 600 dpi PNG, and a colorblind-accessible blue/orange/purple palette. The primary
+`18/23` versus `17/23` result and exact one-sided `P = 0.50` remain visible. AUROC is explicitly
+identified as a continuous secondary analysis, and the size-matched method remains a sensitivity
+analysis. `--force` may replace only these rendered figure files and render metadata; it never
+changes an analytical output.
+
+The draft panel legend is `FIGURE4_LEGEND_DRAFT.md`.
+
+## 11. Development checks
 
 ```bash
 ruff format --check paper/revision/CRM_R1
@@ -399,6 +430,7 @@ revision outputs outside Git.
 9. Commit V6 without reading 72 h outcomes.
 10. Run `18_validation_72h.R` once.
 11. Run `19_evaluate_replication.py` once, apply Stop gate P1, and export Figure 4 source data.
+12. Render Figure 4 from the frozen source table without recomputing an endpoint.
 
 Active outputs use the canonical benchmark layout below:
 
@@ -422,7 +454,9 @@ metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/ou
 
 ## Next decision gate
 
-The scientific choice and operational freeze are complete at `tau = 0.80`. After V6 is tested and
-committed locally, run scripts `18` and `19` once. If the empirical-selection replication point
-estimate is not greater than the q-value-matched estimate, apply Stop gate P1 without using
-literature or human ratings to rescue the result.
+Priority 1 is complete. At the frozen operating point, empirical selection replicated 18 of 23
+pathways versus 17 of 23 for the q-value-matched comparator, so the prespecified point-estimate Stop
+gate passed. The exact one-sided reference was `P = 0.50`, whereas continuous empirical survival
+showed AUROC 0.713 (bootstrap 95% CI 0.558-0.857; permutation `P = 0.0055`). Preserve both results
+without threshold changes or rescue analyses. Render Figure 4, then proceed to the separately
+frozen Priority 2 candidate-pool design.

@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_HELDOUT72_V6_20260808`
+> Build: `CRM_R1_FIG4_RENDER_V7_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -33,6 +33,7 @@ benchmark IDs. Plotting scripts only read final source tables and never recomput
 | `17_check_priority1_freeze.py` | frozen manifest and recorded files | Verify protocol, membership, code/data hashes, and the pre-72 h gate before validation is released |
 | `18_validation_72h.R` | `11_discovery_48h.R`, `12_fgsea_48h.R`, and the freeze checker | Run the same interaction at ENDO 72 h once using the frozen discovery universe and Hallmark snapshot |
 | `19_evaluate_replication.py` | frozen membership, 72 h fgsea, and frozen inference specification | Apply the binary endpoint, matched comparisons, intervals, exact reference, continuous analyses, Stop gate, and Figure 4 source export |
+| `90_plot_priority1_figure4.py` | frozen `source_data/figure4.tsv` and evaluation metadata | Verify source hashes and render the four-panel PDF/PNG without recalculating any endpoint |
 | `llm-pathway-curator adapt --format fgsea` | `src/llm_pathway_curator/adapters/fgsea.py` | Convert raw fgsea output to the validated EvidenceTable contract |
 | Mechanical audit | production `llm-pathway-curator run` and orchestration patterns from `paper/scripts/fig2_run_pipeline.py` | Run deterministic distill/modules/claims/audit/report and record run metadata |
 
@@ -81,6 +82,9 @@ Rscript paper/revision/CRM_R1/scripts/18_validation_72h.R \
 
 python paper/revision/CRM_R1/scripts/19_evaluate_replication.py \
   --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/90_plot_priority1_figure4.py \
+  --data-root "$CRM_R1_DATA_ROOT"
 ```
 
 | Script | Primary outputs | Held-out protection |
@@ -95,6 +99,7 @@ python paper/revision/CRM_R1/scripts/19_evaluate_replication.py \
 | `17_check_priority1_freeze.py` | freeze integrity gate | Recomputes recorded hashes and releases 72 h analysis only when the immutable bundle is consistent |
 | `18_validation_72h.R` | 72 h ranking/design/pathway statistics and run metadata | Runs the checker first, streams only twelve ENDO 72 h columns, never refilters the frozen universe, and has no force option |
 | `19_evaluate_replication.py` | frozen replication metrics, Stop gate summary, and Figure 4 source table | Rechecks freeze integrity in post-validation mode and refuses all output overwrites |
+| `90_plot_priority1_figure4.py` | Figure 4 PDF, 600 dpi PNG, and render metadata | Reads only hash-verified frozen figure source and summary tables; no analytical calculation is permitted |
 
 Analytical scripts refuse to overwrite existing outputs unless explicitly documented. Freeze
 outputs are stricter: `16_freeze_priority1_membership.py` never overwrites them. The full and
