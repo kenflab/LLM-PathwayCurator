@@ -1,0 +1,26 @@
+{
+  "protocol_version": "CRM_R1_PRIORITY4_v1",
+  "status": "PACKET_SCHEMA_FROZEN_BEFORE_RATING",
+  "population": "all_50_frozen_priority2_claims",
+  "minimum_independent_raters": 3,
+  "rater_qualification": "Experience interpreting pathway enrichment and biological literature; disease-specific expertise is not required for initial independent ratings.",
+  "mask_fields": [
+    "claim_uid",
+    "audit_status",
+    "method_membership",
+    "term_survival",
+    "context_status",
+    "context_reason",
+    "context_confidence"
+  ],
+  "questions": {
+    "q1_statistical_support": ["SUPPORTED", "PARTIALLY_SUPPORTED", "NOT_SUPPORTED", "UNCERTAIN"],
+    "q2_external_evidence": ["DIRECT", "INDIRECT", "NO_SUPPORT", "CONTRADICTED", "UNCERTAIN"],
+    "q3_overstatement": ["NO_OVERSTATEMENT", "MINOR_OVERSTATEMENT", "MAJOR_OVERSTATEMENT", "UNCERTAIN"]
+  },
+  "confidence_scale": [1, 2, 3, 4, 5],
+  "packet_literature_limit_per_query_family": 5,
+  "primary_human_outcome": "MAJOR_OVERSTATEMENT by majority vote",
+  "secondary_human_outcome": "MINOR_OVERSTATEMENT or MAJOR_OVERSTATEMENT by majority vote",
+  "adjudication": "Disease-specialist adjudication is limited to ties or predefined direct-evidence disagreements and is reported separately from independent ratings."
+}

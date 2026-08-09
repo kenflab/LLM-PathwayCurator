@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_PRIORITY2_FREEZE_V8_20260809`
+> Build: `CRM_R1_PRIORITY3_4_PACKETS_V9_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -10,8 +10,8 @@ Keep scripts small and numbered by analytical priority. Do not create empty plac
 | `00_` | Input-only preflight | `00_preflight.py` |
 | `1x_` | P1 perturbation replication | `10_make_sample_card.py` through `19_evaluate_replication.py` |
 | `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py`, `21_check_priority2_freeze.py` |
-| `3x_` | P3 external evidence ledger | `30_build_evidence_queries.py` |
-| `4x_` | P4 blinded review and agreement | `40_make_blinded_packets.py` |
+| `3x_` | P3 fixed PubMed retrieval and evidence ledger | `30_fetch_priority3_pubmed.py`, `31_check_priority3_retrieval.py` |
+| `4x_` | P4 blinded review and packet integrity | `40_make_blinded_packets.py`, `41_check_priority4_packets.py` |
 | `5x_` | P5 ontology and utility robustness | `50_ontology_validation.py` |
 | `9x_` | Rendering and final export validation | `90_render_figures.R` |
 
@@ -61,6 +61,49 @@ $CRM_R1_DATA_ROOT/output/priority2/PANCAN_TP53_v1_HNSC_R1/
 `21_check_priority2_freeze.py` verifies every recorded hash, exact row membership, equal matched K,
 and the 50-claim blinded-review census. P3 and P4 must pass this gate before reading the pool. The
 risk fields remain explicitly pending until independent P3/P4 outcomes are locked.
+
+## Priorities 3 and 4 executable contract
+
+`30_fetch_priority3_pubmed.py` runs the P2 checker first, then applies all three protocol queries to
+each of the 50 frozen `review_id` records. It supplies the required NCBI `tool` and contact-email
+parameters, enforces the no-key and API-key request rates, freezes raw ESearch/EFetch responses, and
+refuses overwrite. The API key is never persisted. Abstract text and raw XML use `.private` names
+and must remain outside public Source Data.
+
+`31_check_priority3_retrieval.py` recomputes every recorded hash, verifies exactly 150 claim-query
+rows and the identical three-family design for each claim, reconciles linked/fetched PMIDs, confirms
+that grading fields are blank, and rejects method-field leakage.
+
+`40_make_blinded_packets.py` runs both upstream gates and creates one common claim packet, one
+private literature packet, and three empty rater templates. The packet contains no claim UID, audit
+status, method membership, stability, or context-review result. `41_check_priority4_packets.py`
+recomputes hashes, confirms that all 50 claims occur in each template, verifies the per-family
+literature limit, and refuses release if any rating field has already been edited.
+
+Run only after V9 has been locally committed and the P2 gate passes:
+
+```bash
+export CRM_R1_P3_SEARCH_DATE="$(date +%F)"
+export NCBI_EMAIL="your_valid_institutional_email@example.org"
+
+python paper/revision/CRM_R1/scripts/30_fetch_priority3_pubmed.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --email "$NCBI_EMAIL" \
+  --search-date "$CRM_R1_P3_SEARCH_DATE" \
+  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE"
+
+python paper/revision/CRM_R1/scripts/31_check_priority3_retrieval.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/40_make_blinded_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/41_check_priority4_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Keep the P3 grading fields blank through the P4 packet check. The P4 builder reruns the P3 checker;
+grading and independent rating begin only after the immutable blank packets pass script 41.
 
 ## Executable 48 h steps
 

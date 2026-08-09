@@ -1,7 +1,7 @@
 # Codex instructions for CRM_R1
 
 Before changing files in this directory, read `ANALYSIS_PLAN.md` and
-`config/priority1_protocol.json`, then use `paper/scripts/README.md` and
+the relevant protocol under `config/`, then use `paper/scripts/README.md` and
 `paper/FIGURE_MAP.csv` as the canonical publication-pipeline conventions.
 
 ## Scope
@@ -49,6 +49,20 @@ Do not reorder these priorities to improve a result. Follow the dependencies and
   discovery-calibrated rather than independently prespecified; do not change it after 72 h release.
 - Raw-versus-PASS alone is not the primary comparison.
 - PASS is a reporting disposition, not biological truth or causality.
+
+## Priorities 2-4 guardrails
+
+- Priority 2 is frozen at 50 HNSC Hallmark claims, `tau = 0.90`, and matched `K = 25`. Do not
+  change claim wording, method membership, or randomized review IDs after the freeze.
+- Apply every Priority 3 query family to every claim. Do not adapt query depth or synonyms using
+  audit disposition, method membership, or preliminary literature results.
+- Keep PubMed abstracts, raw ESearch/EFetch artifacts, contact email, and API credentials outside
+  public Git and public Source Data. The API key must never be persisted.
+- Do not start evidence grading until `31_check_priority3_retrieval.py` passes.
+- P4 packets must mask claim UID, audit status, method membership, stability, and context-review
+  fields. Give raters only copied rating templates and keep the frozen blanks unchanged.
+- Do not unblind P3/P4 or calculate method-level outcomes until all grading and rating files are
+  complete and locked.
 
 ## Reproducibility
 

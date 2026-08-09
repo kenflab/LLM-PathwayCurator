@@ -213,7 +213,7 @@ significant claims?
   raw versus PASS alone is insufficient.
 - Sample human-review claims from the pre-audit pool, never by preferentially sampling PASS claims.
 
-### V8 operationalization (not yet frozen)
+### V8 operationalization (frozen)
 
 - The primary P2 benchmark is the canonical HNSC Hallmark pool: 50 directional claims from
   `PANCAN_TP53_v1`.
@@ -228,6 +228,8 @@ significant claims?
   membership are withheld from the distributed packet.
 - LLM context judgments are a method component under evaluation, not reference truth. Their errors
   are retained for P3/P4 rather than manually corrected.
+- The completed freeze contains 50 claims and matched `K = 25`; full-audit overlap is 13/25 with
+  q-value matching and 15/25 with mechanical-stability matching.
 
 ### Deliverables
 
@@ -250,11 +252,16 @@ claim?
 
 ### Design
 
-- Freeze database releases, query templates, synonyms, search date, and retrieved records.
+- Freeze query templates, synonyms, search date, publication cutoff, and retrieved records.
 - Mask any source used for enrichment or candidate generation when selecting validation evidence.
-- Grade evidence as E0 (not established), E1 (general association), E2 (direct contextual
-  association), E3 (same comparison and direction), or E4 (perturbation or independent-cohort
-  support). Record `contradicted` separately; do not equate E0 with false.
+- Apply three identical query families to every frozen claim: HNSC + TP53 + pathway, HNSC +
+  pathway, and TP53 + pathway. Freeze the top ten PubMed best matches per family before grading.
+- Grade evidence as E0 (no eligible support in the frozen retrieval), E1 (general relevance), E2
+  (partial HNSC-pathway or TP53-pathway context), E3 (direction-matched independent HNSC TP53
+  relationship), or E4 (matched TP53 perturbation or prospectively independent validation).
+  Record contradiction separately; do not equate E0 with false.
+- Primary independent support requires E3/E4, direction match, and independent data. Same or
+  possibly overlapping TCGA data cannot qualify for that endpoint.
 - Score context, direction, and study-design match rather than publication count.
 - Stratify or adjust summaries for literature abundance to expose publication bias.
 
@@ -293,10 +300,11 @@ format; never collapse duplicate `claim_id` rows before agreement analysis.
 
 ### Primary outputs
 
-- Human non-accept risk among reported claims: `(SHOULD_ABSTAIN + REJECT) / reported`.
-- Paired or stratified bootstrap 95% confidence interval for the matched risk difference.
-- ACCEPT, SHOULD_ABSTAIN, and REJECT proportions with Wilson 95% confidence intervals.
-- Weighted Cohen's kappa or Krippendorff's alpha with 95% confidence interval.
+- Primary human risk: majority `MAJOR_OVERSTATEMENT` among claims reported by each matched method.
+- Secondary human risk: majority `MINOR_OVERSTATEMENT` or `MAJOR_OVERSTATEMENT`.
+- Paired claim-level bootstrap 95% confidence interval for matched risk differences.
+- Question-level response proportions with Wilson 95% confidence intervals.
+- Ordinal inter-rater agreement with a bootstrap 95% confidence interval.
 
 ### Figure target
 

@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_PRIORITY2_FREEZE_V8_20260809`
+> Build: `CRM_R1_PRIORITY3_4_PACKETS_V9_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -39,9 +39,9 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
 | P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | Complete; Stop gate PASS; V7 render ready | Figure 4 |
-| P2 | Same-pool unaudited/audited benchmark with matched baselines | V8 code ready; not frozen | Figure 2 |
-| P3 | Source-masked external database and literature evidence grading | Starts only after P2 checker passes | Figure 2 |
-| P4 | Narrow blinded evidence review and inter-rater agreement | 50-claim census locked by P2 | Figure 2 |
+| P2 | Same-pool unaudited/audited benchmark with matched baselines | Frozen: 50 claims; matched K=25 | Figure 2 |
+| P3 | Fixed PubMed retrieval and independent evidence grading | V9 retrieval/grading ledger ready | Figure 2 |
+| P4 | Narrow blinded evidence review and inter-rater agreement | V9 three-rater packet ready | Figure 2 |
 | P5 | GO/Reactome hierarchy, utility robustness, and final integration | Starts after P2; final utility waits for P3/P4 | Figure 3 + Supplement |
 
 ## What becomes public
@@ -520,6 +520,72 @@ python paper/revision/CRM_R1/scripts/21_check_priority2_freeze.py \
 The freeze refuses pool mismatch, missing LLM context evaluations, dirty tracked code, output
 overwrite, or pre-existing P3-P5 results. Do not grade literature or distribute review packets until
 the checker prints `[GO]`. LLM context errors are outcomes to evaluate, not records to hand-correct.
+
+The completed P2 freeze contains 50 candidates and matched `K = 25`. Full audit overlaps the
+q-value-matched rule for 13 of 25 selected claims and the stability-matched rule for 15 of 25.
+Threshold, membership, and randomized `review_id` assignments must not change after this point.
+
+## Priority 3: fixed PubMed retrieval before evidence grading
+
+V9 applies the same three PubMed query families to every frozen claim: HNSC + TP53 + pathway,
+HNSC + pathway, and TP53 + pathway. Each query returns at most the top ten best-match records and
+uses the same publication-type exclusions. The retrieval is a census, not an adaptive search:
+audit status and method membership never determine which claim is searched or how deeply it is
+searched.
+
+Set a valid contact email required by NCBI and use the actual retrieval date. An NCBI API key is
+optional; if present in `NCBI_API_KEY`, it is used only for rate limiting and is never written to an
+artifact.
+
+```bash
+export CRM_R1_P3_SEARCH_DATE="$(date +%F)"
+export NCBI_EMAIL="your_valid_institutional_email@example.org"
+
+python paper/revision/CRM_R1/scripts/30_fetch_priority3_pubmed.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --email "$NCBI_EMAIL" \
+  --search-date "$CRM_R1_P3_SEARCH_DATE" \
+  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE"
+
+python paper/revision/CRM_R1/scripts/31_check_priority3_retrieval.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Commit V9 locally and leave tracked files clean before running retrieval. The fetcher refuses an
+existing output, so do not rerun it after success. It writes a hash-locked query manifest, query-to-
+PMID links, private abstract records, and a blank private screening ledger. Grade only the frozen
+ledger using E0-E4, direction match, study design, and data-overlap fields. E0 means no eligible
+support in this fixed retrieval; it does not mean that a claim is false. Only direction-matched E3
+or E4 evidence with `INDEPENDENT` data overlap qualifies for the primary independent-support
+endpoint.
+
+Abstract text and raw PubMed XML remain private external artifacts. Public Source Data may contain
+PMIDs, retrieval metadata, coded grades, and concise author-written rationales, but not copied
+abstracts or the NCBI contact email.
+
+## Priority 4: prepare the three method-blinded review packets
+
+After the P3 checker prints `[GO]`, create and validate the packets:
+
+```bash
+python paper/revision/CRM_R1/scripts/40_make_blinded_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/41_check_priority4_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Do not edit the P3 screening ledger before these P4 packets are frozen: the P4 builder deliberately
+reruns the P3 pre-grading checker. Begin P3 grading and distribute copied P4 rating templates only
+after `41_check_priority4_packets.py` passes.
+
+The claim packet shows the fixed wording, enrichment statistic, q-value, and up to 20 supporting
+genes. The literature packet supplies at most five frozen records per query family. It omits claim
+UID, audit disposition, method membership, empirical stability, and context-review outputs. Three
+blank rating templates ask independently about statistical support, external-evidence directness,
+and wording overstatement. Give each rater a copy of only their assigned template plus the common
+claim, literature, and instruction files; do not reveal method membership until all ratings are
+returned and locked.
 
 ## Next decision gate
 
