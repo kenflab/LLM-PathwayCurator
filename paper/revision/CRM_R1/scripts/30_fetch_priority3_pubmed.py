@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -70,7 +72,7 @@ def git_value(*arguments: str) -> str:
 
 def require_clean_tracked_worktree() -> None:
     status = git_value("status", "--porcelain", "--untracked-files=no")
-    require(not status, f"Commit V9 and leave tracked files clean before retrieval: {status}")
+    require(not status, f"Commit V9.1 and leave tracked files clean before retrieval: {status}")
 
 
 def validate_iso_date(value: str, *, name: str) -> str:
@@ -156,19 +158,24 @@ class NCBIClient:
         tool: str,
         email: str,
         api_key: str = "",
+        ssl_context: Any | None = None,
         requester: Callable[[urllib.request.Request, float], bytes] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.tool = tool
         self.email = email
         self.api_key = api_key
+        self.ssl_context = ssl_context
         self.interval_seconds = 0.11 if api_key else 0.36
         self.last_request = 0.0
         self.requester = requester or self._default_requester
 
-    @staticmethod
-    def _default_requester(request: urllib.request.Request, timeout: float) -> bytes:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+    def _default_requester(self, request: urllib.request.Request, timeout: float) -> bytes:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+            context=self.ssl_context,
+        ) as response:
             return response.read()
 
     def request(self, endpoint: str, parameters: dict[str, Any]) -> bytes:
@@ -196,6 +203,13 @@ class NCBIClient:
                 return body
             except (urllib.error.URLError, TimeoutError) as caught:
                 error = caught
+                reason = getattr(caught, "reason", None)
+                if isinstance(reason, ssl.SSLCertVerificationError):
+                    raise RuntimeError(
+                        "NCBI TLS certificate verification failed. On a managed macOS host, "
+                        "install truststore and rerun with --use-system-trust; do not disable "
+                        "certificate verification."
+                    ) from caught
                 if attempt == 3:
                     break
                 time.sleep(2**attempt)
@@ -232,6 +246,30 @@ class NCBIClient:
             "efetch.fcgi",
             {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"},
         )
+
+
+def build_tls_context(*, use_system_trust: bool) -> tuple[Any | None, dict[str, Any]]:
+    """Return an explicit native trust context only when the caller requests it."""
+    if not use_system_trust:
+        verify_paths = ssl.get_default_verify_paths()
+        return None, {
+            "mode": "python_default",
+            "openssl_cafile": verify_paths.cafile or "",
+            "ssl_cert_file_env_supplied": bool(os.environ.get("SSL_CERT_FILE", "").strip()),
+        }
+    try:
+        import truststore
+    except ImportError as error:
+        raise RuntimeError(
+            "--use-system-trust requires: python -m pip install 'truststore==0.10.4'"
+        ) from error
+    context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    version = importlib.metadata.version("truststore")
+    return context, {
+        "mode": "macos_native_system_trust",
+        "implementation": "truststore",
+        "truststore_version": version,
+    }
 
 
 def parse_pubmed_xml(xml_bytes: bytes) -> pd.DataFrame:
@@ -418,6 +456,11 @@ def main() -> None:
     parser.add_argument("--search-date", required=True)
     parser.add_argument("--publication-cutoff", required=True)
     parser.add_argument("--api-key-env", default="NCBI_API_KEY")
+    parser.add_argument(
+        "--use-system-trust",
+        action="store_true",
+        help="Use native macOS trust with verified TLS through truststore.",
+    )
     parser.add_argument("--p2-config", type=Path, default=DEFAULT_P2_CONFIG)
     parser.add_argument("--p3-config", type=Path, default=DEFAULT_P3_CONFIG)
     parser.add_argument("--p2-checker", type=Path, default=DEFAULT_P2_CHECKER)
@@ -471,11 +514,13 @@ def main() -> None:
     require(not collisions, f"P3 retrieval is immutable; output collisions: {collisions}")
 
     api_key = os.environ.get(str(args.api_key_env), "").strip()
+    ssl_context, tls_metadata = build_tls_context(use_system_trust=bool(args.use_system_trust))
     client = NCBIClient(
         base_url=str(p3_protocol["base_url"]),
         tool=str(p3_protocol["tool_name"]),
         email=email,
         api_key=api_key,
+        ssl_context=ssl_context,
     )
     query_rows: list[dict[str, Any]] = []
     link_rows: list[dict[str, Any]] = []
@@ -609,6 +654,7 @@ def main() -> None:
         "retmax_per_query": int(p3_protocol["retmax_per_query"]),
         "api_key_used": bool(api_key),
         "contact_email_supplied": True,
+        "tls_verification": tls_metadata,
         "candidate_claims": len(claims_for_grading),
         "queries": len(query_manifest),
         "claim_record_links": len(links),

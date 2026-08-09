@@ -73,6 +73,18 @@ def test_priority3_client_uses_required_contact_fields_and_does_not_mutate_respo
     assert result["esearchresult"]["idlist"] == ["123"]
 
 
+def test_priority3_tls_modes_never_disable_certificate_verification() -> None:
+    module = load_script("30_fetch_priority3_pubmed.py")
+    context, metadata = module.build_tls_context(use_system_trust=False)
+    assert context is None
+    assert metadata["mode"] == "python_default"
+    source = (CRM / "scripts" / "30_fetch_priority3_pubmed.py").read_text()
+    assert "--use-system-trust" in source
+    assert "truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)" in source
+    assert "_create_unverified_context" not in source
+    assert "CERT_NONE" not in source
+
+
 def test_priority3_xml_parser_and_blank_grading_template() -> None:
     module = load_script("30_fetch_priority3_pubmed.py")
     xml = b"""<PubmedArticleSet><PubmedArticle><MedlineCitation>
@@ -220,5 +232,6 @@ def test_v9_scripts_refuse_overwrite_and_keep_private_abstracts_out_of_public_so
     assert "blinded_literature.private.tsv" in packet
     assert "grading_is_blank" in checker
     assert '"contact_email": email' not in fetch
+    assert '"tls_verification": tls_metadata' in fetch
     assert "require_clean_tracked_worktree()" in fetch
     assert "require_clean_tracked_worktree()" in packet

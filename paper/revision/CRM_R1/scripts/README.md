@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_PRIORITY3_4_PACKETS_V9_20260809`
+> Build: `CRM_R1_PRIORITY3_TLS_V9_1_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -70,6 +70,11 @@ parameters, enforces the no-key and API-key request rates, freezes raw ESearch/E
 refuses overwrite. The API key is never persisted. Abstract text and raw XML use `.private` names
 and must remain outside public Source Data.
 
+For managed macOS networks whose institutional CA is present in Keychain but absent from Python's
+static CA bundle, `--use-system-trust` selects a pinned `truststore` native context without disabling
+TLS verification. The selected trust mode and package version are recorded in the retrieval
+manifest.
+
 `31_check_priority3_retrieval.py` recomputes every recorded hash, verifies exactly 150 claim-query
 rows and the identical three-family design for each claim, reconciles linked/fetched PMIDs, confirms
 that grading fields are blank, and rejects method-field leakage.
@@ -85,12 +90,14 @@ Run only after V9 has been locally committed and the P2 gate passes:
 ```bash
 export CRM_R1_P3_SEARCH_DATE="$(date +%F)"
 export NCBI_EMAIL="your_valid_institutional_email@example.org"
+python -m pip install "truststore==0.10.4"
 
 python paper/revision/CRM_R1/scripts/30_fetch_priority3_pubmed.py \
   --data-root "$CRM_R1_DATA_ROOT" \
   --email "$NCBI_EMAIL" \
   --search-date "$CRM_R1_P3_SEARCH_DATE" \
-  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE"
+  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE" \
+  --use-system-trust
 
 python paper/revision/CRM_R1/scripts/31_check_priority3_retrieval.py \
   --data-root "$CRM_R1_DATA_ROOT"

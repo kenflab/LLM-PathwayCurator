@@ -123,6 +123,15 @@ def main() -> None:
     require(manifest.get("protocol_version") == protocol["protocol_version"], "P3 protocol drift")
     require(manifest.get("benchmark_id") == benchmark_id, "P3 benchmark drift")
     require(manifest.get("grading_outcomes_inspected") is False, "P3 grading leakage flag")
+    tls = manifest.get("tls_verification")
+    require(isinstance(tls, dict), "P3 TLS verification metadata is missing")
+    require(
+        tls.get("mode") in {"python_default", "macos_native_system_trust"},
+        "P3 TLS verification mode is invalid",
+    )
+    if tls.get("mode") == "macos_native_system_trust":
+        require(tls.get("implementation") == "truststore", "P3 native trust implementation drift")
+        require(bool(tls.get("truststore_version")), "P3 truststore version is missing")
     require(int(manifest.get("candidate_claims", -1)) == 50, "P3 claim-census drift")
     expected_queries = 50 * len(protocol["query_families"])
     require(int(manifest.get("queries", -1)) == expected_queries, "P3 query-count drift")

@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_PRIORITY3_4_PACKETS_V9_20260809`
+> Build: `CRM_R1_PRIORITY3_TLS_V9_1_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -537,6 +537,15 @@ Set a valid contact email required by NCBI and use the actual retrieval date. An
 optional; if present in `NCBI_API_KEY`, it is used only for rate limiting and is never written to an
 artifact.
 
+On a managed macOS host, institutional TLS inspection may be trusted by the macOS Keychain but not
+by python.org's static OpenSSL CA bundle. In that case, install the pinned `truststore` helper and
+use `--use-system-trust`. This selects the native macOS trust store while retaining hostname and
+certificate verification; never use an unverified SSL context.
+
+```bash
+python -m pip install "truststore==0.10.4"
+```
+
 ```bash
 export CRM_R1_P3_SEARCH_DATE="$(date +%F)"
 export NCBI_EMAIL="your_valid_institutional_email@example.org"
@@ -545,7 +554,8 @@ python paper/revision/CRM_R1/scripts/30_fetch_priority3_pubmed.py \
   --data-root "$CRM_R1_DATA_ROOT" \
   --email "$NCBI_EMAIL" \
   --search-date "$CRM_R1_P3_SEARCH_DATE" \
-  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE"
+  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE" \
+  --use-system-trust
 
 python paper/revision/CRM_R1/scripts/31_check_priority3_retrieval.py \
   --data-root "$CRM_R1_DATA_ROOT"
