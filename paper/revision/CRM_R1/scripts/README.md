@@ -1,13 +1,14 @@
 # Script map
 
-> Build: `CRM_R1_FREEZE_TAU080_V5_20260808`
+> Build: `CRM_R1_HELDOUT72_V6_20260808`
+> Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
 
 | Prefix | Scope | First script or planned entry point |
 | --- | --- | --- |
 | `00_` | Input-only preflight | `00_preflight.py` |
-| `1x_` | P1 perturbation replication | `10_make_sample_card.py` through `17_check_priority1_freeze.py` |
+| `1x_` | P1 perturbation replication | `10_make_sample_card.py` through `19_evaluate_replication.py` |
 | `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py` |
 | `3x_` | P3 external evidence ledger | `30_build_evidence_queries.py` |
 | `4x_` | P4 blinded review and agreement | `40_make_blinded_packets.py` |
@@ -30,6 +31,8 @@ benchmark IDs. Plotting scripts only read final source tables and never recomput
 | `15_preview_empirical_membership.py` | production Claim schema and audit outputs | Validate the tau grid, monotone membership, context-off invariants, and matched-method previews without freezing |
 | `16_freeze_priority1_membership.py` | frozen 48 h audit/fgsea outputs and Git state | Write exact τ=0.80 and comparator memberships, the full tau grid, and a SHA-256 freeze manifest; refuse overwrite or dirty tracked code |
 | `17_check_priority1_freeze.py` | frozen manifest and recorded files | Verify protocol, membership, code/data hashes, and the pre-72 h gate before validation is released |
+| `18_validation_72h.R` | `11_discovery_48h.R`, `12_fgsea_48h.R`, and the freeze checker | Run the same interaction at ENDO 72 h once using the frozen discovery universe and Hallmark snapshot |
+| `19_evaluate_replication.py` | frozen membership, 72 h fgsea, and frozen inference specification | Apply the binary endpoint, matched comparisons, intervals, exact reference, continuous analyses, Stop gate, and Figure 4 source export |
 | `llm-pathway-curator adapt --format fgsea` | `src/llm_pathway_curator/adapters/fgsea.py` | Convert raw fgsea output to the validated EvidenceTable contract |
 | Mechanical audit | production `llm-pathway-curator run` and orchestration patterns from `paper/scripts/fig2_run_pipeline.py` | Run deterministic distill/modules/claims/audit/report and record run metadata |
 
@@ -70,6 +73,16 @@ python paper/revision/CRM_R1/scripts/17_check_priority1_freeze.py \
   --data-root "$CRM_R1_DATA_ROOT"
 ```
 
+After V6 is tested and committed locally, release and evaluate the held-out endpoint once:
+
+```bash
+Rscript paper/revision/CRM_R1/scripts/18_validation_72h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/19_evaluate_replication.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
 | Script | Primary outputs | Held-out protection |
 | --- | --- | --- |
 | `10_make_sample_card.py` | `sample_cards/discovery_48h.sample_card.json` and run metadata | Encodes that held-out outcomes have not been calculated |
@@ -80,6 +93,8 @@ python paper/revision/CRM_R1/scripts/17_check_priority1_freeze.py \
 | `15_preview_empirical_membership.py` | calibration and matched-membership preview tables | Reads only 48 h audit and fgsea artifacts; never freezes a choice |
 | `16_freeze_priority1_membership.py` | frozen primary/grid memberships and SHA-256 manifest | Reads only 48 h audit/fgsea artifacts and hashes inputs; rejects known 72 h validation outputs |
 | `17_check_priority1_freeze.py` | freeze integrity gate | Recomputes recorded hashes and releases 72 h analysis only when the immutable bundle is consistent |
+| `18_validation_72h.R` | 72 h ranking/design/pathway statistics and run metadata | Runs the checker first, streams only twelve ENDO 72 h columns, never refilters the frozen universe, and has no force option |
+| `19_evaluate_replication.py` | frozen replication metrics, Stop gate summary, and Figure 4 source table | Rechecks freeze integrity in post-validation mode and refuses all output overwrites |
 
 Analytical scripts refuse to overwrite existing outputs unless explicitly documented. Freeze
 outputs are stricter: `16_freeze_priority1_membership.py` never overwrites them. The full and

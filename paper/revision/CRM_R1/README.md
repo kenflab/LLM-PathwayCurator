@@ -1,6 +1,7 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_FREEZE_TAU080_V5_20260808`
+> Build: `CRM_R1_HELDOUT72_V6_20260808`
+> Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
 This directory contains the minimal code and analysis protocol for the Cell Reports Methods major
@@ -37,7 +38,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
-| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | τ=0.80 frozen; manifest gate ready | Figure 4 |
+| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | τ=0.80 frozen; V6 held-out code ready | Figure 4 |
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Planned | Figure 2 |
 | P3 | Source-masked external database and literature evidence grading | Planned | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | Planned | Figure 2 |
@@ -317,7 +318,63 @@ recorded input/code SHA-256. It also confirms that no known 72 h validation outp
 freeze. The four freeze files beneath `metrics/` are immutable; do not rerun with a different label
 or edit them by hand.
 
-## 8. Development checks
+## 8. Implement and test V6 without reading 72 h outcomes
+
+V6 adds the one-time validation and frozen evaluation scripts without changing the V5 protocol,
+freeze manifest, memberships, scripts `00`-`17`, or production package. Apply V6, run the full test
+suite, and commit the code locally before releasing the held-out endpoint. Do not push the working
+branch to public `origin`.
+
+```bash
+ruff format --check paper/revision/CRM_R1 \
+  tests/test_crm_r1_priority1_v6_validation.py
+ruff check paper/revision/CRM_R1 \
+  tests/test_crm_r1_priority1_v6_validation.py
+pytest -q
+./examples/demo/run.sh
+git diff --check
+```
+
+## 9. Run the held-out 72 h endpoint once
+
+Both scripts reject tracked uncommitted changes and immutable output collisions. The R script runs
+the pre-validation freeze checker before loading any 72 h expression column. It then loads only the
+twelve ENDO 72 h samples, applies the frozen 48 h gene universe without refiltering, recalculates
+TMM, refits the same voom-limma interaction, and runs `fgseaMultilevel` against the frozen Hallmark
+snapshot.
+
+```bash
+Rscript paper/revision/CRM_R1/scripts/18_validation_72h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Expected analytical outputs:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/ranking_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/design_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/pathway_statistics_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/validation_72h.run_meta.json
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/validation_72h.session_info.txt
+```
+
+Evaluate the already-frozen endpoint and memberships once:
+
+```bash
+python paper/revision/CRM_R1/scripts/19_evaluate_replication.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The evaluation exports pathway-, method-, tau-grid-, continuous-, exact-null-, and random-null
+tables, the Stop gate summary, run metadata, and `source_data/figure4.tsv`. The primary Stop gate is
+based only on whether the frozen empirical-minus-q-value replication-fraction point estimate is
+greater than zero. Exact randomization, AUROC, logistic adjustment, size matching, and other tau
+values are secondary and cannot reverse the gate.
+
+Neither script has a `--force` path. Do not delete, rename, overwrite, or manually edit a completed
+72 h output to rerun the endpoint.
+
+## 10. Development checks
 
 ```bash
 ruff format --check paper/revision/CRM_R1
@@ -339,7 +396,9 @@ revision outputs outside Git.
 7. Freeze `tau = 0.80`, the exact matched memberships, and the input/code hashes without inspecting
    72 h outcomes.
 8. Pass the immutable freeze checker.
-9. Run 72 h replication once, apply Stop gate P1, aggregate metrics, and export Figure 4 source data.
+9. Commit V6 without reading 72 h outcomes.
+10. Run `18_validation_72h.R` once.
+11. Run `19_evaluate_replication.py` once, apply Stop gate P1, and export Figure 4 source data.
 
 Active outputs use the canonical benchmark layout below:
 
@@ -363,7 +422,7 @@ metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/ou
 
 ## Next decision gate
 
-The scientific choice is now frozen at `tau = 0.80`. Generate the immutable freeze bundle and pass
-`17_check_priority1_freeze.py`. Only then implement and run the held-out 72 h endpoint once. If the
-empirical-selection replication point estimate is not greater than the q-value-matched estimate,
-apply Stop gate P1 without using literature or human ratings to rescue the result.
+The scientific choice and operational freeze are complete at `tau = 0.80`. After V6 is tested and
+committed locally, run scripts `18` and `19` once. If the empirical-selection replication point
+estimate is not greater than the q-value-matched estimate, apply Stop gate P1 without using
+literature or human ratings to rescue the result.
