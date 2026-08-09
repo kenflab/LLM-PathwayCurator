@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_FIG4_RENDER_V7_20260809`
+> Build: `CRM_R1_PRIORITY2_FREEZE_V8_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -39,10 +39,10 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 | Priority | Purpose | Status | Main destination |
 | --- | --- | --- | --- |
 | P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | Complete; Stop gate PASS; V7 render ready | Figure 4 |
-| P2 | Same-pool unaudited/audited benchmark with matched baselines | Planned | Figure 2 |
-| P3 | Source-masked external database and literature evidence grading | Planned | Figure 2 |
-| P4 | Narrow blinded evidence review and inter-rater agreement | Planned | Figure 2 |
-| P5 | GO/Reactome hierarchy, utility robustness, and final integration | Planned | Figure 3 + Supplement |
+| P2 | Same-pool unaudited/audited benchmark with matched baselines | V8 code ready; not frozen | Figure 2 |
+| P3 | Source-masked external database and literature evidence grading | Starts only after P2 checker passes | Figure 2 |
+| P4 | Narrow blinded evidence review and inter-rater agreement | 50-claim census locked by P2 | Figure 2 |
+| P5 | GO/Reactome hierarchy, utility robustness, and final integration | Starts after P2; final utility waits for P3/P4 | Figure 3 + Supplement |
 
 ## What becomes public
 
@@ -451,6 +451,75 @@ $CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/
 At publication freeze, copy only the required manifests, derived inputs, source tables, and run
 metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/output mapping to
 `paper/FIGURE_MAP.csv`.
+
+## Priority 2: freeze the same claim pool before P3/P4
+
+V8 uses the canonical HNSC Hallmark example and retains all 50 candidate pathway claims for
+external-evidence grading and blinded review. The proposal mode is deterministic in both P2 runs;
+only the full-audit run enables LLM context review. The LLM therefore cannot change the candidate
+pool. The primary `tau = 0.90` is inherited from the original HNSC Figure 2 operating point and is
+fixed before P3/P4 outcomes exist. Its PASS count defines K for the q-value and mechanical-stability
+matched rules.
+
+```bash
+export CRM_R1_DATA_ROOT="/Users/kfurudate/Library/CloudStorage/OneDrive-InsideMDAnderson/LLMPATH/Revision/CRM_R1"
+export CRM_R1_P2_ROOT="$CRM_R1_DATA_ROOT/output/priority2/PANCAN_TP53_v1_HNSC_R1"
+```
+
+Run the context-off mechanical reference. The environment variables deliberately override the
+older hard-gate Sample Card without modifying that canonical input.
+
+```bash
+LLMPATH_CONTEXT_REVIEW_MODE=off \
+LLMPATH_CONTEXT_GATE_MODE=note \
+LLMPATH_CLAIM_MODE=deterministic \
+python paper/scripts/fig2_run_pipeline.py \
+  --benchmark-id PANCAN_TP53_v1 \
+  --cancers HNSC \
+  --variants ours \
+  --gate-modes hard \
+  --taus 0.90 \
+  --k-claims 50 \
+  --context-review-mode off \
+  --out-root "$CRM_R1_P2_ROOT/runs_mechanical"
+```
+
+Run the full audit with the same deterministic proposal pool. Start Ollama and ensure
+`llama3.1:8b` is present first.
+
+```bash
+export LLMPATH_BACKEND=ollama
+export LLMPATH_OLLAMA_HOST=http://localhost:11434
+export LLMPATH_OLLAMA_MODEL=llama3.1:8b
+
+LLMPATH_CONTEXT_REVIEW_MODE=llm \
+LLMPATH_CONTEXT_GATE_MODE=hard \
+LLMPATH_CLAIM_MODE=deterministic \
+python paper/scripts/fig2_run_pipeline.py \
+  --benchmark-id PANCAN_TP53_v1 \
+  --cancers HNSC \
+  --variants ours \
+  --gate-modes hard \
+  --taus 0.90 \
+  --k-claims 50 \
+  --context-review-mode llm \
+  --out-root "$CRM_R1_P2_ROOT/runs_full_audit"
+```
+
+Review and locally commit V8 before freezing. Then write and verify the immutable pool:
+
+```bash
+python paper/revision/CRM_R1/scripts/20_freeze_claim_pool.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260810_P2"
+
+python paper/revision/CRM_R1/scripts/21_check_priority2_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The freeze refuses pool mismatch, missing LLM context evaluations, dirty tracked code, output
+overwrite, or pre-existing P3-P5 results. Do not grade literature or distribute review packets until
+the checker prints `[GO]`. LLM context errors are outcomes to evaluate, not records to hand-correct.
 
 ## Next decision gate
 

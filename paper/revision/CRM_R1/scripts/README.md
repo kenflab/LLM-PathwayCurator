@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_FIG4_RENDER_V7_20260809`
+> Build: `CRM_R1_PRIORITY2_FREEZE_V8_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -9,7 +9,7 @@ Keep scripts small and numbered by analytical priority. Do not create empty plac
 | --- | --- | --- |
 | `00_` | Input-only preflight | `00_preflight.py` |
 | `1x_` | P1 perturbation replication | `10_make_sample_card.py` through `19_evaluate_replication.py` |
-| `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py` |
+| `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py`, `21_check_priority2_freeze.py` |
 | `3x_` | P3 external evidence ledger | `30_build_evidence_queries.py` |
 | `4x_` | P4 blinded review and agreement | `40_make_blinded_packets.py` |
 | `5x_` | P5 ontology and utility robustness | `50_ontology_validation.py` |
@@ -40,6 +40,27 @@ benchmark IDs. Plotting scripts only read final source tables and never recomput
 The existing figure scripts are dataset-specific and must not be copied wholesale. Reuse their
 validated analytical pattern while keeping GSE146225 paths, factorial design, and held-out controls
 in thin revision-specific wrappers.
+
+## Priority 2 executable contract
+
+`20_freeze_claim_pool.py` takes two HNSC runs at the inherited canonical `tau = 0.90`: a
+deterministic context-off mechanical reference and a same-pool full audit with LLM context review.
+It refuses to freeze unless both logs contain the same 50 `entity x direction` claims. Full-audit
+PASS count defines K for q-value and mechanical-stability matching. It writes:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority2/PANCAN_TP53_v1_HNSC_R1/
+  pool/claims.tsv
+  membership/selection_membership.tsv
+  metrics/risk_coverage_source.tsv
+  review/sampling_frame.locked.tsv
+  metrics/priority2_freeze_manifest.json
+  metrics/priority2_freeze_manifest.sha256
+```
+
+`21_check_priority2_freeze.py` verifies every recorded hash, exact row membership, equal matched K,
+and the 50-claim blinded-review census. P3 and P4 must pass this gate before reading the pool. The
+risk fields remain explicitly pending until independent P3/P4 outcomes are locked.
 
 ## Executable 48 h steps
 

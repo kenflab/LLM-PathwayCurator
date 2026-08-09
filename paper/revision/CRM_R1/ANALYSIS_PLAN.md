@@ -213,6 +213,22 @@ significant claims?
   raw versus PASS alone is insufficient.
 - Sample human-review claims from the pre-audit pool, never by preferentially sampling PASS claims.
 
+### V8 operationalization (not yet frozen)
+
+- The primary P2 benchmark is the canonical HNSC Hallmark pool: 50 directional claims from
+  `PANCAN_TP53_v1`.
+- The primary `tau = 0.90` is inherited from the original Figure 2 operating point and is fixed
+  before P3/P4 outcomes; it is not tuned to literature or rater results.
+- Candidate proposals are deterministic for both runs. The mechanical reference disables context
+  review and makes its context gate nonblocking. The full-audit run changes only context review to
+  the frozen local Ollama model (`llama3.1:8b`) with a hard context gate.
+- Freeze fails unless all 50 structured claims agree across runs. Full-audit PASS count defines K
+  for q-value and stability matching.
+- P3 and P4 use a census of all 50 pre-audit claims in randomized order. Audit status and method
+  membership are withheld from the distributed packet.
+- LLM context judgments are a method component under evaluation, not reference truth. Their errors
+  are retained for P3/P4 rather than manually corrected.
+
 ### Deliverables
 
 - `output/priority2/pool/claims.tsv`

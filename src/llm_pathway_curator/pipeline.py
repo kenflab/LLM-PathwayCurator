@@ -4599,7 +4599,15 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "claim" if claim_backend is not None else ("review" if review_backend else "none")
         )
 
+        backend_identity = {
+            "class": type(shared_backend).__name__ if shared_backend is not None else "",
+            "model_name": str(getattr(shared_backend, "model_name", "") or ""),
+            "host": str(getattr(shared_backend, "host", "") or ""),
+            "temperature": getattr(shared_backend, "temperature", None),
+        }
+
         meta["inputs"]["llm"] = {
+            "backend_identity": backend_identity,
             "claim": {
                 "enabled": (claim_mode_env == "llm"),
                 "claim_mode_env": claim_mode_env,
