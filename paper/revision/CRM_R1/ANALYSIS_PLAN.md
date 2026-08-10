@@ -332,6 +332,33 @@ reasonable scoring choices?
   shifts.
 - If utility ranking is unstable, describe it only as an exploratory ordering aid.
 
+### V10 operationalization: parallel ontology work while ratings are pending
+
+- P5 ontology evaluation may proceed after the frozen P2 census and blank P4 packets exist. It does
+  not read P3 grades, partial P4 returns, or method-level P3/P4 outcomes.
+- New HNSC GO BP and Reactome audits use the P2 operating configuration: deterministic proposals,
+  local `llama3.1:8b` context review with a hard gate, `tau = 0.90`, `k = 500`, and seed 42.
+- A mapping-only feasibility preflight showed that the original top-50 proposal sets contained too
+  few hierarchy pairs. The wider `k = 500` census was fixed before calculating contradiction,
+  gene-support, P3, or P4 endpoints. It changes only the evaluation-set width; hierarchy data do
+  not enter proposal generation or audit decisions.
+- GO and Reactome hierarchy data are not supplied to those audits. The exact audit logs, ontology
+  files, releases, code, and hashes are frozen before any hierarchy endpoint is calculated.
+- GO uses the frozen `go-basic.obo` snapshot but propagates only `is_a` and `part_of`; all regulation
+  relations and `has_part` are ignored. Reactome uses frozen Version 97 human parent-child edges.
+- Audit terms map to ontology identifiers by unique normalized exact label. Unmapped and ambiguous
+  terms are excluded and reported; no manual remapping follows inspection of hierarchy outcomes.
+- Direct parent-child pairs are the primary scope. All safe ancestor-descendant pairs, including
+  direct edges, are a fixed
+  sensitivity analysis. A collection with fewer than ten direct pairs is reported as not estimable
+  for the primary scope; the sensitivity scope is not promoted after results are seen.
+- A descriptive null compares each observed hierarchy pair with nonancestor pairs matched as
+  closely as possible on parent depth, child depth, and log2 evidence-gene counts. Ten thousand
+  draws use seed 20260811. Dependence among pathway claims precludes interpreting this as an
+  independent-sample test.
+- Figure 3 ontology panels may be finalized before ratings return. Utility code and its weight grid
+  are frozen now, but the real utility calculation requires complete locked P3 and P4 manifests.
+
 ### Deliverables
 
 - `output/priority5/ontology/hierarchy_metrics.tsv`
@@ -349,9 +376,12 @@ Figure 3 hierarchy validation and supplementary utility-sensitivity panels.
 2. Run the 72 h endpoint once, then apply the P1 stop gate.
 3. Freeze the Priority 2 candidate pool and selection membership.
 4. Build the Priority 3 evidence ledger before preparing blinded packets.
-5. Freeze and conduct Priority 4 ratings; calculate agreement and confidence intervals.
-6. Run Priority 5 ontology and utility robustness analyses.
-7. Export one immutable source table per panel; plotting scripts only render those tables.
+5. Freeze the blank Priority 4 packets and conduct independent ratings.
+6. In parallel with P3 grading and P4 rating, freeze and run the P5 ontology analysis and render the
+   ontology-only Figure 3 panels without reading P3/P4 outcomes.
+7. After all P3 grades and three P4 ratings are complete and locked, calculate Figure 2 endpoints
+   and the P5 utility sensitivity once.
+8. Export one immutable source table per panel; plotting scripts only render those tables.
 
 ## Planned figure map
 

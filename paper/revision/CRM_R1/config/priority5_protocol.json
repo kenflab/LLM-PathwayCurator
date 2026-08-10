@@ -1,0 +1,133 @@
+{
+  "protocol_version": "CRM_R1_PRIORITY5_v10",
+  "status": "PRESPECIFIED_AWAITING_INPUT_FREEZE",
+  "created_utc": "2026-08-09",
+  "benchmark_id": "PANCAN_TP53_v1_HNSC_R1_P5",
+  "parent_benchmark_id": "PANCAN_TP53_v1_HNSC_R1",
+  "question": "Are audit dispositions coherent across independent GO and Reactome hierarchies, and are utility rankings robust to reasonable aggregation choices?",
+  "parallel_work_boundary": {
+    "ontology_evaluation_may_run_before_priority3_priority4_lock": true,
+    "priority3_priority4_outcomes_may_be_read": false,
+    "utility_finalization_requires_priority3_priority4_lock": true,
+    "priority2_membership_may_not_change": true
+  },
+  "audit_inputs": {
+    "condition": "HNSC",
+    "comparison": "TP53_mut_vs_TP53_wt",
+    "collections": [
+      {
+        "slug": "C5_GO_BP",
+        "evidence_table": "paper/source_data/PANCAN_TP53_v1/evidence_tables/HNSC.C5_GO_BP.evidence_table.tsv"
+      },
+      {
+        "slug": "C2_CP_REACTOME",
+        "evidence_table": "paper/source_data/PANCAN_TP53_v1/evidence_tables/HNSC.C2_CP_REACTOME.evidence_table.tsv"
+      }
+    ],
+    "sample_card": "paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json",
+    "proposal_mode": "deterministic",
+    "context_review_mode": "llm",
+    "context_gate_mode": "hard",
+    "backend": "ollama",
+    "model": "llama3.1:8b",
+    "tau": 0.9,
+    "k_claims_per_collection": 500,
+    "candidate_width_rationale": "Fixed after a mapping-only edge-yield preflight showed that k=50 was not hierarchy-estimable; no contradiction, gene-support, P3, or P4 endpoint defined this choice",
+    "seed": 42,
+    "hierarchy_is_not_an_audit_input": true
+  },
+  "ontology_sources": {
+    "go": {
+      "label": "GO Biological Process",
+      "download_url": "https://current.geneontology.org/ontology/go-basic.obo",
+      "expected_filename": "go-basic.obo",
+      "allowed_relations": ["is_a", "part_of"],
+      "excluded_relations": [
+        "has_part",
+        "regulates",
+        "positively_regulates",
+        "negatively_regulates"
+      ],
+      "root_id": "GO:0008150",
+      "version_and_sha256_frozen_at_runtime": true
+    },
+    "reactome": {
+      "label": "Reactome",
+      "release": 97,
+      "release_date": "2026-06-30",
+      "pathways_url": "https://reactome.org/download/97/ReactomePathways.txt",
+      "relations_url": "https://reactome.org/download/97/ReactomePathwaysRelation.txt",
+      "pathways_filename": "ReactomePathways.txt",
+      "relations_filename": "ReactomePathwaysRelation.txt",
+      "species": "Homo sapiens",
+      "version_and_sha256_frozen_at_runtime": true
+    }
+  },
+  "mapping": {
+    "method": "unique_normalized_exact_label",
+    "normalization": "uppercase alphanumeric tokens joined by underscore after collection prefix removal",
+    "ambiguous_or_unmapped_terms": "excluded_and_reported",
+    "manual_remapping_after_outcome_review": false
+  },
+  "hierarchy_estimands": {
+    "primary_scope": "direct_parent_child",
+    "sensitivity_scope": "safe_ancestor_descendant_including_direct_edges",
+    "directional_contradiction": "parent and child enrichment directions disagree",
+    "gene_support": [
+      "leading_edge_jaccard",
+      "child_leading_edge_covered_by_parent",
+      "parent_leading_edge_covered_by_child"
+    ],
+    "depth_definition": "minimum directed distance from an ontology root",
+    "status_patterns": true,
+    "child_pass_does_not_require_parent_pass": true,
+    "minimum_pairs_for_primary_estimate": 10,
+    "below_minimum_action": "report_not_estimable_without_redefining_the_primary_scope"
+  },
+  "matched_nonedge_reference": {
+    "enabled": true,
+    "draws": 10000,
+    "seed": 20260811,
+    "eligibility": "ordered mapped term pairs with shallower parent depth and no ancestor relation in either direction",
+    "matching": "minimum Manhattan distance on parent depth, child depth, log2 parent evidence size, and log2 child evidence size",
+    "tie_break": "uniform_with_frozen_seed",
+    "reuse_across_observed_pairs": true,
+    "interpretation": "descriptive ontology-matched reference because pathway claims are dependent"
+  },
+  "utility": {
+    "status": "CODE_READY_FINAL_RUN_REQUIRES_P3_P4_LOCKS",
+    "components": [
+      "statistical_support",
+      "stability_support",
+      "independent_evidence",
+      "wording_safety"
+    ],
+    "component_range": [0.0, 1.0],
+    "primary_aggregation": "multiplicative",
+    "sensitivity_aggregations": ["equal_weight_arithmetic", "minimum", "log_linear_grid"],
+    "log_linear_epsilon": 1e-06,
+    "log_linear_weight_step": 0.25,
+    "top_k": 25,
+    "material_rank_shift": 10,
+    "unstable_action": "describe_as_exploratory_ordering_aid"
+  },
+  "figure3": {
+    "panels": {
+      "A": "frozen independent hierarchy evaluation design",
+      "B": "directional contradiction against ontology-matched nonedge reference",
+      "C": "hierarchy-consistent leading-edge gene support",
+      "D": "ontology depth and audit disposition"
+    },
+    "utility_location": "supplementary_until_priority3_priority4_lock",
+    "rendering_rule": "plotting reads frozen figure source tables and never recomputes analytical endpoints",
+    "base_font_points": 12,
+    "raster_dpi": 600,
+    "palette": {
+      "blue": "#0072B2",
+      "orange": "#D55E00",
+      "green": "#009E73",
+      "purple": "#CC79A7",
+      "gray": "#6B7280"
+    }
+  }
+}

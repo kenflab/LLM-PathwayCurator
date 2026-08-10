@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_PRIORITY3_TLS_V9_1_20260809`
+> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -42,7 +42,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Frozen: 50 claims; matched K=25 | Figure 2 |
 | P3 | Fixed PubMed retrieval and independent evidence grading | V9 retrieval/grading ledger ready | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | V9 three-rater packet ready | Figure 2 |
-| P5 | GO/Reactome hierarchy, utility robustness, and final integration | Starts after P2; final utility waits for P3/P4 | Figure 3 + Supplement |
+| P5 | GO/Reactome hierarchy, utility robustness, and final integration | V10 ontology analysis ready; final utility waits for P3/P4 lock | Figure 3 + Supplement |
 
 ## What becomes public
 
@@ -94,6 +94,11 @@ git restore --source feat/crm-r1-scaffold -- \
 
 Add `ANALYSIS_PLAN.md` to that allowlist only after its protocol is frozen and the authors decide it
 belongs in the public reproducibility record.
+
+`AGENTS.md` is a local Codex memo, not part of the V10 reproducibility payload. V10 does not update
+or package either `AGENTS.md`. If those files are untracked locally, leave them untracked and do not
+include them in `git add` or a public push. The scientific decisions needed to run V10 are recorded
+in `ANALYSIS_PLAN.md`, `config/priority5_protocol.json`, and the executable freeze manifest.
 
 ## 1. Create the environment
 
@@ -605,3 +610,89 @@ gate passed. The exact one-sided reference was `P = 0.50`, whereas continuous em
 showed AUROC 0.713 (bootstrap 95% CI 0.558-0.857; permutation `P = 0.0055`). Preserve both results
 without threshold changes or rescue analyses. Render Figure 4, then proceed to the separately
 frozen Priority 2 candidate-pool design.
+
+## Priority 5 V10: proceed while P4 ratings are pending
+
+The P4 wait does not stop the independent ontology analysis. P5 uses new GO and Reactome hierarchy
+snapshots only after the GO/Reactome audit outputs are generated without hierarchy input. It never
+reads P3 grades or P4 ratings. The final utility synthesis remains locked until both P3 and P4 have
+complete frozen manifests.
+
+First run the P2 `tau`, proposal, and context configuration on the two independent collections.
+Candidate proposals remain deterministic; only the context review uses the frozen local Ollama
+model. P5 uses a wider fixed `k = 500` evaluation set because a mapping-only feasibility preflight
+showed that `k = 50` yielded too few hierarchy pairs. No contradiction, gene-support, P3, or P4
+endpoint was used to choose this width, and hierarchy data are not audit inputs.
+
+```bash
+export CRM_R1_P5_ROOT="$CRM_R1_DATA_ROOT/output/priority5/PANCAN_TP53_v1_HNSC_R1_P5"
+export LLMPATH_BACKEND=ollama
+export LLMPATH_OLLAMA_HOST=http://localhost:11434
+export LLMPATH_OLLAMA_MODEL=llama3.1:8b
+
+LLMPATH_CONTEXT_REVIEW_MODE=llm \
+LLMPATH_CONTEXT_GATE_MODE=hard \
+LLMPATH_CLAIM_MODE=deterministic \
+python paper/scripts/figS2_run_collections_pipeline.py \
+  --benchmark-id PANCAN_TP53_v1 \
+  --cancers HNSC \
+  --variants ours \
+  --gate-modes hard \
+  --collections GO_BP,Reactome \
+  --tau 0.90 \
+  --k-claims 500 \
+  --context-review-mode llm \
+  --out-root "$CRM_R1_P5_ROOT/audit_runs"
+```
+
+Apply and locally commit V10 before freezing. Do not add either `AGENTS.md`. The freeze script runs
+the P2 checker, downloads the GO and Reactome hierarchy files when absent, freezes their hashes and
+release metadata, validates both 50-claim audit logs, and confirms that no hierarchy endpoint yet
+exists. Use verified system trust on the managed Mac if needed.
+
+```bash
+python paper/revision/CRM_R1/scripts/50_freeze_priority5_inputs.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260809_P5" \
+  --use-system-trust
+
+python paper/revision/CRM_R1/scripts/51_check_priority5_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+After the checker prints `[GO]`, calculate ontology outcomes once, freeze panel source tables, and
+render Figure 3. Direct parent-child pairs are primary. All safe ancestor-descendant pairs are a fixed
+sensitivity analysis. If fewer than ten direct pairs map for a collection, the primary estimate is
+reported as not estimable; the script does not promote the sensitivity definition after seeing the
+result.
+
+```bash
+python paper/revision/CRM_R1/scripts/52_evaluate_ontology_hierarchy.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/54_build_priority5_figure3_source.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/91_plot_priority5_figure3.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The main outputs are:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority5/PANCAN_TP53_v1_HNSC_R1_P5/
+  freeze/priority5_input_manifest.json
+  ontology/hierarchy_metrics.tsv
+  ontology/hierarchy_pairs.tsv
+  ontology/ontology_term_metrics.tsv
+  ontology/matched_nonedge_null_draws.tsv
+  final/figure_manifest.tsv
+  final/figure3_panel_*.tsv
+  fig/Fig3_priority5_ontology_v1.pdf
+  fig/Fig3_priority5_ontology_v1.png
+```
+
+`53_evaluate_utility_sensitivity.py` is intentionally dormant during the P4 wait. It requires the
+frozen P2 manifest, explicit locked P3 and P4 manifests, and a matching 50-claim component table. It evaluates multiplicative,
+equal-weight arithmetic, minimum-component, and the prespecified 0.25-step log-linear weight grid.
+Do not create placeholder grades or use partial rater returns to make it run.

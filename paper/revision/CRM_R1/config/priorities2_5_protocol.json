@@ -61,10 +61,23 @@
     ]
   },
   "priority5": {
+    "protocol_file": "config/priority5_protocol.json",
+    "protocol_version": "CRM_R1_PRIORITY5_v10",
+    "ontology_work_may_run_while_priority4_pending": true,
+    "priority3_priority4_outcomes_forbidden_in_ontology_work": true,
+    "final_utility_requires_locked_priority3_priority4": true,
+    "hierarchy_evaluation_k_per_collection": 500,
     "ontology_sources": ["GO Biological Process", "Reactome"],
     "safe_go_relations": ["is_a", "part_of"],
     "excluded_go_relations": ["has_part", "regulates", "positively_regulates", "negatively_regulates"],
-    "ontology_release_dates": null,
+    "reactome_release": 97,
+    "reactome_release_date": "2026-06-30",
+    "go_release_and_sha256_frozen_at_runtime": true,
+    "primary_pair_scope": "direct_parent_child",
+    "sensitivity_pair_scope": "safe_ancestor_descendant_including_direct_edges",
+    "minimum_primary_pairs": 10,
+    "matched_nonedge_draws": 10000,
+    "matched_nonedge_seed": 20260811,
     "utility_aggregations": ["multiplicative", "arithmetic", "minimum", "log_linear"]
   },
   "figure_plan": {

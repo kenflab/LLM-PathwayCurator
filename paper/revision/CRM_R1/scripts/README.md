@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_PRIORITY3_TLS_V9_1_20260809`
+> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_20260809`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -12,8 +12,8 @@ Keep scripts small and numbered by analytical priority. Do not create empty plac
 | `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py`, `21_check_priority2_freeze.py` |
 | `3x_` | P3 fixed PubMed retrieval and evidence ledger | `30_fetch_priority3_pubmed.py`, `31_check_priority3_retrieval.py` |
 | `4x_` | P4 blinded review and packet integrity | `40_make_blinded_packets.py`, `41_check_priority4_packets.py` |
-| `5x_` | P5 ontology and utility robustness | `50_ontology_validation.py` |
-| `9x_` | Rendering and final export validation | `90_render_figures.R` |
+| `5x_` | P5 ontology and utility robustness | `50_freeze_priority5_inputs.py` through `54_build_priority5_figure3_source.py` |
+| `9x_` | Rendering and final export validation | `90_plot_priority1_figure4.py`, `91_plot_priority5_figure3.py` |
 
 Priority 1 scripts write beneath
 `$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/`; later priorities use their own frozen
@@ -111,6 +111,31 @@ python paper/revision/CRM_R1/scripts/41_check_priority4_packets.py \
 
 Keep the P3 grading fields blank through the P4 packet check. The P4 builder reruns the P3 checker;
 grading and independent rating begin only after the immutable blank packets pass script 41.
+
+## Priority 5 executable contract
+
+P5 ontology evaluation is independent of the P3/P4 outcome files and may run while blinded ratings
+are pending. The two collection audits use deterministic proposals, the frozen HNSC Sample Card,
+`tau = 0.90`, `k = 500`, and the frozen local `llama3.1:8b` context review. GO or Reactome hierarchy
+information is never supplied to the audit.
+
+| Script | Responsibility | P3/P4 access |
+| --- | --- | --- |
+| `50_freeze_priority5_inputs.py` | Run the P2 gate; freeze both P5 audit logs, GO `go-basic.obo`, Reactome v97 hierarchy files, code, and SHA-256 inventory before hierarchy outcomes | Forbidden |
+| `51_check_priority5_freeze.py` | Recompute every frozen hash and release the one-time hierarchy evaluation | Forbidden |
+| `52_evaluate_ontology_hierarchy.py` | Map unique normalized labels; calculate direct and safe-ancestor pairs, contradiction, leading-edge support, depth, status patterns, and matched-nonedge references | Forbidden |
+| `53_evaluate_utility_sensitivity.py` | Verify the frozen P2 census and evaluate fixed utility aggregations only after complete P3 and P4 lock manifests are supplied | Required and lock-gated |
+| `54_build_priority5_figure3_source.py` | Verify analytical output hashes and export one source table per Figure 3 panel | Forbidden |
+| `91_plot_priority5_figure3.py` | Render PDF/600-dpi PNG only from hash-verified panel source tables | Forbidden |
+
+GO propagation uses only `is_a` and `part_of`. `has_part` and all regulation relations are ignored.
+Direct parent-child pairs are primary; all safe ancestor-descendant pairs are a prespecified
+sensitivity. A primary collection estimate with fewer than ten direct pairs is labeled not
+estimable rather than silently redefined. The ontology-matched nonedge reference is descriptive
+because pathway claims are dependent.
+
+The plotting script cannot read audit logs, EvidenceTables, ontology files, expression data, or
+P3/P4 outcomes. It reads only the final Figure 3 source tables and their checksums.
 
 ## Executable 48 h steps
 
