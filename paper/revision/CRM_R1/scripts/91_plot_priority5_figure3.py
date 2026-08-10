@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import matplotlib
@@ -47,13 +47,9 @@ def verify_sources(final_dir: Path) -> dict[str, Path]:
     for row in ready.to_dict("records"):
         path = final_dir / row["source_table"]
         require(path.is_file(), f"Missing Figure 3 source: {path}")
-        require(
-            sha256_file(path) == row["sha256"], f"Figure 3 source hash drift: {path}"
-        )
+        require(sha256_file(path) == row["sha256"], f"Figure 3 source hash drift: {path}")
         sources[str(row["panel"])] = path
-    require(
-        {"A", "B", "C", "D"}.issubset(sources), "Figure 3 panels A-D are incomplete"
-    )
+    require({"A", "B", "C", "D"}.issubset(sources), "Figure 3 panels A-D are incomplete")
     return sources
 
 
@@ -119,9 +115,7 @@ def draw_design(axis: plt.Axes) -> None:
         fontsize=10.5,
         color=GRAY,
     )
-    axis.set_title(
-        "Ontology hierarchy validation design", fontsize=13, pad=10, loc="left"
-    )
+    axis.set_title("Ontology hierarchy validation design", fontsize=13, pad=10, loc="left")
 
 
 def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
@@ -135,11 +129,7 @@ def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
     estimate_statuses = []
     for row in table.to_dict("records"):
         collection = "GO BP" if row["collection"] == "C5_GO_BP" else "Reactome"
-        scope = (
-            "Direct"
-            if row["relation_scope"] == "direct_parent_child"
-            else "All ancestors"
-        )
+        scope = "Direct" if row["relation_scope"] == "direct_parent_child" else "All ancestors"
         labels.append(f"{collection}\n{scope}\nn={int(row['n_pairs'])}")
         value = row["directional_contradiction_fraction"]
         observed.append(value)
@@ -159,9 +149,7 @@ def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
         capsize=4,
         lw=1.5,
     )
-    axis.scatter(
-        x, np.asarray(observed) * 100, s=65, c=colors, label="Observed", zorder=3
-    )
+    axis.scatter(x, np.asarray(observed) * 100, s=65, c=colors, label="Observed", zorder=3)
     axis.scatter(
         x,
         np.asarray(null) * 100,
@@ -179,9 +167,7 @@ def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
         height = np.nanmax([value + upper_error, null_value]) * 100 + 2.5
         annotation_heights.append(height)
         annotation = (
-            f"P={p_value:.3g}"
-            if status == "ESTIMABLE" and np.isfinite(p_value)
-            else "Primary NE"
+            f"P={p_value:.3g}" if status == "ESTIMABLE" and np.isfinite(p_value) else "Primary NE"
         )
         axis.text(index, height, annotation, ha="center", va="bottom", fontsize=8.5)
     axis.set_xticks(x, labels, fontsize=8.5)
@@ -205,9 +191,7 @@ def plot_gene_support(axis: plt.Axes, table: pd.DataFrame) -> None:
             if len(values):
                 data.append(values.to_numpy() * 100)
                 name = "GO BP" if collection == "C5_GO_BP" else "Reactome"
-                scope_name = (
-                    "Direct" if scope == "direct_parent_child" else "All ancestors"
-                )
+                scope_name = "Direct" if scope == "direct_parent_child" else "All ancestors"
                 labels.append(f"{name}\n{scope_name}")
                 colors.append(BLUE if collection == "C5_GO_BP" else ORANGE)
     if data:
@@ -319,7 +303,7 @@ def main() -> None:
     plt.close(figure)
     meta = {
         "schema_version": "CRM_R1_PRIORITY5_FIGURE3_RENDER_v1",
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.now(UTC).isoformat(),
         "source_sha256": {panel: sha256_file(path) for panel, path in sources.items()},
         "pdf_sha256": sha256_file(pdf_path),
         "png_sha256": sha256_file(png_path),
@@ -327,9 +311,7 @@ def main() -> None:
         "base_font_points": 12,
         "png_dpi": 600,
     }
-    meta_path.write_text(
-        json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print("[PASS] Figure 3 rendered from frozen source tables")
     print(f"[INFO] PDF: {pdf_path}")
     print(f"[INFO] PNG: {png_path}")

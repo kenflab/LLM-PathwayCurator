@@ -14,13 +14,12 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-
 
 BENCHMARK_ID = "PANCAN_TP53_v1_HNSC_R1_P5"
 COLLECTIONS = {
@@ -90,11 +89,7 @@ def parse_go_obo(path: Path) -> tuple[dict[str, str], dict[str, set[str]]]:
     current: dict[str, Any] | None = None
 
     def commit(term: dict[str, Any] | None) -> None:
-        if (
-            not term
-            or term.get("obsolete")
-            or term.get("namespace") != "biological_process"
-        ):
+        if not term or term.get("obsolete") or term.get("namespace") != "biological_process":
             return
         term_id = term.get("id")
         name = term.get("name")
@@ -153,9 +148,7 @@ def parse_reactome(
     return names, dict(parents)
 
 
-def minimum_depths(
-    names: dict[str, str], parents: dict[str, set[str]]
-) -> dict[str, int]:
+def minimum_depths(names: dict[str, str], parents: dict[str, set[str]]) -> dict[str, int]:
     children: dict[str, set[str]] = defaultdict(set)
     indegree = {node: 0 for node in names}
     for child, node_parents in parents.items():
@@ -184,9 +177,7 @@ def minimum_depths(
     return depth
 
 
-def ancestor_sets(
-    names: dict[str, str], parents: dict[str, set[str]]
-) -> dict[str, set[str]]:
+def ancestor_sets(names: dict[str, str], parents: dict[str, set[str]]) -> dict[str, set[str]]:
     memo: dict[str, set[str]] = {}
     visiting: set[str] = set()
 
@@ -213,9 +204,7 @@ def unique_label_index(names: dict[str, str]) -> dict[str, str]:
     candidates: dict[str, list[str]] = defaultdict(list)
     for term_id, name in names.items():
         candidates[normalize_label(name, "")].append(term_id)
-    return {
-        label: values[0] for label, values in candidates.items() if len(values) == 1
-    }
+    return {label: values[0] for label, values in candidates.items() if len(values) == 1}
 
 
 def map_audit_terms(
@@ -239,9 +228,7 @@ def map_audit_terms(
                 "entity": record["entity"],
                 "normalized_label": normalized,
                 "ontology_id": ontology_id,
-                "mapping_status": "MAPPED_UNIQUE"
-                if ontology_id
-                else "UNMAPPED_OR_AMBIGUOUS",
+                "mapping_status": "MAPPED_UNIQUE" if ontology_id else "UNMAPPED_OR_AMBIGUOUS",
             }
         )
         if ontology_id is None:
@@ -316,14 +303,10 @@ def build_pairs(
     for child_id, child in by_id.items():
         for parent_id in sorted(parents.get(child_id, set())):
             if parent_id in by_id:
-                rows.append(
-                    pair_metrics(by_id[parent_id], child, "direct_parent_child")
-                )
+                rows.append(pair_metrics(by_id[parent_id], child, "direct_parent_child"))
         for parent_id in sorted(ancestors.get(child_id, set())):
             if parent_id in by_id:
-                rows.append(
-                    pair_metrics(by_id[parent_id], child, "safe_ancestor_descendant")
-                )
+                rows.append(pair_metrics(by_id[parent_id], child, "safe_ancestor_descendant"))
     return pd.DataFrame(rows, columns=PAIR_COLUMNS)
 
 
@@ -334,9 +317,7 @@ def wilson_interval(successes: int, total: int) -> tuple[float, float]:
     p = successes / total
     denominator = 1 + z * z / total
     center = (p + z * z / (2 * total)) / denominator
-    half = (
-        z * math.sqrt(p * (1 - p) / total + z * z / (4 * total * total)) / denominator
-    )
+    half = z * math.sqrt(p * (1 - p) / total + z * z / (4 * total * total)) / denominator
     return center - half, center + half
 
 
@@ -377,9 +358,7 @@ def matched_nonedge_reference(
                     "child_depth": int(child["depth"]),
                     "parent_log_gene_bin": round(math.log2(parent["gene_n"] + 1)),
                     "child_log_gene_bin": round(math.log2(child["gene_n"] + 1)),
-                    "directional_contradiction": int(
-                        parent["direction"] != child["direction"]
-                    ),
+                    "directional_contradiction": int(parent["direction"] != child["direction"]),
                     "child_covered_by_parent": (
                         len(intersection) / len(child_genes) if child_genes else np.nan
                     ),
@@ -394,29 +373,21 @@ def matched_nonedge_reference(
             (candidate_table["parent_depth"] - pair["parent_depth"]).abs()
             + (candidate_table["child_depth"] - pair["child_depth"]).abs()
             + (
-                candidate_table["parent_log_gene_bin"]
-                - round(math.log2(pair["parent_gene_n"] + 1))
+                candidate_table["parent_log_gene_bin"] - round(math.log2(pair["parent_gene_n"] + 1))
             ).abs()
             + (
-                candidate_table["child_log_gene_bin"]
-                - round(math.log2(pair["child_gene_n"] + 1))
+                candidate_table["child_log_gene_bin"] - round(math.log2(pair["child_gene_n"] + 1))
             ).abs()
         )
-        matched.append(
-            candidate_table.loc[distance.eq(distance.min())].reset_index(drop=True)
-        )
+        matched.append(candidate_table.loc[distance.eq(distance.min())].reset_index(drop=True))
 
     rng = np.random.default_rng(seed)
     contradiction_samples = np.empty((draws, len(matched)), dtype=float)
     coverage_samples = np.empty((draws, len(matched)), dtype=float)
     for column, table in enumerate(matched):
         indices = rng.integers(0, len(table), size=draws)
-        contradiction_samples[:, column] = table[
-            "directional_contradiction"
-        ].to_numpy()[indices]
-        coverage_samples[:, column] = table["child_covered_by_parent"].to_numpy()[
-            indices
-        ]
+        contradiction_samples[:, column] = table["directional_contradiction"].to_numpy()[indices]
+        coverage_samples[:, column] = table["child_covered_by_parent"].to_numpy()[indices]
     null = pd.DataFrame(
         {
             "draw": np.arange(1, draws + 1),
@@ -431,12 +402,10 @@ def matched_nonedge_reference(
         "contradiction_null_mean": float(null["contradiction_fraction"].mean()),
         "child_coverage_null_mean": float(null["median_child_coverage"].mean()),
         "contradiction_p_one_sided_lower": float(
-            (1 + null["contradiction_fraction"].le(observed_contradiction).sum())
-            / (draws + 1)
+            (1 + null["contradiction_fraction"].le(observed_contradiction).sum()) / (draws + 1)
         ),
         "child_coverage_p_one_sided_greater": float(
-            (1 + null["median_child_coverage"].ge(observed_coverage).sum())
-            / (draws + 1)
+            (1 + null["median_child_coverage"].ge(observed_coverage).sum()) / (draws + 1)
         ),
     }
     return null, summary
@@ -470,9 +439,7 @@ def summarize_pairs(
                 null.insert(0, "collection", collection)
                 null_rows.append(null)
             n = len(observed)
-            contradictions = (
-                int(observed["directional_contradiction"].sum()) if n else 0
-            )
+            contradictions = int(observed["directional_contradiction"].sum()) if n else 0
             ci_low, ci_high = wilson_interval(contradictions, n)
             if n == 0:
                 estimate_status = "NOT_ESTIMABLE_NO_PAIRS"
@@ -487,9 +454,7 @@ def summarize_pairs(
                     "n_pairs": n,
                     "estimate_status": estimate_status,
                     "n_directional_contradictions": contradictions,
-                    "directional_contradiction_fraction": contradictions / n
-                    if n
-                    else np.nan,
+                    "directional_contradiction_fraction": contradictions / n if n else np.nan,
                     "directional_contradiction_ci_low": ci_low,
                     "directional_contradiction_ci_high": ci_high,
                     "median_leading_edge_jaccard": (
@@ -504,9 +469,7 @@ def summarize_pairs(
                     **null_summary,
                 }
             )
-    null_table = (
-        pd.concat(null_rows, ignore_index=True) if null_rows else pd.DataFrame()
-    )
+    null_table = pd.concat(null_rows, ignore_index=True) if null_rows else pd.DataFrame()
     return pd.DataFrame(rows), null_table
 
 
@@ -543,9 +506,7 @@ def main() -> None:
     draws = int(protocol["matched_nonedge_reference"]["draws"])
     seed = int(protocol["matched_nonedge_reference"]["seed"])
 
-    go_names, go_parents = parse_go_obo(
-        locate_external(manifest, data_root, "go-basic.obo")
-    )
+    go_names, go_parents = parse_go_obo(locate_external(manifest, data_root, "go-basic.obo"))
     reactome_names, reactome_parents = parse_reactome(
         locate_external(manifest, data_root, "ReactomePathways.txt"),
         locate_external(manifest, data_root, "ReactomePathwaysRelation.txt"),
@@ -567,17 +528,11 @@ def main() -> None:
         audit_candidates = [
             data_root / record["path"]
             for record in manifest["external_files"]
-            if record["path"].endswith(
-                f"/{collection}/HNSC/ours/gate_hard/tau_0.90/audit_log.tsv"
-            )
+            if record["path"].endswith(f"/{collection}/HNSC/ours/gate_hard/tau_0.90/audit_log.tsv")
         ]
-        require(
-            len(audit_candidates) == 1, f"Frozen audit log not unique: {collection}"
-        )
+        require(len(audit_candidates) == 1, f"Frozen audit log not unique: {collection}")
         audit = pd.read_csv(audit_candidates[0], sep="\t", low_memory=False)
-        mapped, mapping = map_audit_terms(
-            audit, collection=collection, names=names, depths=depths
-        )
+        mapped, mapping = map_audit_terms(audit, collection=collection, names=names, depths=depths)
         mapped_by_collection[collection] = mapped
         mapping_tables.append(mapping)
         pair_tables.append(build_pairs(mapped, parents, ancestors))
@@ -586,9 +541,7 @@ def main() -> None:
 
     mapping_qc = pd.concat(mapping_tables, ignore_index=True)
     pairs = (
-        pd.concat(
-            [table for table in pair_tables if not table.empty], ignore_index=True
-        )
+        pd.concat([table for table in pair_tables if not table.empty], ignore_index=True)
         if any(not table.empty for table in pair_tables)
         else pd.DataFrame(columns=PAIR_COLUMNS)
     )
@@ -607,9 +560,7 @@ def main() -> None:
         pairs.to_csv(temporary / "hierarchy_pairs.tsv", sep="\t", index=False)
         metrics.to_csv(temporary / "hierarchy_metrics.tsv", sep="\t", index=False)
         terms.to_csv(temporary / "ontology_term_metrics.tsv", sep="\t", index=False)
-        null_draws.to_csv(
-            temporary / "matched_nonedge_null_draws.tsv", sep="\t", index=False
-        )
+        null_draws.to_csv(temporary / "matched_nonedge_null_draws.tsv", sep="\t", index=False)
         outputs = [
             temporary / name
             for name in (
@@ -622,7 +573,7 @@ def main() -> None:
         ]
         run_meta = {
             "schema_version": "CRM_R1_PRIORITY5_ONTOLOGY_v1",
-            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "created_utc": datetime.now(UTC).isoformat(),
             "benchmark_id": BENCHMARK_ID,
             "freeze_manifest_sha256": sha256_file(manifest_path),
             "protocol_sha256": sha256_file(protocol_path),
@@ -631,15 +582,11 @@ def main() -> None:
             "mapping": {
                 collection: {
                     "mapped": int(
-                        mapping_qc.loc[
-                            mapping_qc["collection"].eq(collection), "mapping_status"
-                        ]
+                        mapping_qc.loc[mapping_qc["collection"].eq(collection), "mapping_status"]
                         .eq("MAPPED_UNIQUE")
                         .sum()
                     ),
-                    "total": int(
-                        mapping_qc.loc[mapping_qc["collection"].eq(collection)].shape[0]
-                    ),
+                    "total": int(mapping_qc.loc[mapping_qc["collection"].eq(collection)].shape[0]),
                 }
                 for collection in COLLECTIONS
             },
