@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+
 BENCHMARK_ID = "PANCAN_TP53_v1_HNSC_R1_P5"
 
 
@@ -37,7 +38,9 @@ def resolve_record(record: dict[str, Any], root: Path) -> Path:
     return path
 
 
-def check_priority5_freeze(data_root: Path, *, allow_outputs: bool = False) -> dict[str, Any]:
+def check_priority5_freeze(
+    data_root: Path, *, allow_outputs: bool = False
+) -> dict[str, Any]:
     repo_root = repo_root_from_script()
     freeze_dir = data_root / "output/priority5" / BENCHMARK_ID / "freeze"
     manifest_path = freeze_dir / "priority5_input_manifest.json"
@@ -76,7 +79,9 @@ def check_priority5_freeze(data_root: Path, *, allow_outputs: bool = False) -> d
     for record in manifest["repository_files"]:
         resolve_record(record, repo_root)
 
-    output = data_root / "output/priority5" / BENCHMARK_ID / "ontology/hierarchy_metrics.tsv"
+    output = (
+        data_root / "output/priority5" / BENCHMARK_ID / "ontology/hierarchy_metrics.tsv"
+    )
     if not allow_outputs:
         require(not output.exists(), "Hierarchy output exists before the release gate")
     return manifest
@@ -97,7 +102,9 @@ def main() -> None:
         f"Reactome={manifest['reactome_release']}; tau=0.90; k=500/collection"
     )
     if args.allow_outputs:
-        print("[INFO] Post-evaluation provenance check; existing P5 outputs were allowed")
+        print(
+            "[INFO] Post-evaluation provenance check; existing P5 outputs were allowed"
+        )
     else:
         print("[GO] Ontology hierarchy evaluation may now run exactly once")
 

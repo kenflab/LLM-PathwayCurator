@@ -8,12 +8,13 @@ import hashlib
 import itertools
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
 
 BENCHMARK_ID = "PANCAN_TP53_v1_HNSC_R1_P5"
 COMPONENTS = (
@@ -99,13 +100,17 @@ def utility_scores(table: pd.DataFrame, epsilon: float = 1e-6) -> pd.DataFrame:
     add("minimum", np.min(values, axis=1), equal)
     for weights in weight_grid(0.25):
         weight_array = np.asarray(weights)
-        score = np.exp(np.sum(np.log(np.clip(values, epsilon, 1.0)) * weight_array, axis=1))
+        score = np.exp(
+            np.sum(np.log(np.clip(values, epsilon, 1.0)) * weight_array, axis=1)
+        )
         tag = "_".join(str(int(round(weight * 100))) for weight in weights)
         add(f"log_linear_w_{tag}", score, weights)
     return pd.concat(rows, ignore_index=True)
 
 
-def summarize_sensitivity(ranks: pd.DataFrame, *, top_k: int, material_shift: int) -> pd.DataFrame:
+def summarize_sensitivity(
+    ranks: pd.DataFrame, *, top_k: int, material_shift: int
+) -> pd.DataFrame:
     primary = ranks.loc[ranks["aggregation"].eq("multiplicative")].set_index("claim_id")
     primary_top = set(primary.nsmallest(top_k, "rank").index)
     rows: list[dict[str, Any]] = []
@@ -119,7 +124,9 @@ def summarize_sensitivity(ranks: pd.DataFrame, *, top_k: int, material_shift: in
         rows.append(
             {
                 "aggregation": method,
-                "spearman_vs_multiplicative": aligned.corr(method="spearman").iloc[0, 1],
+                "spearman_vs_multiplicative": aligned.corr(method="spearman").iloc[
+                    0, 1
+                ],
                 "top_k": top_k,
                 "top_k_overlap_n": len(primary_top & candidate_top),
                 "top_k_overlap_fraction": len(primary_top & candidate_top) / top_k,
@@ -154,7 +161,9 @@ def main() -> None:
         {"claim_id", *COMPONENTS}.issubset(table.columns),
         "Component table schema drift",
     )
-    require(len(table) == 50 and table["claim_id"].nunique() == 50, "Expected 50 claims")
+    require(
+        len(table) == 50 and table["claim_id"].nunique() == 50, "Expected 50 claims"
+    )
     require(
         set(table["claim_id"].astype(str)) == frozen_claim_ids,
         "Utility component claims differ from the frozen Priority 2 census",
@@ -175,7 +184,7 @@ def main() -> None:
     summary.to_csv(summary_path, sep="\t", index=False)
     meta = {
         "schema_version": "CRM_R1_PRIORITY5_UTILITY_v1",
-        "created_utc": datetime.now(UTC).isoformat(),
+        "created_utc": datetime.now(timezone.utc).isoformat(),
         "benchmark_id": BENCHMARK_ID,
         "components_sha256": sha256_file(component_path),
         "priority2_freeze_sha256": sha256_file(p2_path),
@@ -190,7 +199,9 @@ def main() -> None:
     }
     temporary = output_dir / "utility_sensitivity.run_meta.json.tmp"
     final = output_dir / "utility_sensitivity.run_meta.json"
-    temporary.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     os.replace(temporary, final)
     print("[PASS] Priority 5 utility sensitivity complete after P3/P4 lock")
     print(f"[INFO] Aggregations evaluated: {summary['aggregation'].nunique()}")

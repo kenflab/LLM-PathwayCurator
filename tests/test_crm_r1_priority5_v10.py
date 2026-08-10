@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -27,7 +28,9 @@ def test_priority5_protocol_has_safe_parallel_boundary() -> None:
     assert protocol["parallel_work_boundary"][
         "ontology_evaluation_may_run_before_priority3_priority4_lock"
     ]
-    assert not protocol["parallel_work_boundary"]["priority3_priority4_outcomes_may_be_read"]
+    assert not protocol["parallel_work_boundary"][
+        "priority3_priority4_outcomes_may_be_read"
+    ]
     go = protocol["ontology_sources"]["go"]
     assert go["allowed_relations"] == ["is_a", "part_of"]
     assert {"has_part", "regulates"}.issubset(go["excluded_relations"])
@@ -41,6 +44,10 @@ def test_priority5_protocol_has_safe_parallel_boundary() -> None:
 
 
 def test_v10_preserves_v8_protocol_contract_and_strict_zip_calls() -> None:
+    assert (
+        hashlib.sha256(UMBRELLA_CONFIG.read_bytes()).hexdigest()
+        == "9e84af9c6f5282f08e4034d512efeb7efbcccf4183ee5c27319809f9a13a5086"
+    )
     umbrella = json.loads(UMBRELLA_CONFIG.read_text(encoding="utf-8"))
     assert umbrella["priority5"]["ontology_release_dates"] is None
     plot_text = (SCRIPTS / "91_plot_priority5_figure3.py").read_text(encoding="utf-8")
@@ -128,7 +135,9 @@ def test_mapping_and_pair_metrics_are_directional() -> None:
         }
     )
     depths = module.minimum_depths(names, parents)
-    mapped, qc = module.map_audit_terms(audit, collection="C5_GO_BP", names=names, depths=depths)
+    mapped, qc = module.map_audit_terms(
+        audit, collection="C5_GO_BP", names=names, depths=depths
+    )
     assert qc["mapping_status"].eq("MAPPED_UNIQUE").all()
     pairs = module.build_pairs(mapped, parents, module.ancestor_sets(names, parents))
     direct = pairs.loc[pairs["relation_scope"].eq("direct_parent_child")].iloc[0]
