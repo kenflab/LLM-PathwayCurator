@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 BENCHMARK_ID = "PANCAN_TP53_v1_HNSC_R1_P5"
 
 
@@ -67,9 +66,7 @@ def main() -> None:
     p5_root = data_root / "output/priority5" / BENCHMARK_ID
     ontology_dir = p5_root / "ontology"
     final_dir = p5_root / "final"
-    require(
-        not final_dir.exists(), f"Figure 3 source output already exists: {final_dir}"
-    )
+    require(not final_dir.exists(), f"Figure 3 source output already exists: {final_dir}")
     verify_ontology_outputs(ontology_dir)
 
     metrics = pd.read_csv(ontology_dir / "hierarchy_metrics.tsv", sep="\t")
@@ -136,11 +133,7 @@ def main() -> None:
 
         manifest_rows = []
         for filename in tables:
-            panel = (
-                filename.split("_panel_")[1][0].upper()
-                if "_panel_" in filename
-                else "QC"
-            )
+            panel = filename.split("_panel_")[1][0].upper() if "_panel_" in filename else "QC"
             manifest_rows.append(
                 {
                     "figure": "Figure 3" if panel != "QC" else "Supplement",

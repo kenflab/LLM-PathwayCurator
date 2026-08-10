@@ -61,6 +61,7 @@
     ]
   },
   "priority5": {
+    "ontology_release_dates": null,
     "protocol_file": "config/priority5_protocol.json",
     "protocol_version": "CRM_R1_PRIORITY5_v10",
     "ontology_work_may_run_while_priority4_pending": true,

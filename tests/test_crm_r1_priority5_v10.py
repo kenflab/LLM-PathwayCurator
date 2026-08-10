@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "paper/revision/CRM_R1/scripts"
 CONFIG = ROOT / "paper/revision/CRM_R1/config/priority5_protocol.json"
+UMBRELLA_CONFIG = ROOT / "paper/revision/CRM_R1/config/priorities2_5_protocol.json"
 
 
 def load_script(filename: str):
@@ -27,9 +27,7 @@ def test_priority5_protocol_has_safe_parallel_boundary() -> None:
     assert protocol["parallel_work_boundary"][
         "ontology_evaluation_may_run_before_priority3_priority4_lock"
     ]
-    assert not protocol["parallel_work_boundary"][
-        "priority3_priority4_outcomes_may_be_read"
-    ]
+    assert not protocol["parallel_work_boundary"]["priority3_priority4_outcomes_may_be_read"]
     go = protocol["ontology_sources"]["go"]
     assert go["allowed_relations"] == ["is_a", "part_of"]
     assert {"has_part", "regulates"}.issubset(go["excluded_relations"])
@@ -40,6 +38,13 @@ def test_priority5_protocol_has_safe_parallel_boundary() -> None:
     )
     assert protocol["hierarchy_estimands"]["minimum_pairs_for_primary_estimate"] == 10
     assert protocol["audit_inputs"]["k_claims_per_collection"] == 500
+
+
+def test_v10_preserves_v8_protocol_contract_and_strict_zip_calls() -> None:
+    umbrella = json.loads(UMBRELLA_CONFIG.read_text(encoding="utf-8"))
+    assert umbrella["priority5"]["ontology_release_dates"] is None
+    plot_text = (SCRIPTS / "91_plot_priority5_figure3.py").read_text(encoding="utf-8")
+    assert plot_text.count("strict=True") == 4
 
 
 def test_go_parser_uses_only_is_a_and_part_of(tmp_path: Path) -> None:
@@ -123,9 +128,7 @@ def test_mapping_and_pair_metrics_are_directional() -> None:
         }
     )
     depths = module.minimum_depths(names, parents)
-    mapped, qc = module.map_audit_terms(
-        audit, collection="C5_GO_BP", names=names, depths=depths
-    )
+    mapped, qc = module.map_audit_terms(audit, collection="C5_GO_BP", names=names, depths=depths)
     assert qc["mapping_status"].eq("MAPPED_UNIQUE").all()
     pairs = module.build_pairs(mapped, parents, module.ancestor_sets(names, parents))
     direct = pairs.loc[pairs["relation_scope"].eq("direct_parent_child")].iloc[0]

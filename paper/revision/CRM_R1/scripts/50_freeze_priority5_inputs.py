@@ -11,12 +11,11 @@ import ssl
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-
 
 BENCHMARK_ID = "PANCAN_TP53_v1_HNSC_R1_P5"
 EXPECTED_TAU = 0.90
@@ -78,12 +77,8 @@ def require_clean_tracked_revision(repo_root: Path) -> str:
             command.append("--cached")
         command.extend(["--", *paths])
         result = subprocess.run(command, cwd=repo_root, check=False)
-        require(
-            result.returncode == 0, "Commit tracked V10 code before freezing P5 inputs"
-        )
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
-    ).strip()
+        require(result.returncode == 0, "Commit tracked V10 code before freezing P5 inputs")
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
 
 
 def ssl_context(use_system_trust: bool):
@@ -147,13 +142,9 @@ def validate_audit_log(path: Path, collection: str) -> dict[str, Any]:
         "context_review_mode",
         "context_evaluated",
     }
-    require(
-        required.issubset(table.columns), f"{collection} audit log schema is incomplete"
-    )
+    require(required.issubset(table.columns), f"{collection} audit log schema is incomplete")
     require(len(table) == EXPECTED_K, f"{collection}: expected {EXPECTED_K} claims")
-    require(
-        table["claim_id"].nunique() == EXPECTED_K, f"{collection}: duplicate claim_id"
-    )
+    require(table["claim_id"].nunique() == EXPECTED_K, f"{collection}: duplicate claim_id")
     require(table["entity"].nunique() == EXPECTED_K, f"{collection}: duplicate entity")
     tau = pd.to_numeric(table["tau_used"], errors="raise")
     require((tau - EXPECTED_TAU).abs().max() < 1e-12, f"{collection}: tau drift")
@@ -227,10 +218,7 @@ def build_manifest(
     audit_summaries: dict[str, Any] = {}
     for collection in COLLECTIONS:
         audit_path = (
-            p5_root
-            / "audit_runs"
-            / collection
-            / "HNSC/ours/gate_hard/tau_0.90/audit_log.tsv"
+            p5_root / "audit_runs" / collection / "HNSC/ours/gate_hard/tau_0.90/audit_log.tsv"
         )
         audit_summaries[collection] = validate_audit_log(audit_path, collection)
         external_files.append(file_record(audit_path, data_root))
@@ -245,16 +233,14 @@ def build_manifest(
     repository_inputs.extend(
         sorted((repo_root / "paper/revision/CRM_R1/scripts").glob("5[0-4]_*.py"))
     )
-    require(
-        all(path.is_file() for path in repository_inputs), "Missing repository P5 input"
-    )
+    require(all(path.is_file() for path in repository_inputs), "Missing repository P5 input")
 
     manifest = {
         "schema_version": "CRM_R1_PRIORITY5_INPUT_FREEZE_v1",
         "status": "FROZEN_BEFORE_HIERARCHY_EVALUATION",
         "benchmark_id": BENCHMARK_ID,
         "freeze_label": freeze_label,
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.now(UTC).isoformat(),
         "git_commit": commit,
         "protocol_version": protocol["protocol_version"],
         "audit_configuration": protocol["audit_inputs"],
@@ -263,9 +249,7 @@ def build_manifest(
         "reactome_release": protocol["ontology_sources"]["reactome"]["release"],
         "safe_go_relations": protocol["ontology_sources"]["go"]["allowed_relations"],
         "external_files": external_files,
-        "repository_files": [
-            file_record(path, repo_root) for path in repository_inputs
-        ],
+        "repository_files": [file_record(path, repo_root) for path in repository_inputs],
         "privacy_boundary": {
             "priority3_grades_read": False,
             "priority4_ratings_read": False,
@@ -293,9 +277,7 @@ def main() -> None:
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     atomic_write_text(manifest_path, payload)
     checksum_path = manifest_path.with_suffix(".sha256")
-    atomic_write_text(
-        checksum_path, f"{sha256_file(manifest_path)}  {manifest_path.name}\n"
-    )
+    atomic_write_text(checksum_path, f"{sha256_file(manifest_path)}  {manifest_path.name}\n")
 
     print("[PASS] Priority 5 audit inputs and ontology snapshots frozen")
     print(f"[INFO] GO release: {manifest['go_release']['data_version']}")
