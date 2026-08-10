@@ -1,6 +1,6 @@
 # Script map
 
-> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_20260809`
+> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_3_20260810`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 
 Keep scripts small and numbered by analytical priority. Do not create empty placeholder scripts.
@@ -12,7 +12,7 @@ Keep scripts small and numbered by analytical priority. Do not create empty plac
 | `2x_` | P2 candidate pool and matched benchmark | `20_freeze_claim_pool.py`, `21_check_priority2_freeze.py` |
 | `3x_` | P3 fixed PubMed retrieval and evidence ledger | `30_fetch_priority3_pubmed.py`, `31_check_priority3_retrieval.py` |
 | `4x_` | P4 blinded review and packet integrity | `40_make_blinded_packets.py`, `41_check_priority4_packets.py` |
-| `5x_` | P5 ontology and utility robustness | `50_freeze_priority5_inputs.py` through `54_build_priority5_figure3_source.py` |
+| `4x_/5x_` | P5 candidate census, ontology, and utility robustness | `49_lock_priority5_candidate_census.py` through `54_build_priority5_figure3_source.py` |
 | `9x_` | Rendering and final export validation | `90_plot_priority1_figure4.py`, `91_plot_priority5_figure3.py` |
 
 Priority 1 scripts write beneath
@@ -119,8 +119,15 @@ are pending. The two collection audits use deterministic proposals, the frozen H
 `tau = 0.90`, `k = 500`, and the frozen local `llama3.1:8b` context review. GO or Reactome hierarchy
 information is never supplied to the audit.
 
+The original full-collection runs are membership-source QC only: context review and deterministic
+proposal used different top-500 orderings. Script 49 locks the exact census without reading audit
+status; complete audits then run from the two exact 500-row census EvidenceTables under
+`audit_runs_complete/`. Script 50 requires every row to be LLM-evaluated and rejects membership
+drift. Do not relax this gate or overwrite the original `audit_runs/`.
+
 | Script | Responsibility | P3/P4 access |
 | --- | --- | --- |
+| `49_lock_priority5_candidate_census.py` | Lock the existing 500 `entity x direction` claims per collection without reading status, context outcomes, or hierarchy data; write exact census EvidenceTables | Forbidden |
 | `50_freeze_priority5_inputs.py` | Run the P2 gate; freeze both P5 audit logs, GO `go-basic.obo`, Reactome v97 hierarchy files, code, and SHA-256 inventory before hierarchy outcomes | Forbidden |
 | `51_check_priority5_freeze.py` | Recompute every frozen hash and release the one-time hierarchy evaluation | Forbidden |
 | `52_evaluate_ontology_hierarchy.py` | Map unique normalized labels; calculate direct and safe-ancestor pairs, contradiction, leading-edge support, depth, status patterns, and matched-nonedge references | Forbidden |

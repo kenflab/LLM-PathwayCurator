@@ -51,7 +51,10 @@ def load_protocol(repo_root: Path) -> tuple[Path, dict[str, Any]]:
     path = repo_root / "paper/revision/CRM_R1/config/priority5_protocol.json"
     require(path.is_file(), f"Missing Priority 5 protocol: {path}")
     protocol = json.loads(path.read_text(encoding="utf-8"))
-    require(protocol["protocol_version"] == "CRM_R1_PRIORITY5_v10", "Wrong P5 protocol")
+    require(
+        protocol["protocol_version"] == "CRM_R1_PRIORITY5_v10_3",
+        "Wrong P5 protocol",
+    )
     require(
         protocol["status"] == "PRESPECIFIED_AWAITING_INPUT_FREEZE",
         "P5 protocol is not in its pre-evaluation state",
@@ -77,7 +80,10 @@ def require_clean_tracked_revision(repo_root: Path) -> str:
             command.append("--cached")
         command.extend(["--", *paths])
         result = subprocess.run(command, cwd=repo_root, check=False)
-        require(result.returncode == 0, "Commit tracked V10 code before freezing P5 inputs")
+        require(
+            result.returncode == 0,
+            "Commit tracked V10.3 code before freezing P5 inputs",
+        )
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
 
 
@@ -129,7 +135,9 @@ def go_release_metadata(path: Path) -> dict[str, str | None]:
     return metadata
 
 
-def validate_audit_log(path: Path, collection: str) -> dict[str, Any]:
+def validate_audit_log(
+    path: Path, collection: str, expected_membership: pd.DataFrame
+) -> dict[str, Any]:
     require(path.is_file(), f"Missing P5 audit log: {path}")
     table = pd.read_csv(path, sep="\t", low_memory=False)
     required = {
@@ -141,19 +149,44 @@ def validate_audit_log(path: Path, collection: str) -> dict[str, Any]:
         "tau_used",
         "context_review_mode",
         "context_evaluated",
+        "context_status",
+        "context_method",
     }
     require(required.issubset(table.columns), f"{collection} audit log schema is incomplete")
     require(len(table) == EXPECTED_K, f"{collection}: expected {EXPECTED_K} claims")
     require(table["claim_id"].nunique() == EXPECTED_K, f"{collection}: duplicate claim_id")
     require(table["entity"].nunique() == EXPECTED_K, f"{collection}: duplicate entity")
+    observed_membership = {
+        (str(entity).strip(), str(direction).strip().lower())
+        for entity, direction in zip(table["entity"], table["direction"], strict=True)
+    }
+    frozen_membership = {
+        (str(entity).strip(), str(direction).strip().lower())
+        for entity, direction in zip(
+            expected_membership["entity"],
+            expected_membership["direction"],
+            strict=True,
+        )
+    }
+    require(
+        observed_membership == frozen_membership,
+        f"{collection}: complete audit membership differs from locked census",
+    )
     tau = pd.to_numeric(table["tau_used"], errors="raise")
     require((tau - EXPECTED_TAU).abs().max() < 1e-12, f"{collection}: tau drift")
     modes = set(table["context_review_mode"].astype(str).str.lower())
     require(modes == {"llm"}, f"{collection}: context review must be llm")
     evaluated = table["context_evaluated"].astype(str).str.lower().isin({"true", "1"})
     require(evaluated.all(), f"{collection}: missing context evaluations")
+    statuses = table["context_status"].astype(str).str.strip().str.upper()
+    require(
+        statuses.isin({"PASS", "WARN", "FAIL"}).all(),
+        f"{collection}: invalid context status",
+    )
+    methods = table["context_method"].astype(str).str.strip().str.lower()
+    require(methods.eq("llm").all(), f"{collection}: context method must be llm")
     return {
-        "rows": int(len(table)),
+        "rows": len(table),
         "pass": int(table["status"].astype(str).str.upper().eq("PASS").sum()),
         "abstain": int(table["status"].astype(str).str.upper().eq("ABSTAIN").sum()),
         "fail": int(table["status"].astype(str).str.upper().eq("FAIL").sum()),
@@ -168,6 +201,53 @@ def file_record(path: Path, root: Path) -> dict[str, Any]:
     }
 
 
+def validate_candidate_census(
+    p5_root: Path,
+) -> tuple[list[Path], dict[str, pd.DataFrame]]:
+    census_dir = p5_root / "candidate_census"
+    manifest_path = census_dir / "priority5_candidate_census_manifest.json"
+    digest_path = census_dir / "priority5_candidate_census_manifest.sha256"
+    membership_path = census_dir / "priority5_candidate_census.tsv"
+    require(manifest_path.is_file(), f"Missing candidate census manifest: {manifest_path}")
+    require(digest_path.is_file(), f"Missing candidate census digest: {digest_path}")
+    expected_digest = digest_path.read_text(encoding="utf-8").split()[0]
+    require(sha256_file(manifest_path) == expected_digest, "Candidate census digest drift")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    require(
+        manifest.get("status") == "LOCKED_BEFORE_COMPLETE_CONTEXT_REVIEW_AND_ONTOLOGY_EVALUATION",
+        "Candidate census is not locked",
+    )
+    require(manifest.get("audit_status_columns_read") is False, "Census used audit status")
+    require(
+        manifest.get("hierarchy_outcomes_read") is False,
+        "Census used hierarchy outcomes",
+    )
+    require(membership_path.is_file(), "Missing candidate census membership")
+    membership = pd.read_csv(membership_path, sep="\t")
+    require(len(membership) == EXPECTED_K * len(COLLECTIONS), "Census row-count drift")
+    output_paths = [membership_path]
+    memberships: dict[str, pd.DataFrame] = {}
+    for collection in COLLECTIONS:
+        subset = membership.loc[membership["collection"].eq(collection)].copy()
+        require(len(subset) == EXPECTED_K, f"{collection}: candidate census K drift")
+        require(subset["entity"].nunique() == EXPECTED_K, f"{collection}: duplicate entity")
+        memberships[collection] = subset
+        evidence_path = census_dir / f"{collection}.candidate_census.evidence_table.tsv"
+        require(evidence_path.is_file(), f"Missing census EvidenceTable: {evidence_path}")
+        evidence = pd.read_csv(evidence_path, sep="\t", usecols=["term_id", "direction"])
+        require(len(evidence) == EXPECTED_K, f"{collection}: census EvidenceTable K drift")
+        require(
+            evidence["term_id"].astype(str).tolist() == subset["entity"].astype(str).tolist(),
+            f"{collection}: census membership/evidence drift",
+        )
+        output_paths.append(evidence_path)
+    for label, record in manifest["outputs"].items():
+        path = census_dir / str(record["path"])
+        require(path.is_file(), f"Missing recorded census output {label}: {path}")
+        require(sha256_file(path) == record["sha256"], f"Census output hash drift: {path}")
+    return [manifest_path, digest_path, *output_paths], memberships
+
+
 def build_manifest(
     *, data_root: Path, repo_root: Path, use_system_trust: bool, freeze_label: str
 ) -> tuple[Path, dict[str, Any]]:
@@ -176,6 +256,7 @@ def build_manifest(
     commit = require_clean_tracked_revision(repo_root)
 
     p5_root = data_root / "output/priority5" / BENCHMARK_ID
+    candidate_files, candidate_memberships = validate_candidate_census(p5_root)
     hierarchy_output = p5_root / "ontology/hierarchy_metrics.tsv"
     require(
         not hierarchy_output.exists(),
@@ -218,21 +299,28 @@ def build_manifest(
     audit_summaries: dict[str, Any] = {}
     for collection in COLLECTIONS:
         audit_path = (
-            p5_root / "audit_runs" / collection / "HNSC/ours/gate_hard/tau_0.90/audit_log.tsv"
+            p5_root
+            / "audit_runs_complete"
+            / collection
+            / "HNSC/ours/gate_hard/tau_0.90/audit_log.tsv"
         )
-        audit_summaries[collection] = validate_audit_log(audit_path, collection)
+        audit_summaries[collection] = validate_audit_log(
+            audit_path, collection, candidate_memberships[collection]
+        )
         external_files.append(file_record(audit_path, data_root))
 
     for path in (go_path, reactome_pathways, reactome_relations):
+        external_files.append(file_record(path, data_root))
+    for path in candidate_files:
         external_files.append(file_record(path, data_root))
 
     repository_inputs = [protocol_path]
     for item in protocol["audit_inputs"]["collections"]:
         repository_inputs.append(repo_root / item["evidence_table"])
     repository_inputs.append(repo_root / protocol["audit_inputs"]["sample_card"])
-    repository_inputs.extend(
-        sorted((repo_root / "paper/revision/CRM_R1/scripts").glob("5[0-4]_*.py"))
-    )
+    scripts_dir = repo_root / "paper/revision/CRM_R1/scripts"
+    repository_inputs.append(scripts_dir / "49_lock_priority5_candidate_census.py")
+    repository_inputs.extend(sorted(scripts_dir.glob("5[0-4]_*.py")))
     require(all(path.is_file() for path in repository_inputs), "Missing repository P5 input")
 
     manifest = {

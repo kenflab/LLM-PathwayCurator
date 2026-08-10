@@ -332,7 +332,7 @@ reasonable scoring choices?
   shifts.
 - If utility ranking is unstable, describe it only as an exploratory ordering aid.
 
-### V10 operationalization: parallel ontology work while ratings are pending
+### V10.3 operationalization: parallel ontology work while ratings are pending
 
 - P5 ontology evaluation may proceed after the frozen P2 census and blank P4 packets exist. It does
   not read P3 grades, partial P4 returns, or method-level P3/P4 outcomes.
@@ -342,6 +342,11 @@ reasonable scoring choices?
   few hierarchy pairs. The wider `k = 500` census was fixed before calculating contradiction,
   gene-support, P3, or P4 endpoints. It changes only the evaluation-set width; hierarchy data do
   not enter proposal generation or audit decisions.
+- The first full-collection runs exposed a pre-freeze implementation mismatch: LLM context review
+  considered at most 500 source terms before deterministic proposal, whereas the final 500 claims
+  used a different ranking. The exact resulting `entity x direction` census is therefore locked
+  without reading status, then rerun as an exact 500-row EvidenceTable so every fixed claim receives
+  context review. The incomplete runs remain QC records and are not frozen as final P5 audits.
 - GO and Reactome hierarchy data are not supplied to those audits. The exact audit logs, ontology
   files, releases, code, and hashes are frozen before any hierarchy endpoint is calculated.
 - GO uses the frozen `go-basic.obo` snapshot but propagates only `is_a` and `part_of`; all regulation

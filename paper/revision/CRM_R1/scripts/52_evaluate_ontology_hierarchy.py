@@ -72,8 +72,7 @@ def repo_root_from_script() -> Path:
 
 def normalize_label(value: str, prefix: str) -> str:
     text = str(value).strip().upper()
-    if text.startswith(prefix):
-        text = text[len(prefix) :]
+    text = text.removeprefix(prefix)
     return re.sub(r"[^A-Z0-9]+", "_", text).strip("_")
 
 

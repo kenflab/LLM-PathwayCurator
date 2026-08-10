@@ -1,6 +1,6 @@
 # CRM_R1 revision workspace
 
-> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_20260809`
+> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_3_20260810`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 > Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
 
@@ -42,7 +42,7 @@ cd /Users/kfurudate/projects/LLM-PathwayCurator
 | P2 | Same-pool unaudited/audited benchmark with matched baselines | Frozen: 50 claims; matched K=25 | Figure 2 |
 | P3 | Fixed PubMed retrieval and independent evidence grading | V9 retrieval/grading ledger ready | Figure 2 |
 | P4 | Narrow blinded evidence review and inter-rater agreement | V9 three-rater packet ready | Figure 2 |
-| P5 | GO/Reactome hierarchy, utility robustness, and final integration | V10 ontology analysis ready; final utility waits for P3/P4 lock | Figure 3 + Supplement |
+| P5 | GO/Reactome hierarchy, utility robustness, and final integration | V10.3 complete-context census repair; final utility waits for P3/P4 lock | Figure 3 + Supplement |
 
 ## What becomes public
 
@@ -611,49 +611,60 @@ showed AUROC 0.713 (bootstrap 95% CI 0.558-0.857; permutation `P = 0.0055`). Pre
 without threshold changes or rescue analyses. Render Figure 4, then proceed to the separately
 frozen Priority 2 candidate-pool design.
 
-## Priority 5 V10: proceed while P4 ratings are pending
+## Priority 5 V10.3: complete the fixed census while P4 ratings are pending
 
 The P4 wait does not stop the independent ontology analysis. P5 uses new GO and Reactome hierarchy
 snapshots only after the GO/Reactome audit outputs are generated without hierarchy input. It never
 reads P3 grades or P4 ratings. The final utility synthesis remains locked until both P3 and P4 have
 complete frozen manifests.
 
-First run the P2 `tau`, proposal, and context configuration on the two independent collections.
-Candidate proposals remain deterministic; only the context review uses the frozen local Ollama
-model. P5 uses a wider fixed `k = 500` evaluation set because a mapping-only feasibility preflight
-showed that `k = 50` yielded too few hierarchy pairs. No contradiction, gene-support, P3, or P4
-endpoint was used to choose this width, and hierarchy data are not audit inputs.
+The initial collection runs started from 3,386 GO BP and 984 Reactome terms. Context review
+shortlisted at most 500 terms before deterministic proposal, so the reviewed shortlist and final
+500 claims differed. This left 442 GO BP and 217 Reactome claims unevaluated. It is a shortlist
+coverage mismatch, not an Ollama token-limit result. Preserve those runs under `audit_runs/` as QC.
+
+V10.3 first locks their exact `entity x direction` memberships without reading audit status. It
+then reruns only those 500 terms per collection, ensuring that every final claim receives context
+review. No contradiction, gene-support, P3, P4, or hierarchy outcome may define or alter this
+census.
 
 ```bash
 export CRM_R1_P5_ROOT="$CRM_R1_DATA_ROOT/output/priority5/PANCAN_TP53_v1_HNSC_R1_P5"
+python paper/revision/CRM_R1/scripts/49_lock_priority5_candidate_census.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --lock-label "KF_20260810_P5_CENSUS"
+
 export LLMPATH_BACKEND=ollama
 export LLMPATH_OLLAMA_HOST=http://localhost:11434
 export LLMPATH_OLLAMA_MODEL=llama3.1:8b
+export LLMPATH_CONTEXT_REVIEW_MODE=llm
+export LLMPATH_CONTEXT_GATE_MODE=hard
+export LLMPATH_CLAIM_MODE=deterministic
+export LLMPATH_CONTEXT_REVIEW_SHORTLIST=500
 
-LLMPATH_CONTEXT_REVIEW_MODE=llm \
-LLMPATH_CONTEXT_GATE_MODE=hard \
-LLMPATH_CLAIM_MODE=deterministic \
-python paper/scripts/figS2_run_collections_pipeline.py \
-  --benchmark-id PANCAN_TP53_v1 \
-  --cancers HNSC \
-  --variants ours \
-  --gate-modes hard \
-  --collections GO_BP,Reactome \
-  --tau 0.90 \
-  --k-claims 500 \
-  --context-review-mode llm \
-  --out-root "$CRM_R1_P5_ROOT/audit_runs"
+llm-pathway-curator run \
+  --evidence-table "$CRM_R1_P5_ROOT/candidate_census/C5_GO_BP.candidate_census.evidence_table.tsv" \
+  --sample-card paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json \
+  --outdir "$CRM_R1_P5_ROOT/audit_runs_complete/C5_GO_BP/HNSC/ours/gate_hard/tau_0.90" \
+  --tau 0.90 --k-claims 500 --seed 42
+
+llm-pathway-curator run \
+  --evidence-table "$CRM_R1_P5_ROOT/candidate_census/C2_CP_REACTOME.candidate_census.evidence_table.tsv" \
+  --sample-card paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json \
+  --outdir "$CRM_R1_P5_ROOT/audit_runs_complete/C2_CP_REACTOME/HNSC/ours/gate_hard/tau_0.90" \
+  --tau 0.90 --k-claims 500 --seed 42
 ```
 
 Apply and locally commit V10 before freezing. Do not add either `AGENTS.md`. The freeze script runs
 the P2 checker, downloads the GO and Reactome hierarchy files when absent, freezes their hashes and
-release metadata, validates both 50-claim audit logs, and confirms that no hierarchy endpoint yet
-exists. Use verified system trust on the managed Mac if needed.
+release metadata, validates both complete 500-claim audit logs against the locked census, and
+confirms that no hierarchy endpoint yet exists. Use verified system trust on the managed Mac if
+needed.
 
 ```bash
 python paper/revision/CRM_R1/scripts/50_freeze_priority5_inputs.py \
   --data-root "$CRM_R1_DATA_ROOT" \
-  --freeze-label "KF_20260809_P5" \
+  --freeze-label "KF_20260810_P5" \
   --use-system-trust
 
 python paper/revision/CRM_R1/scripts/51_check_priority5_freeze.py \

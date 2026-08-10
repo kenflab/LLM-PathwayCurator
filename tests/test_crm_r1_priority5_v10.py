@@ -24,6 +24,7 @@ def load_script(filename: str):
 
 def test_priority5_protocol_has_safe_parallel_boundary() -> None:
     protocol = json.loads(CONFIG.read_text(encoding="utf-8"))
+    assert protocol["protocol_version"] == "CRM_R1_PRIORITY5_v10_3"
     assert protocol["status"] == "PRESPECIFIED_AWAITING_INPUT_FREEZE"
     assert protocol["parallel_work_boundary"][
         "ontology_evaluation_may_run_before_priority3_priority4_lock"
@@ -39,6 +40,90 @@ def test_priority5_protocol_has_safe_parallel_boundary() -> None:
     )
     assert protocol["hierarchy_estimands"]["minimum_pairs_for_primary_estimate"] == 10
     assert protocol["audit_inputs"]["k_claims_per_collection"] == 500
+    census = protocol["audit_inputs"]["candidate_census"]
+    assert census["membership_columns_read"] == ["claim_id", "entity", "direction"]
+    assert census["audit_status_columns_read"] is False
+    assert census["status_dependent_reselection"] is False
+    assert census["hierarchy_outcomes_read"] is False
+
+
+def test_candidate_census_uses_membership_only_and_preserves_order(
+    tmp_path: Path,
+) -> None:
+    module = load_script("49_lock_priority5_candidate_census.py")
+    module.EXPECTED_K = 2
+    audit_path = tmp_path / "audit_log.tsv"
+    pd.DataFrame(
+        {
+            "claim_id": ["claim-b", "claim-a"],
+            "entity": ["TERM_B", "TERM_A"],
+            "direction": ["DOWN", "UP"],
+            "status": ["ABSTAIN", "PASS"],
+            "context_evaluated": [False, True],
+        }
+    ).to_csv(audit_path, sep="\t", index=False)
+    membership = module.load_membership_only(audit_path, "C5_GO_BP")
+    assert membership["entity"].tolist() == ["TERM_B", "TERM_A"]
+    assert membership["direction"].tolist() == ["down", "up"]
+    assert "status" not in membership.columns
+    assert "context_evaluated" not in membership.columns
+
+    evidence_path = tmp_path / "evidence.tsv"
+    pd.DataFrame(
+        {
+            "term_id": ["TERM_A", "TERM_B", "TERM_C"],
+            "direction": ["up", "down", "up"],
+            "stat": [1.0, -2.0, 3.0],
+        }
+    ).to_csv(evidence_path, sep="\t", index=False)
+    census = module.build_census_evidence(membership, evidence_path, "C5_GO_BP")
+    assert census["term_id"].tolist() == ["TERM_B", "TERM_A"]
+
+
+def test_priority5_freeze_requires_complete_llm_review_and_locked_membership(
+    tmp_path: Path,
+) -> None:
+    module = load_script("50_freeze_priority5_inputs.py")
+    module.EXPECTED_K = 2
+    expected = pd.DataFrame({"entity": ["TERM_A", "TERM_B"], "direction": ["up", "down"]})
+    audit_path = tmp_path / "audit_log.tsv"
+    audit = pd.DataFrame(
+        {
+            "claim_id": ["a", "b"],
+            "entity": ["TERM_A", "TERM_B"],
+            "direction": ["up", "down"],
+            "status": ["PASS", "ABSTAIN"],
+            "gene_ids": ["1;2", "3;4"],
+            "tau_used": [0.9, 0.9],
+            "context_review_mode": ["llm", "llm"],
+            "context_evaluated": [True, False],
+            "context_status": ["PASS", ""],
+            "context_method": ["llm", "none"],
+        }
+    )
+    audit.to_csv(audit_path, sep="\t", index=False)
+    try:
+        module.validate_audit_log(audit_path, "C5_GO_BP", expected)
+    except ValueError as error:
+        assert "missing context evaluations" in str(error)
+    else:
+        raise AssertionError("Incomplete context review was accepted")
+
+    audit.loc[1, "context_evaluated"] = True
+    audit.loc[1, "context_status"] = "WARN"
+    audit.loc[1, "context_method"] = "llm"
+    audit.to_csv(audit_path, sep="\t", index=False)
+    summary = module.validate_audit_log(audit_path, "C5_GO_BP", expected)
+    assert summary == {"rows": 2, "pass": 1, "abstain": 1, "fail": 0}
+
+    wrong = expected.copy()
+    wrong.loc[1, "direction"] = "up"
+    try:
+        module.validate_audit_log(audit_path, "C5_GO_BP", wrong)
+    except ValueError as error:
+        assert "differs from locked census" in str(error)
+    else:
+        raise AssertionError("Membership drift was accepted")
 
 
 def test_v10_preserves_v8_protocol_contract_and_strict_zip_calls() -> None:

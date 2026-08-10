@@ -100,7 +100,7 @@ def utility_scores(table: pd.DataFrame, epsilon: float = 1e-6) -> pd.DataFrame:
     for weights in weight_grid(0.25):
         weight_array = np.asarray(weights)
         score = np.exp(np.sum(np.log(np.clip(values, epsilon, 1.0)) * weight_array, axis=1))
-        tag = "_".join(str(int(round(weight * 100))) for weight in weights)
+        tag = "_".join(str(round(weight * 100)) for weight in weights)
         add(f"log_linear_w_{tag}", score, weights)
     return pd.concat(rows, ignore_index=True)
 
