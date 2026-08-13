@@ -103,14 +103,14 @@ def draw_design(axis: plt.Axes) -> None:
     axis.text(
         0.50,
         0.28,
-        "Primary: direct parent–child\nSensitivity: all safe ancestor–descendant",
+        "Primary: direct parent-child\nSensitivity: all safe ancestor-descendant",
         ha="center",
         fontsize=11,
     )
     axis.text(
         0.50,
         0.12,
-        "Matched nonedge reference\n(depth + evidence-size matched)",
+        "Matched nonedge reference\n(depth + evidence size matched)",
         ha="center",
         fontsize=10.5,
         color=GRAY,
@@ -149,7 +149,14 @@ def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
         capsize=4,
         lw=1.5,
     )
-    axis.scatter(x, np.asarray(observed) * 100, s=65, c=colors, label="Observed", zorder=3)
+    axis.scatter(
+        x,
+        np.asarray(observed) * 100,
+        s=65,
+        c=colors,
+        label="Observed hierarchy edges",
+        zorder=3,
+    )
     axis.scatter(
         x,
         np.asarray(null) * 100,
@@ -167,15 +174,25 @@ def plot_contradiction(axis: plt.Axes, table: pd.DataFrame) -> None:
         height = np.nanmax([value + upper_error, null_value]) * 100 + 2.5
         annotation_heights.append(height)
         annotation = (
-            f"P={p_value:.3g}" if status == "ESTIMABLE" and np.isfinite(p_value) else "Primary NE"
+            f"Pdesc={p_value:.3g}"
+            if status == "ESTIMABLE" and np.isfinite(p_value)
+            else "Primary NE"
         )
         axis.text(index, height, annotation, ha="center", va="bottom", fontsize=8.5)
     axis.set_xticks(x, labels, fontsize=8.5)
     axis.set_ylabel("Directional contradiction (%)")
     axis.set_ylim(0, max(10, max(annotation_heights, default=0) + 8))
-    axis.set_title("Direction coherence", fontsize=13, loc="left")
+    axis.set_title("Directional contradiction vs matched nonedges", fontsize=13, loc="left")
     axis.legend(frameon=False, fontsize=9, loc="lower right")
     axis.grid(axis="y", color="#E5E7EB", lw=0.8)
+    axis.text(
+        0.01,
+        0.02,
+        "Pdesc is a descriptive matched-reference P value",
+        transform=axis.transAxes,
+        fontsize=7.8,
+        color=GRAY,
+    )
 
 
 def plot_gene_support(axis: plt.Axes, table: pd.DataFrame) -> None:
@@ -192,7 +209,7 @@ def plot_gene_support(axis: plt.Axes, table: pd.DataFrame) -> None:
                 data.append(values.to_numpy() * 100)
                 name = "GO BP" if collection == "C5_GO_BP" else "Reactome"
                 scope_name = "Direct" if scope == "direct_parent_child" else "All ancestors"
-                labels.append(f"{name}\n{scope_name}")
+                labels.append(f"{name}\n{scope_name}\n(n={len(values)})")
                 colors.append(BLUE if collection == "C5_GO_BP" else ORANGE)
     if data:
         artists = axis.boxplot(data, patch_artist=True, showfliers=True, widths=0.62)
@@ -205,7 +222,7 @@ def plot_gene_support(axis: plt.Axes, table: pd.DataFrame) -> None:
         axis.text(0.5, 0.5, "No mapped hierarchy pairs", ha="center", va="center")
     axis.set_ylabel("Child leading edge covered by parent (%)")
     axis.set_ylim(0, 105)
-    axis.set_title("Hierarchy-consistent gene support", fontsize=13, loc="left")
+    axis.set_title("Leading-edge support across hierarchy pairs", fontsize=13, loc="left")
     axis.grid(axis="y", color="#E5E7EB", lw=0.8)
 
 
@@ -225,7 +242,7 @@ def plot_depth(axis: plt.Axes, table: pd.DataFrame) -> None:
             ].dropna()
             if len(values):
                 data.append(values.to_numpy())
-                labels.append(f"{collection_label}\n{status}")
+                labels.append(f"{collection_label}\n{status}\n(n={len(values)})")
                 statuses.append(status)
     if data:
         artists = axis.boxplot(data, patch_artist=True, widths=0.58)
@@ -246,9 +263,9 @@ def plot_depth(axis: plt.Axes, table: pd.DataFrame) -> None:
         axis.set_xticks(
             np.arange(1, len(labels) + 1),
             labels,
-            fontsize=8.5,
-            rotation=28,
-            ha="right",
+            fontsize=7.6,
+            rotation=0,
+            ha="center",
         )
     axis.set_ylabel("Minimum ontology depth")
     axis.set_title("Ontology depth by audit disposition", fontsize=13, loc="left")
@@ -270,9 +287,9 @@ def main() -> None:
 
     figure_dir = p5_root / "fig"
     figure_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = figure_dir / "Fig3_priority5_ontology_v1.pdf"
-    png_path = figure_dir / "Fig3_priority5_ontology_v1.png"
-    meta_path = figure_dir / "Fig3_priority5_ontology_v1.run_meta.json"
+    pdf_path = figure_dir / "Fig3_priority5_ontology_v2.pdf"
+    png_path = figure_dir / "Fig3_priority5_ontology_v2.png"
+    meta_path = figure_dir / "Fig3_priority5_ontology_v2.run_meta.json"
     for path in (pdf_path, png_path, meta_path):
         require(
             args.force or not path.exists(),
@@ -291,7 +308,7 @@ def main() -> None:
             "axes.spines.right": False,
         }
     )
-    figure, axes = plt.subplots(2, 2, figsize=(9.0, 8.5), constrained_layout=True)
+    figure, axes = plt.subplots(2, 2, figsize=(10.2, 8.6), constrained_layout=True)
     draw_design(axes[0, 0])
     plot_contradiction(axes[0, 1], panel_b)
     plot_gene_support(axes[1, 0], panel_c)
@@ -302,12 +319,13 @@ def main() -> None:
     figure.savefig(png_path, dpi=600, bbox_inches="tight")
     plt.close(figure)
     meta = {
-        "schema_version": "CRM_R1_PRIORITY5_FIGURE3_RENDER_v1",
+        "schema_version": "CRM_R1_PRIORITY5_FIGURE3_RENDER_v2",
         "created_utc": datetime.now(UTC).isoformat(),
         "source_sha256": {panel: sha256_file(path) for panel, path in sources.items()},
         "pdf_sha256": sha256_file(pdf_path),
         "png_sha256": sha256_file(png_path),
         "analytical_endpoint_recomputed": False,
+        "render_only_revision": True,
         "base_font_points": 12,
         "png_dpi": 600,
     }
