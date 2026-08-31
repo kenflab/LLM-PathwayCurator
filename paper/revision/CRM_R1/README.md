@@ -1,0 +1,709 @@
+# CRM_R1 revision workspace
+
+> Build: `CRM_R1_PRIORITY5_FIGURE3_V10_3_20260810`
+> Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
+> Primary expression input: `GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz`
+
+This directory contains the minimal code and analysis protocol for the Cell Reports Methods major
+revision. Read `ANALYSIS_PLAN.md` before starting an analysis. Raw data and derived outputs remain
+outside Git under `CRM_R1_DATA_ROOT`.
+
+## Recommended local paths
+
+Keep the Git repository on the local Mac filesystem and keep large data/outputs in the existing
+OneDrive project directory:
+
+```text
+Repository: /Users/kfurudate/projects/LLM-PathwayCurator
+Data root:  /Users/kfurudate/Library/CloudStorage/OneDrive-InsideMDAnderson/LLMPATH/Revision/CRM_R1
+```
+
+For a first clone:
+
+```bash
+mkdir -p /Users/kfurudate/projects
+cd /Users/kfurudate/projects
+git clone https://github.com/kenflab/LLM-PathwayCurator.git
+cd /Users/kfurudate/projects/LLM-PathwayCurator
+git switch -c feat/crm-r1-scaffold
+```
+
+If the repository is already present, do not clone it again; use:
+
+```bash
+cd /Users/kfurudate/projects/LLM-PathwayCurator
+```
+
+## Priority map
+
+| Priority | Purpose | Status | Main destination |
+| --- | --- | --- | --- |
+| P1 | GSE146225 empirical 48 h stability to held-out 72 h replication | Complete; Stop gate PASS; V7 render ready | Figure 4 |
+| P2 | Same-pool unaudited/audited benchmark with matched baselines | Frozen: 50 claims; matched K=25 | Figure 2 |
+| P3 | Fixed PubMed retrieval and independent evidence grading | V9 retrieval/grading ledger ready | Figure 2 |
+| P4 | Narrow blinded evidence review and inter-rater agreement | V9 three-rater packet ready | Figure 2 |
+| P5 | GO/Reactome hierarchy, utility robustness, and final integration | V10.3 complete-context census repair; final utility waits for P3/P4 lock | Figure 3 + Supplement |
+
+## What becomes public
+
+`git commit` and `git push` are different actions.
+
+| State | Public? |
+| --- | --- |
+| Uncommitted local files | No |
+| Commits on a local branch | No |
+| Branch pushed to a private revision repository | No |
+| Any branch pushed to the public `kenflab/LLM-PathwayCurator` repository | Yes |
+| Changes merged into public `main` | Yes |
+
+`ANALYSIS_PLAN.md` is a scientific working protocol, not a required manuscript file. During active
+R1 work, keep it and incomplete results on a local branch or private revision remote. At analysis
+freeze, create a clean public branch from `origin/main` and copy only the reproducibility payload:
+scripts, frozen configurations, environment, non-sensitive source tables, and concise run
+instructions. Reviewer correspondence, private notes, raw data, credentials, and identifying local
+paths must not enter the public history.
+
+## Recommended Git workflow
+
+Use frequent local commits for recoverability and review. During active R1 work, push to an empty
+private repository named, for example, `LLM-PathwayCurator-R1-private`; keep the existing public
+repository as `origin`.
+
+```bash
+git switch feat/crm-r1-priority1-scaffold
+git branch -m feat/crm-r1-scaffold
+
+# After creating an empty private repository in GitHub:
+git remote add revision git@github.com:kenflab/LLM-PathwayCurator-R1-private.git
+git push -u revision feat/crm-r1-scaffold
+```
+
+Do not push this working branch to public `origin`. Before resubmission, build a curated public branch
+from current public `main`, copy only explicitly approved reproducibility paths, verify them, and then
+merge through a pull request. Do not merge the entire private working history into the public branch.
+
+```bash
+git fetch origin
+git switch -c feat/crm-r1-public origin/main
+git restore --source feat/crm-r1-scaffold -- \
+  paper/revision/CRM_R1/scripts \
+  paper/revision/CRM_R1/config \
+  paper/revision/CRM_R1/environment.yml \
+  paper/revision/CRM_R1/README.md
+```
+
+Add `ANALYSIS_PLAN.md` to that allowlist only after its protocol is frozen and the authors decide it
+belongs in the public reproducibility record.
+
+`AGENTS.md` is a local Codex memo, not part of the V10 reproducibility payload. V10 does not update
+or package either `AGENTS.md`. If those files are untracked locally, leave them untracked and do not
+include them in `git add` or a public push. The scientific decisions needed to run V10 are recorded
+in `ANALYSIS_PLAN.md`, `config/priority5_protocol.json`, and the executable freeze manifest.
+
+## 1. Create the environment
+
+The validated macOS path uses the existing Python 3.11 installation, a project-specific `venv`, and
+a project-specific R package library. From the repository root:
+
+```bash
+python3.11 -m venv /Users/kfurudate/.venvs/llmpath-crm-r1-py311
+source /Users/kfurudate/.venvs/llmpath-crm-r1-py311/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[dev]" "scipy>=1.12" "pyyaml>=6.0"
+
+export R_LIBS_USER="/Users/kfurudate/.R/llmpath-crm-r1-R4.6"
+mkdir -p "$R_LIBS_USER"
+
+./examples/demo/run.sh
+```
+
+Install the R packages once into that project-specific library:
+
+```bash
+Rscript -e 'install.packages(
+  c("BiocManager", "data.table", "jsonlite", "dplyr", "tidyr",
+    "ggplot2", "patchwork", "msigdbr"),
+  repos = "https://cloud.r-project.org"
+)'
+
+Rscript -e 'BiocManager::install(
+  version = "3.23", ask = FALSE, update = FALSE
+)'
+
+Rscript -e 'BiocManager::install(
+  c("limma", "edgeR", "fgsea", "org.Hs.eg.db"),
+  ask = FALSE, update = FALSE
+)'
+```
+
+In each new Terminal session, reactivate both isolated environments before running the pipeline:
+
+```bash
+cd /Users/kfurudate/projects/LLM-PathwayCurator
+source /Users/kfurudate/.venvs/llmpath-crm-r1-py311/bin/activate
+export R_LIBS_USER="/Users/kfurudate/.R/llmpath-crm-r1-R4.6"
+```
+
+The validated reference environment is Python 3.11.9, R 4.6.1, and Bioconductor 3.23 on macOS
+arm64. The analytical R packages were `edgeR` 4.10.1, `limma` 3.68.4, `fgsea` 1.38.0,
+`msigdbr` 26.1.0, and `org.Hs.eg.db` 3.23.1. Each analytical script records the versions actually
+used in its run metadata. `environment.yml` remains the optional cross-platform conda specification;
+conda is not required for the validated Mac workflow.
+
+Priority 1 uses the supplied raw integer counts. To minimize new code, it follows the existing
+BeatAML pattern: edgeR filtering/TMM normalization, voom-limma modeling, and moderated t-statistic
+ranking. No normalized expression matrix is used in the primary differential-expression pipeline.
+
+The deterministic demo is the first environment smoke test. Priority 1 likewise uses deterministic,
+LLM-free proposal generation as its primary run. Optional LLM-assisted proposals are stored and
+reported separately; every audit disposition remains mechanical.
+
+## 2. Point to external data
+
+```bash
+export CRM_R1_DATA_ROOT="/Users/kfurudate/Library/CloudStorage/OneDrive-InsideMDAnderson/LLMPATH/Revision/CRM_R1"
+```
+
+Expected inputs:
+
+```text
+$CRM_R1_DATA_ROOT/input/GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz
+$CRM_R1_DATA_ROOT/input/GSE146225_series_matrix.txt
+```
+
+## 3. Run the Priority 1 preflight
+
+```bash
+python paper/revision/CRM_R1/scripts/00_preflight.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+This validates the frozen SHA-256, gzip parsing, 39,376-by-60 non-negative integer counts, exact
+sample matching, and the balanced 2 genotype x 2 treatment x 3 replicate design at 48 h and 72 h.
+It does not calculate any 72 h biological outcome.
+
+Expected outputs:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/input_manifest.json
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/preflight_summary.json
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/sample_metadata.normalized.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/preflight/design_counts.tsv
+```
+
+## 4. Reuse the verified V3 full-discovery outputs
+
+V4 does not replace the verified full 48 h ranking or fgsea result. Reuse these existing files:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/rankings/discovery_48h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/rankings/discovery_48h_gene_universe.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/fgsea/discovery_48h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/derived/fgsea/hallmark_gene_sets.tsv
+```
+
+If they do not exist, run the V3-compatible full-discovery scripts once. Both scripts load only the
+twelve ENDO 48 h discovery columns.
+
+```bash
+Rscript paper/revision/CRM_R1/scripts/11_discovery_48h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+Rscript paper/revision/CRM_R1/scripts/12_fgsea_48h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Do not rerun these verified outputs merely because V4 was installed.
+
+## 5. Run the V4 81-resample discovery analysis
+
+Create a new empirical-resampling Sample Card. Its filename is different from the V3 card, so the
+earlier synthetic-perturbation artifact remains intact.
+
+```bash
+python paper/revision/CRM_R1/scripts/10_make_sample_card.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Run all balanced combinations obtained by deleting one sample from each of the four 48 h factorial
+cells. Each run retains eight samples, recalculates TMM normalization, refits voom-limma, and reruns
+fgsea using the frozen full-discovery gene universe and Hallmark snapshot.
+
+```bash
+Rscript paper/revision/CRM_R1/scripts/13_resample_discovery_48h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The expected output is 81 resamples x 50 pathways = 4,050 fgsea rows. Build a replicate-stacked
+EvidenceTable through the production fgsea adapter:
+
+```bash
+python paper/revision/CRM_R1/scripts/14_build_empirical_evidence.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Expected stacked EvidenceTable size: one full baseline plus 81 resamples, each containing 50
+pathways, for 4,100 rows.
+
+## 6. Completed discovery-only empirical calibration
+
+The fixed calibration grid was completed using only 48 h results. Context evaluation was disabled
+and did not block a claim. The frozen result is:
+
+| tau | PASS | ABSTAIN | coverage |
+| ---: | ---: | ---: | ---: |
+| 0.80 | 23 | 27 | 0.46 |
+| 0.90 | 15 | 35 | 0.30 |
+| 0.95 | 10 | 40 | 0.20 |
+| 0.98 | 5 | 45 | 0.10 |
+
+`tau = 0.80` is the discovery-calibrated primary operating point. At `K = 23`, its overlap is 16
+with the q-value-matched comparator and 17 with the q-value-plus-leading-edge-size-matched
+comparator. Empirical survival has Spearman correlations of -0.166 with pathway size and 0.079 with
+leading-edge count, so the V3 size dependence is not present in the V4 empirical measure.
+
+The commands below are retained only to reproduce the completed calibration. Do not use them to
+select a different operating point after 72 h is released.
+
+```bash
+export CRM_R1_BENCH="$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1"
+
+for TAU in 0.80 0.90 0.95 0.98; do
+  TAG="${TAU/./p}"
+  LLMPATH_CONTEXT_REVIEW_MODE=off \
+  LLMPATH_CONTEXT_GATE_MODE=note \
+  llm-pathway-curator run \
+    --evidence-table "$CRM_R1_BENCH/evidence_tables/discovery_48h_empirical_replicates.tsv" \
+    --sample-card "$CRM_R1_BENCH/sample_cards/discovery_48h_empirical.sample_card.json" \
+    --outdir "$CRM_R1_BENCH/out_audit/discovery_48h_empirical_ctxoff_note_tau_${TAG}_calibration_v1" \
+    --tau "$TAU" \
+    --k-claims 50 \
+    --seed 42
+done
+```
+
+Validate monotonic membership and write the discovery-only calibration table:
+
+```bash
+python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The completed pre-freeze preview was:
+
+```bash
+python paper/revision/CRM_R1/scripts/15_preview_empirical_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --primary-tau 0.80 \
+  --force
+```
+
+This preview does not update the protocol or read a 72 h expression outcome.
+
+## 7. Create and verify the immutable freeze bundle
+
+Apply and locally commit the V5 code before freezing. The freeze script rejects tracked uncommitted
+changes and refuses to overwrite an existing freeze. `--freeze-label` is a short, public-safe label
+for the deliberate lock; it is not a cryptographic signature.
+
+```bash
+git status --short
+
+python paper/revision/CRM_R1/scripts/16_freeze_priority1_membership.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260808"
+
+python paper/revision/CRM_R1/scripts/17_check_priority1_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The checker must print `[GO]` before any 72 h pathway statistic is calculated. It verifies the
+frozen protocol, `tau = 0.80`, all three exact `K = 23` memberships, the complete tau grid, and every
+recorded input/code SHA-256. It also confirms that no known 72 h validation output existed at
+freeze. The four freeze files beneath `metrics/` are immutable; do not rerun with a different label
+or edit them by hand.
+
+## 8. Implement and test V6 without reading 72 h outcomes
+
+V6 adds the one-time validation and frozen evaluation scripts without changing the V5 protocol,
+freeze manifest, memberships, scripts `00`-`17`, or production package. Apply V6, run the full test
+suite, and commit the code locally before releasing the held-out endpoint. Do not push the working
+branch to public `origin`.
+
+```bash
+ruff format --check paper/revision/CRM_R1 \
+  tests/test_crm_r1_priority1_v6_validation.py
+ruff check paper/revision/CRM_R1 \
+  tests/test_crm_r1_priority1_v6_validation.py
+pytest -q
+./examples/demo/run.sh
+git diff --check
+```
+
+## 9. Run the held-out 72 h endpoint once
+
+Both scripts reject tracked uncommitted changes and immutable output collisions. The R script runs
+the pre-validation freeze checker before loading any 72 h expression column. It then loads only the
+twelve ENDO 72 h samples, applies the frozen 48 h gene universe without refiltering, recalculates
+TMM, refits the same voom-limma interaction, and runs `fgseaMultilevel` against the frozen Hallmark
+snapshot.
+
+```bash
+Rscript paper/revision/CRM_R1/scripts/18_validation_72h.R \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Expected analytical outputs:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/ranking_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/design_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/pathway_statistics_72h.tsv
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/validation_72h.run_meta.json
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/validation/validation_72h.session_info.txt
+```
+
+Evaluate the already-frozen endpoint and memberships once:
+
+```bash
+python paper/revision/CRM_R1/scripts/19_evaluate_replication.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The evaluation exports pathway-, method-, tau-grid-, continuous-, exact-null-, and random-null
+tables, the Stop gate summary, run metadata, and `source_data/figure4.tsv`. The primary Stop gate is
+based only on whether the frozen empirical-minus-q-value replication-fraction point estimate is
+greater than zero. Exact randomization, AUROC, logistic adjustment, size matching, and other tau
+values are secondary and cannot reverse the gate.
+
+Neither script has a `--force` path. Do not delete, rename, overwrite, or manually edit a completed
+72 h output to rerun the endpoint.
+
+## 10. Render frozen Figure 4
+
+Figure 4 rendering is deliberately separated from endpoint calculation. The plotting script reads
+only the SHA-256-verified `source_data/figure4.tsv`, the frozen replication summary, and the
+evaluation run metadata. It does not read expression, fgsea, audit, or membership inputs and does
+not recalculate an endpoint.
+
+Commit V7 locally and leave tracked files clean, then run:
+
+```bash
+python paper/revision/CRM_R1/scripts/90_plot_priority1_figure4.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Outputs:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.pdf
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.png
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/fig/Fig4_priority1_temporal_replication_v1.run_meta.json
+```
+
+The default is an 8-by-8-inch, four-panel figure with a 12-point base font, embedded TrueType fonts
+in PDF, a 600 dpi PNG, and a colorblind-accessible blue/orange/purple palette. The primary
+`18/23` versus `17/23` result and exact one-sided `P = 0.50` remain visible. AUROC is explicitly
+identified as a continuous secondary analysis, and the size-matched method remains a sensitivity
+analysis. `--force` may replace only these rendered figure files and render metadata; it never
+changes an analytical output.
+
+The draft panel legend is `FIGURE4_LEGEND_DRAFT.md`.
+
+## 11. Development checks
+
+```bash
+ruff format --check paper/revision/CRM_R1
+ruff check paper/revision/CRM_R1
+pytest
+```
+
+## Canonical Priority 1 pipeline
+
+This follows the same organization as `paper/scripts/README.md` while keeping raw data and active
+revision outputs outside Git.
+
+1. Validate inputs and normalize metadata: `00_preflight.py`.
+2. Reuse or compute the full 48 h ranking, frozen gene universe, and Hallmark fgsea snapshot.
+3. Generate the V4 empirical-resampling Sample Card.
+4. Run all 81 balanced 48 h delete-one-per-cell analyses.
+5. Build the replicate-stacked EvidenceTable with the production fgsea adapter.
+6. Run the context-off empirical tau calibration and inspect size dependence.
+7. Freeze `tau = 0.80`, the exact matched memberships, and the input/code hashes without inspecting
+   72 h outcomes.
+8. Pass the immutable freeze checker.
+9. Commit V6 without reading 72 h outcomes.
+10. Run `18_validation_72h.R` once.
+11. Run `19_evaluate_replication.py` once, apply Stop gate P1, and export Figure 4 source data.
+12. Render Figure 4 from the frozen source table without recomputing an endpoint.
+
+Active outputs use the canonical benchmark layout below:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority1/GSE146225_TP53_v1/
+  preflight/
+  derived/rankings/
+  derived/fgsea/
+  sample_cards/
+  evidence_tables/
+  out_audit/
+  validation/
+  metrics/
+  fig/
+  source_data/
+```
+
+At publication freeze, copy only the required manifests, derived inputs, source tables, and run
+metadata to `paper/source_data/GSE146225_TP53_v1/`, then add the final script/output mapping to
+`paper/FIGURE_MAP.csv`.
+
+## Priority 2: freeze the same claim pool before P3/P4
+
+V8 uses the canonical HNSC Hallmark example and retains all 50 candidate pathway claims for
+external-evidence grading and blinded review. The proposal mode is deterministic in both P2 runs;
+only the full-audit run enables LLM context review. The LLM therefore cannot change the candidate
+pool. The primary `tau = 0.90` is inherited from the original HNSC Figure 2 operating point and is
+fixed before P3/P4 outcomes exist. Its PASS count defines K for the q-value and mechanical-stability
+matched rules.
+
+```bash
+export CRM_R1_DATA_ROOT="/Users/kfurudate/Library/CloudStorage/OneDrive-InsideMDAnderson/LLMPATH/Revision/CRM_R1"
+export CRM_R1_P2_ROOT="$CRM_R1_DATA_ROOT/output/priority2/PANCAN_TP53_v1_HNSC_R1"
+```
+
+Run the context-off mechanical reference. The environment variables deliberately override the
+older hard-gate Sample Card without modifying that canonical input.
+
+```bash
+LLMPATH_CONTEXT_REVIEW_MODE=off \
+LLMPATH_CONTEXT_GATE_MODE=note \
+LLMPATH_CLAIM_MODE=deterministic \
+python paper/scripts/fig2_run_pipeline.py \
+  --benchmark-id PANCAN_TP53_v1 \
+  --cancers HNSC \
+  --variants ours \
+  --gate-modes hard \
+  --taus 0.90 \
+  --k-claims 50 \
+  --context-review-mode off \
+  --out-root "$CRM_R1_P2_ROOT/runs_mechanical"
+```
+
+Run the full audit with the same deterministic proposal pool. Start Ollama and ensure
+`llama3.1:8b` is present first.
+
+```bash
+export LLMPATH_BACKEND=ollama
+export LLMPATH_OLLAMA_HOST=http://localhost:11434
+export LLMPATH_OLLAMA_MODEL=llama3.1:8b
+
+LLMPATH_CONTEXT_REVIEW_MODE=llm \
+LLMPATH_CONTEXT_GATE_MODE=hard \
+LLMPATH_CLAIM_MODE=deterministic \
+python paper/scripts/fig2_run_pipeline.py \
+  --benchmark-id PANCAN_TP53_v1 \
+  --cancers HNSC \
+  --variants ours \
+  --gate-modes hard \
+  --taus 0.90 \
+  --k-claims 50 \
+  --context-review-mode llm \
+  --out-root "$CRM_R1_P2_ROOT/runs_full_audit"
+```
+
+Review and locally commit V8 before freezing. Then write and verify the immutable pool:
+
+```bash
+python paper/revision/CRM_R1/scripts/20_freeze_claim_pool.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260810_P2"
+
+python paper/revision/CRM_R1/scripts/21_check_priority2_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The freeze refuses pool mismatch, missing LLM context evaluations, dirty tracked code, output
+overwrite, or pre-existing P3-P5 results. Do not grade literature or distribute review packets until
+the checker prints `[GO]`. LLM context errors are outcomes to evaluate, not records to hand-correct.
+
+The completed P2 freeze contains 50 candidates and matched `K = 25`. Full audit overlaps the
+q-value-matched rule for 13 of 25 selected claims and the stability-matched rule for 15 of 25.
+Threshold, membership, and randomized `review_id` assignments must not change after this point.
+
+## Priority 3: fixed PubMed retrieval before evidence grading
+
+V9 applies the same three PubMed query families to every frozen claim: HNSC + TP53 + pathway,
+HNSC + pathway, and TP53 + pathway. Each query returns at most the top ten best-match records and
+uses the same publication-type exclusions. The retrieval is a census, not an adaptive search:
+audit status and method membership never determine which claim is searched or how deeply it is
+searched.
+
+Set a valid contact email required by NCBI and use the actual retrieval date. An NCBI API key is
+optional; if present in `NCBI_API_KEY`, it is used only for rate limiting and is never written to an
+artifact.
+
+On a managed macOS host, institutional TLS inspection may be trusted by the macOS Keychain but not
+by python.org's static OpenSSL CA bundle. In that case, install the pinned `truststore` helper and
+use `--use-system-trust`. This selects the native macOS trust store while retaining hostname and
+certificate verification; never use an unverified SSL context.
+
+```bash
+python -m pip install "truststore==0.10.4"
+```
+
+```bash
+export CRM_R1_P3_SEARCH_DATE="$(date +%F)"
+export NCBI_EMAIL="your_valid_institutional_email@example.org"
+
+python paper/revision/CRM_R1/scripts/30_fetch_priority3_pubmed.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --email "$NCBI_EMAIL" \
+  --search-date "$CRM_R1_P3_SEARCH_DATE" \
+  --publication-cutoff "$CRM_R1_P3_SEARCH_DATE" \
+  --use-system-trust
+
+python paper/revision/CRM_R1/scripts/31_check_priority3_retrieval.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Commit V9 locally and leave tracked files clean before running retrieval. The fetcher refuses an
+existing output, so do not rerun it after success. It writes a hash-locked query manifest, query-to-
+PMID links, private abstract records, and a blank private screening ledger. Grade only the frozen
+ledger using E0-E4, direction match, study design, and data-overlap fields. E0 means no eligible
+support in this fixed retrieval; it does not mean that a claim is false. Only direction-matched E3
+or E4 evidence with `INDEPENDENT` data overlap qualifies for the primary independent-support
+endpoint.
+
+Abstract text and raw PubMed XML remain private external artifacts. Public Source Data may contain
+PMIDs, retrieval metadata, coded grades, and concise author-written rationales, but not copied
+abstracts or the NCBI contact email.
+
+## Priority 4: prepare the three method-blinded review packets
+
+After the P3 checker prints `[GO]`, create and validate the packets:
+
+```bash
+python paper/revision/CRM_R1/scripts/40_make_blinded_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/41_check_priority4_packets.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+Do not edit the P3 screening ledger before these P4 packets are frozen: the P4 builder deliberately
+reruns the P3 pre-grading checker. Begin P3 grading and distribute copied P4 rating templates only
+after `41_check_priority4_packets.py` passes.
+
+The claim packet shows the fixed wording, enrichment statistic, q-value, and up to 20 supporting
+genes. The literature packet supplies at most five frozen records per query family. It omits claim
+UID, audit disposition, method membership, empirical stability, and context-review outputs. Three
+blank rating templates ask independently about statistical support, external-evidence directness,
+and wording overstatement. Give each rater a copy of only their assigned template plus the common
+claim, literature, and instruction files; do not reveal method membership until all ratings are
+returned and locked.
+
+## Next decision gate
+
+Priority 1 is complete. At the frozen operating point, empirical selection replicated 18 of 23
+pathways versus 17 of 23 for the q-value-matched comparator, so the prespecified point-estimate Stop
+gate passed. The exact one-sided reference was `P = 0.50`, whereas continuous empirical survival
+showed AUROC 0.713 (bootstrap 95% CI 0.558-0.857; permutation `P = 0.0055`). Preserve both results
+without threshold changes or rescue analyses. Render Figure 4, then proceed to the separately
+frozen Priority 2 candidate-pool design.
+
+## Priority 5 V10.3: complete the fixed census while P4 ratings are pending
+
+The P4 wait does not stop the independent ontology analysis. P5 uses new GO and Reactome hierarchy
+snapshots only after the GO/Reactome audit outputs are generated without hierarchy input. It never
+reads P3 grades or P4 ratings. The final utility synthesis remains locked until both P3 and P4 have
+complete frozen manifests.
+
+The initial collection runs started from 3,386 GO BP and 984 Reactome terms. Context review
+shortlisted at most 500 terms before deterministic proposal, so the reviewed shortlist and final
+500 claims differed. This left 442 GO BP and 217 Reactome claims unevaluated. It is a shortlist
+coverage mismatch, not an Ollama token-limit result. Preserve those runs under `audit_runs/` as QC.
+
+V10.3 first locks their exact `entity x direction` memberships without reading audit status. It
+then reruns only those 500 terms per collection, ensuring that every final claim receives context
+review. No contradiction, gene-support, P3, P4, or hierarchy outcome may define or alter this
+census.
+
+```bash
+export CRM_R1_P5_ROOT="$CRM_R1_DATA_ROOT/output/priority5/PANCAN_TP53_v1_HNSC_R1_P5"
+python paper/revision/CRM_R1/scripts/49_lock_priority5_candidate_census.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --lock-label "KF_20260810_P5_CENSUS"
+
+export LLMPATH_BACKEND=ollama
+export LLMPATH_OLLAMA_HOST=http://localhost:11434
+export LLMPATH_OLLAMA_MODEL=llama3.1:8b
+export LLMPATH_CONTEXT_REVIEW_MODE=llm
+export LLMPATH_CONTEXT_GATE_MODE=hard
+export LLMPATH_CLAIM_MODE=deterministic
+export LLMPATH_CONTEXT_REVIEW_SHORTLIST=500
+
+llm-pathway-curator run \
+  --evidence-table "$CRM_R1_P5_ROOT/candidate_census/C5_GO_BP.candidate_census.evidence_table.tsv" \
+  --sample-card paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json \
+  --outdir "$CRM_R1_P5_ROOT/audit_runs_complete/C5_GO_BP/HNSC/ours/gate_hard/tau_0.90" \
+  --tau 0.90 --k-claims 500 --seed 42
+
+llm-pathway-curator run \
+  --evidence-table "$CRM_R1_P5_ROOT/candidate_census/C2_CP_REACTOME.candidate_census.evidence_table.tsv" \
+  --sample-card paper/source_data/PANCAN_TP53_v1/sample_cards/HNSC.hard.sample_card.json \
+  --outdir "$CRM_R1_P5_ROOT/audit_runs_complete/C2_CP_REACTOME/HNSC/ours/gate_hard/tau_0.90" \
+  --tau 0.90 --k-claims 500 --seed 42
+```
+
+Apply and locally commit V10 before freezing. Do not add either `AGENTS.md`. The freeze script runs
+the P2 checker, downloads the GO and Reactome hierarchy files when absent, freezes their hashes and
+release metadata, validates both complete 500-claim audit logs against the locked census, and
+confirms that no hierarchy endpoint yet exists. Use verified system trust on the managed Mac if
+needed.
+
+```bash
+python paper/revision/CRM_R1/scripts/50_freeze_priority5_inputs.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --freeze-label "KF_20260810_P5" \
+  --use-system-trust
+
+python paper/revision/CRM_R1/scripts/51_check_priority5_freeze.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+After the checker prints `[GO]`, calculate ontology outcomes once, freeze panel source tables, and
+render Figure 3. Direct parent-child pairs are primary. All safe ancestor-descendant pairs are a fixed
+sensitivity analysis. If fewer than ten direct pairs map for a collection, the primary estimate is
+reported as not estimable; the script does not promote the sensitivity definition after seeing the
+result.
+
+```bash
+python paper/revision/CRM_R1/scripts/52_evaluate_ontology_hierarchy.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/54_build_priority5_figure3_source.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+
+python paper/revision/CRM_R1/scripts/91_plot_priority5_figure3.py \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+The main outputs are:
+
+```text
+$CRM_R1_DATA_ROOT/output/priority5/PANCAN_TP53_v1_HNSC_R1_P5/
+  freeze/priority5_input_manifest.json
+  ontology/hierarchy_metrics.tsv
+  ontology/hierarchy_pairs.tsv
+  ontology/ontology_term_metrics.tsv
+  ontology/matched_nonedge_null_draws.tsv
+  final/figure_manifest.tsv
+  final/figure3_panel_*.tsv
+  fig/Fig3_priority5_ontology_v1.pdf
+  fig/Fig3_priority5_ontology_v1.png
+```
+
+`53_evaluate_utility_sensitivity.py` is intentionally dormant during the P4 wait. It requires the
+frozen P2 manifest, explicit locked P3 and P4 manifests, and a matching 50-claim component table. It evaluates multiplicative,
+equal-weight arithmetic, minimum-component, and the prespecified 0.25-step log-linear weight grid.
+Do not create placeholder grades or use partial rater returns to make it run.

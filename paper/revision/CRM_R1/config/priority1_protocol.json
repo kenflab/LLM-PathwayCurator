@@ -1,0 +1,173 @@
+{
+  "protocol_version": "CRM_R1_PRIORITY1_v5",
+  "scaffold_build": "CRM_R1_FREEZE_TAU080_V5_20260808",
+  "benchmark_id": "GSE146225_TP53_v1",
+  "status": "FROZEN",
+  "freeze_rule": "FROZEN status is necessary but not sufficient. The immutable Priority 1 freeze manifest must exist and 17_check_priority1_freeze.py must pass before calculating any 72 h pathway endpoint.",
+  "freeze_decision": {
+    "decision_date": "2026-08-08",
+    "decision_basis": "discovery-only calibration using ENDO 48 h outputs; no 72 h pathway statistic was calculated",
+    "selected_tau": 0.8,
+    "selected_k": 23,
+    "selected_coverage": 0.46,
+    "calibration_counts": [
+      {
+        "tau": 0.8,
+        "pass": 23,
+        "abstain": 27,
+        "fail": 0
+      },
+      {
+        "tau": 0.9,
+        "pass": 15,
+        "abstain": 35,
+        "fail": 0
+      },
+      {
+        "tau": 0.95,
+        "pass": 10,
+        "abstain": 40,
+        "fail": 0
+      },
+      {
+        "tau": 0.98,
+        "pass": 5,
+        "abstain": 45,
+        "fail": 0
+      }
+    ],
+    "expected_empirical_q_value_overlap": 16,
+    "expected_empirical_size_matched_overlap": 17,
+    "rationale": "tau 0.80 is the least stringent prespecified operating point with nondegenerate empirical coverage. It retains 23 of 50 claims, is not materially driven by pathway or leading-edge size, and preserves a meaningful membership difference from both matched q-value comparators.",
+    "operational_freeze_outputs": [
+      "metrics/selection_membership_frozen_tau0p80.tsv",
+      "metrics/selection_membership_tau_grid_frozen.tsv",
+      "metrics/priority1_freeze_manifest.json",
+      "metrics/priority1_freeze_manifest.sha256"
+    ]
+  },
+  "dataset": {
+    "accession": "GSE146225",
+    "expression_file": "GSE146225_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+    "expression_sha256": "8f712a3c2a63b4b43b76f1748f24ac9620a26bd66b15fb17af373e816fb76500",
+    "metadata_file": "GSE146225_series_matrix.txt",
+    "metadata_sha256": "0c0646a44c0290c1c22706c2088717dc16c9b98b247731dd96592778f1be11f3",
+    "expected_gene_rows": 39376,
+    "expected_samples": 60
+  },
+  "primary_analysis": {
+    "cell_state": "ENDO",
+    "discovery_time_h": 48,
+    "validation_time_h": 72,
+    "expression_input": "raw non-negative integer counts",
+    "gene_filter": "edgeR::filterByExpr using the 48 h ENDO discovery subset only",
+    "gene_universe_rule": "freeze the 48 h filtered genes and apply the same universe at 72 h",
+    "normalization": "edgeR TMM, calculated separately within each time point",
+    "model": "voom-limma 2 x 2 interaction model, fitted separately at 48 h and 72 h",
+    "fgsea_ranking_statistic": "moderated t-statistic for the interaction contrast",
+    "contrast": "(WT_MMS - WT_UT) - (TP53_KO_MMS - TP53_KO_UT)",
+    "positive_direction": "stronger MMS response in WT than TP53_KO",
+    "gene_set_collection": "MSigDB Hallmark",
+    "gene_id_type": "NCBI Gene/Entrez",
+    "fgsea_algorithm": "fgseaMultilevel",
+    "fgsea_min_size": 15,
+    "fgsea_max_size": 500,
+    "fgsea_seed": 2026,
+    "primary_proposal_mode": "deterministic LLM-free",
+    "secondary_proposal_mode": "LLM-assisted, analyzed separately",
+    "context_review_mode": "off",
+    "context_gate_mode": "note",
+    "stability_gate_mode": "hard",
+    "audit_tau": 0.8,
+    "audit_tau_status": "FROZEN_DISCOVERY_CALIBRATED",
+    "candidate_pool_size": 50,
+    "replication_fdr_threshold": 0.05,
+    "replication_rule": "same 48 h and 72 h NES sign and 72 h BH FDR < 0.05"
+  },
+  "empirical_stability": {
+    "method_id": "balanced_delete_one_per_factorial_cell",
+    "analysis_scope": "ENDO 48 h discovery samples only",
+    "factorial_cells": [
+      "WT_UT",
+      "WT_MMS",
+      "TP53_KO_UT",
+      "TP53_KO_MMS"
+    ],
+    "original_replicates_per_cell": 3,
+    "deleted_replicates_per_cell": 1,
+    "retained_replicates_per_cell": 2,
+    "expected_resamples": 81,
+    "gene_universe": "discovery_48h_gene_universe.tsv frozen by the full 48 h analysis",
+    "normalization": "edgeR TMM recalculated separately in each resample",
+    "model": "voom-limma 2 x 2 interaction refitted separately in each resample",
+    "gene_set_snapshot": "hallmark_gene_sets.tsv written by the full 48 h analysis",
+    "fgsea_seed_rule": "full-discovery fgsea seed plus the 1-based resample index",
+    "distill_mode": "replicates_proxy",
+    "baseline_replicate_id": "full",
+    "require_direction_match": true,
+    "evidence_jaccard_min": 0.6,
+    "evidence_recall_min": 0.8,
+    "evidence_precision_min": 0.8,
+    "small_evidence_set_thresholds": "production distill.py thresholds for baseline leading-edge sizes <=5 and <=10",
+    "calibration_tau_grid": [
+      0.8,
+      0.9,
+      0.95,
+      0.98
+    ],
+    "primary_tau": 0.8,
+    "primary_tau_status": "FROZEN_DISCOVERY_CALIBRATED_2026_08_08",
+    "size_matched_sensitivity": "four deterministic equal-frequency strata by full-discovery leading-edge gene count; within each stratum select the lowest-q pathways until the empirical-selection stratum count is matched",
+    "synthetic_evidence_perturb_role": "secondary implementation stress test only"
+  },
+  "primary_comparison": "empirical_stability_audit versus q_value_matched at identical frozen K=23",
+  "methods": [
+    "raw_pool",
+    "q_value_matched",
+    "empirical_stability_audit",
+    "q_value_and_leading_edge_size_matched_sensitivity",
+    "synthetic_evidence_perturb_secondary",
+    "random_matched_secondary"
+  ],
+  "held_out_inference": {
+    "primary_binary_endpoint": "same 48 h and 72 h NES sign and 72 h BH FDR < 0.05",
+    "primary_estimand": "72 h replication fraction in empirical-stability selected claims minus the fraction in q-value-matched claims",
+    "primary_decision_rule": "apply Stop gate P1 to the point estimate; an estimate less than or equal to zero does not support Priority 1",
+    "method_fraction_intervals": "two-sided Wilson 95% confidence intervals with alpha 0.05",
+    "overlap_aware_reference_test": "conditional exhaustive label randomization over the symmetric difference between the two frozen K=23 selections, preserving seven empirical-only and seven q-value-only labels; descriptive because pathways are biologically dependent",
+    "continuous_secondary": "across all 50 candidates, report AUROC of 48 h empirical survival for the frozen binary 72 h replication endpoint with a label-permutation reference and bootstrap 95% confidence interval",
+    "continuous_resampling": {
+      "bootstrap_draws": 10000,
+      "bootstrap_seed": 20260808,
+      "label_permutations": 10000,
+      "permutation_seed": 20260809
+    },
+    "adjusted_continuous_sensitivity": "exploratory logistic model with standardized empirical survival, negative log10 48 h q-value, and log1p full-discovery leading-edge count; report non-estimability or separation without changing the model",
+    "multiplicity": "the primary binary endpoint and Stop gate are primary; continuous, tau-grid, same-direction-only, and correlation analyses are secondary"
+  },
+  "secondary_endpoints": [
+    "same_direction_without_72h_fdr_requirement",
+    "spearman_correlation_of_48h_and_72h_nes",
+    "coverage_versus_non_replication_risk",
+    "auroc_of_empirical_survival_for_binary_replication",
+    "incremental_logistic_sensitivity_beyond_q_value_and_leading_edge_size"
+  ],
+  "random_matched_secondary": {
+    "candidate_order": "lexicographic claim_id order from the frozen 50-pathway membership table",
+    "draws": 10000,
+    "k": 23,
+    "seed": 20260808,
+    "role": "secondary reference only; does not define the Stop gate"
+  },
+  "guardrails": [
+    "Do not use a normalized expression matrix as the primary differential-expression input.",
+    "Do not add DESeq2 solely for this benchmark; reuse the existing edgeR, voom, and limma pattern.",
+    "Do not use 72 h counts to choose the discovery gene filter or gene-set universe.",
+    "Do not use an LLM-assisted proposal run as the primary Priority 1 analysis.",
+    "Do not use synthetic evidence-gene dropout as the primary Priority 1 stability measure.",
+    "Do not change the frozen primary empirical-stability tau after any 72 h pathway statistic is calculated.",
+    "Do not optimize candidate generation, tau, gene sets, or replication rules using 72 h outcomes.",
+    "Do not describe 72 h as an independent cohort.",
+    "Do not interpret audit PASS as biological truth, mechanism, causality, or clinical utility."
+  ]
+}

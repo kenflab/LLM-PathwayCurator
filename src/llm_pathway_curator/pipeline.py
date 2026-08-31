@@ -18,6 +18,11 @@ import pandas as pd
 
 from . import _shared
 from .audit import audit_claims
+from .audit_reasons import (
+    ABSTAIN_CONTEXT_MISSING,
+    ABSTAIN_CONTEXT_NONSPECIFIC,
+    FAIL_CONTEXT,
+)
 from .backends import BaseLLMBackend, get_backend_from_env
 from .distill import distill_evidence
 from .modules import attach_module_ids, factorize_modules_connected_components
@@ -569,6 +574,20 @@ def _is_na_scalar(x: Any) -> bool:
     Delegates to ``_shared.is_na_scalar`` (single source of truth).
     """
     return _shared.is_na_scalar(x)
+
+
+def _context_evaluated_bool(value: Any, *, default: bool = False) -> bool:
+    """Normalize a scalar context-evaluated flag without treating ``"False"`` as true."""
+    if _is_na_scalar(value):
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return bool(default)
 
 
 def _parse_ids(x: Any) -> list[str]:
@@ -1138,27 +1157,50 @@ def _synthesize_claim_json_row(row: pd.Series, card: SampleCard) -> str:
 
     context_keys = ["condition", "tissue", "perturbation", "comparison"]
 
+    # Keep claim_json strict. Confidence and execution modes remain row/run metadata.
     ctx_review_cols = [
         "context_evaluated",
         "context_method",
         "context_status",
         "context_reason",
         "context_notes",
-        "context_confidence",
-        "context_gate_mode",
-        "context_review_mode",
     ]
     ctx_review: dict[str, Any] = {}
-    for c in ctx_review_cols:
-        if c in row.index and not _is_na_scalar(row.get(c)):
-            ctx_review[c] = row.get(c)
+    if any(c in row.index for c in ctx_review_cols):
+        evaluated = _context_evaluated_bool(row.get("context_evaluated"), default=False)
+        ctx_review["context_evaluated"] = evaluated
+        if not evaluated:
+            ctx_review.update(
+                {
+                    "context_method": "none",
+                    "context_status": None,
+                    "context_reason": None,
+                    "context_notes": None,
+                }
+            )
+        else:
+            method = str(row.get("context_method", "") or "").strip().lower()
+            method = "llm" if method.startswith("llm") else "proxy"
+            status = str(row.get("context_status", "") or "").strip().upper()
+            status = "WARN" if status == "ABSTAIN" else status
+            if status not in {"PASS", "WARN", "FAIL"}:
+                status = "WARN"
 
-    ctx = {
-        "condition": _card_condition(card),
-        "tissue": str(getattr(card, "tissue", "") or "").strip(),
-        "perturbation": str(getattr(card, "perturbation", "") or "").strip(),
-        "comparison": str(getattr(card, "comparison", "") or "").strip(),
-    }
+            def _optional_text(name: str, limit: int) -> str | None:
+                value = row.get(name)
+                if _is_na_scalar(value):
+                    return None
+                text = str(value).strip()
+                return text[:limit] if text else None
+
+            ctx_review.update(
+                {
+                    "context_method": method,
+                    "context_status": status,
+                    "context_reason": _optional_text("context_reason", 160),
+                    "context_notes": _optional_text("context_notes", 400),
+                }
+            )
 
     claim_id = str(row.get("claim_id", "") or "").strip()
     if not claim_id:
@@ -1181,7 +1223,6 @@ def _synthesize_claim_json_row(row: pd.Series, card: SampleCard) -> str:
             "term_ids": term_ids,
             "gene_set_hash": gene_set_hash,
         },
-        "context": ctx,
         **ctx_review,
     }
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
@@ -2888,17 +2929,6 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
     if "claim_json" not in out.columns:
         return out
 
-    fields = [
-        "context_evaluated",
-        "context_method",
-        "context_status",
-        "context_reason",
-        "context_notes",
-        "context_confidence",
-        "context_gate_mode",
-        "context_review_mode",
-    ]
-
     def _merge_row(s: str, row: pd.Series) -> str:
         s = str(s or "").strip()
         if not s:
@@ -2910,23 +2940,42 @@ def _write_context_review_into_claim_json(df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(obj, dict):
             return s
 
-        for k in fields:
-            if k in row.index and not _is_na_scalar(row.get(k)):
-                v = row.get(k)
+        # Remove legacy extras that are row/run metadata rather than Claim fields.
+        for extra_key in (
+            "context",
+            "context_confidence",
+            "context_gate_mode",
+            "context_review_mode",
+        ):
+            obj.pop(extra_key, None)
 
-                if k == "context_confidence":
-                    try:
-                        v = float(v)
-                    except Exception:
-                        continue
+        evaluated = _context_evaluated_bool(
+            row.get("context_evaluated", obj.get("context_evaluated", False)),
+            default=False,
+        )
+        obj["context_evaluated"] = evaluated
+        if not evaluated:
+            obj["context_method"] = "none"
+            obj["context_status"] = None
+            obj["context_reason"] = None
+            obj["context_notes"] = None
+        else:
+            method = str(row.get("context_method", obj.get("context_method", "")) or "")
+            method = method.strip().lower()
+            obj["context_method"] = "llm" if method.startswith("llm") else "proxy"
 
-                if isinstance(v, (pd.Timestamp,)):
-                    v = str(v)
-                if isinstance(v, (bytes, bytearray)):
-                    v = v.decode("utf-8", errors="replace")
-                if isinstance(v, (pd.Series, pd.DataFrame)):
-                    v = str(v)
-                obj[k] = v
+            status = str(row.get("context_status", obj.get("context_status", "")) or "")
+            status = status.strip().upper()
+            status = "WARN" if status == "ABSTAIN" else status
+            obj["context_status"] = status if status in {"PASS", "WARN", "FAIL"} else "WARN"
+
+            for name, limit in (("context_reason", 160), ("context_notes", 400)):
+                value = row.get(name, obj.get(name))
+                if _is_na_scalar(value):
+                    obj[name] = None
+                else:
+                    text = str(value).strip()
+                    obj[name] = text[:limit] if text else None
 
         try:
             return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
@@ -3519,7 +3568,9 @@ def _proxy_context_review(
 
     out = _ensure_context_review_fields(out, gate_mode=gm)
     out["context_review_mode"] = rm or "proxy"
-    out["context_method"] = "proxy_context_v2"
+    # Claim schema uses the stable method vocabulary {llm, proxy, none}.
+    # The proxy implementation version remains in notes and run metadata.
+    out["context_method"] = "proxy"
 
     # Minimal required key for proxy review: condition only.
     # Other fields can be empty; they will be treated as "NA" in ctx_id/signature.
@@ -3623,7 +3674,7 @@ def _proxy_context_review(
             st = "FAIL"
             rsn = "PROXY_U01_LOW_FAIL"
         elif u < p_warn:
-            st = "ABSTAIN"
+            st = "WARN"
             rsn = "PROXY_U01_LOW_ABSTAIN"
         else:
             st = "PASS"
@@ -3641,13 +3692,13 @@ def _proxy_context_review(
         if anchor_modules:
             if not mid:
                 if st == "PASS":
-                    st = "ABSTAIN"
+                    st = "WARN"
                     rsn = "MISSING_MODULE_ID_FOR_ANCHOR"
                     n_downgrade_anchor += 1
                 anchor_note = "anchor=on;module_id_missing"
             else:
                 if (mid not in anchor_modules) and (st == "PASS"):
-                    st = "ABSTAIN"
+                    st = "WARN"
                     rsn = "NOT_IN_ANCHOR_MODULE"
                     n_downgrade_anchor += 1
                     anchor_note = f"anchor=on;module={mid};anchored=0"
@@ -3692,6 +3743,8 @@ def _proxy_context_review(
         "n_eval": int(n_eval),
         "n_pass": int(n_pass),
         "n_fail": int(n_fail),
+        "n_warn": int(n_abstain),
+        # Backward-compatible metadata alias retained for existing collectors.
         "n_abstain": int(n_abstain),
         "n_anchor_downgrade": int(n_downgrade_anchor),
     }
@@ -4091,39 +4144,73 @@ def _apply_context_gate_to_audited(
     if "claim_id" not in out.columns or "claim_id" not in proposed.columns:
         return out
 
-    # --- Build proposed status table (source of truth for hard gating) ---
-    p = proposed[["claim_id"]].copy()
-    if "context_status" in proposed.columns:
-        p["context_status_from_proposed"] = (
-            proposed["context_status"].astype(str).fillna("").map(lambda s: str(s).strip())
-        )
-    else:
+    # Build the proposed context table: it is the source of truth for hard gating.
+    context_fields = [
+        "context_status",
+        "context_evaluated",
+        "context_method",
+        "context_reason",
+        "context_notes",
+        "context_confidence",
+    ]
+    available = [c for c in context_fields if c in proposed.columns]
+    p = proposed[["claim_id"] + available].copy()
+    p = p.rename(columns={c: f"{c}_from_proposed" for c in available})
+    if "context_status_from_proposed" not in p.columns:
         p["context_status_from_proposed"] = ""
-
     p = p.drop_duplicates(subset=["claim_id"], keep="first")
 
-    # If audited already has this column, drop it to avoid merge suffixing.
-    if "context_status_from_proposed" in out.columns:
-        out = out.drop(columns=["context_status_from_proposed"])
+    # _restore_context_scores_into_audit_log may already have added these fields.
+    proposed_cols = [c for c in p.columns if c != "claim_id"]
+    existing = [c for c in proposed_cols if c in out.columns]
+    if existing:
+        out = out.drop(columns=existing)
+    out2 = out.merge(p, on="claim_id", how="left")
 
-    out2 = out.merge(p, on="claim_id", how="left", suffixes=("", "_p"))
+    def _clean_text(value: Any) -> str:
+        return "" if _is_na_scalar(value) else str(value).strip()
 
-    # If merge still suffixed (extremely defensive), recover the column.
-    if "context_status_from_proposed" not in out2.columns:
-        for cand in (
-            "context_status_from_proposed_p",
-            "context_status_from_proposed_x",
-            "context_status_from_proposed_y",
-        ):
-            if cand in out2.columns:
-                out2["context_status_from_proposed"] = out2[cand]
-                break
-        else:
-            # Nothing to gate with
-            return out2
+    def _evaluated(value: Any, *, inferred: bool) -> bool:
+        if _is_na_scalar(value):
+            return inferred
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower()
+        if s in {"1", "true", "yes", "y", "on"}:
+            return True
+        if s in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return inferred
 
-    ctx = out2["context_status_from_proposed"].astype(str).str.strip().str.upper()
-    force = ~ctx.eq("PASS")
+    ctx_raw = out2["context_status_from_proposed"].map(_clean_text).str.upper()
+    # Accept legacy pipeline output while exposing only schema-valid context states.
+    ctx = ctx_raw.replace({"ABSTAIN": "WARN"})
+    ctx = ctx.where(ctx.isin({"PASS", "WARN", "FAIL"}), "")
+
+    if "context_evaluated_from_proposed" in out2.columns:
+        ctx_evaluated = pd.Series(
+            [
+                _evaluated(value, inferred=status in {"PASS", "WARN", "FAIL"})
+                for value, status in zip(out2["context_evaluated_from_proposed"], ctx, strict=False)
+            ],
+            index=out2.index,
+            dtype=bool,
+        )
+    else:
+        ctx_evaluated = ctx.isin({"PASS", "WARN", "FAIL"})
+
+    # Synchronize final diagnostics with the same source that enforces the gate.
+    out2["context_status"] = ctx
+    out2["context_evaluated"] = ctx_evaluated
+    for field in (
+        "context_method",
+        "context_reason",
+        "context_notes",
+        "context_confidence",
+    ):
+        source = f"{field}_from_proposed"
+        if source in out2.columns:
+            out2[field] = out2[source]
 
     if "status" not in out2.columns:
         out2["status"] = ""
@@ -4132,21 +4219,42 @@ def _apply_context_gate_to_audited(
     if "audit_notes" not in out2.columns:
         out2["audit_notes"] = ""
 
+    if "fail_reason" not in out2.columns:
+        out2["fail_reason"] = ""
+
     st = out2["status"].astype(str).str.strip().str.upper()
-    downgrade = force & st.eq("PASS")
+    fail_context = ctx_evaluated & ctx.eq("FAIL") & ~st.eq("FAIL")
+    warn_context = ctx_evaluated & ctx.eq("WARN") & st.eq("PASS")
+    missing_context = ((~ctx_evaluated) | ctx.eq("")) & st.eq("PASS")
 
-    if downgrade.any():
-        out2.loc[downgrade, "status"] = "ABSTAIN"
+    if fail_context.any():
+        out2.loc[fail_context, "status"] = "FAIL"
+        out2.loc[fail_context, "fail_reason"] = FAIL_CONTEXT
+        out2.loc[fail_context, "abstain_reason"] = ""
 
-        ar = out2.loc[downgrade, "abstain_reason"].astype(str)
-        out2.loc[downgrade, "abstain_reason"] = ar.mask(
-            ar.str.len() > 0, ar + ";CONTEXT_GATE"
-        ).mask(ar.str.len() == 0, "CONTEXT_GATE")
+    if warn_context.any():
+        out2.loc[warn_context, "status"] = "ABSTAIN"
+        out2.loc[warn_context, "abstain_reason"] = ABSTAIN_CONTEXT_NONSPECIFIC
 
-        an = out2.loc[downgrade, "audit_notes"].astype(str)
-        out2.loc[downgrade, "audit_notes"] = an.mask(
-            an.str.len() > 0, an + " | context_gate=hard"
-        ).mask(an.str.len() == 0, "context_gate=hard")
+    if missing_context.any():
+        out2.loc[missing_context, "status"] = "ABSTAIN"
+        out2.loc[missing_context, "abstain_reason"] = ABSTAIN_CONTEXT_MISSING
+
+    changed = fail_context | warn_context | missing_context
+    if changed.any():
+        an = out2.loc[changed, "audit_notes"].map(_clean_text)
+        out2.loc[changed, "audit_notes"] = an.mask(
+            an.str.len() > 0, an + " | context_gate=hard(post_audit_safety)"
+        ).mask(an.str.len() == 0, "context_gate=hard(post_audit_safety)")
+
+    blocked = (~ctx_evaluated) | ctx.isin({"WARN", "FAIL"}) | ctx.eq("")
+    out2["context_gate_blocked"] = blocked.astype(bool)
+    out2["context_gate_hit"] = blocked.astype(bool)
+    out2["eligible_context"] = (~blocked).astype(bool)
+    score = pd.Series([-1] * len(out2), index=out2.index, dtype=int)
+    score.loc[ctx.eq("WARN")] = 0
+    score.loc[ctx.eq("PASS")] = 1
+    out2["select_context_status_score"] = score
 
     return out2
 
@@ -4432,6 +4540,24 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             compat_final.get("review_mode", context_review_mode), default="proxy"
         )
 
+        # Propagate the effective modes into the card used by every downstream
+        # component, including audit.py, which resolves modes from card.extra.
+        try:
+            card_effective = card.model_copy(deep=True)
+        except Exception:
+            card_effective = card
+        effective_extra = dict(getattr(card_effective, "extra", {}) or {})
+        effective_extra["context_gate_mode"] = context_gate_mode
+        effective_extra["context_review_mode"] = context_review_mode
+        card_effective.extra = effective_extra
+        card = card_effective
+
+        sc_effective_path = outdir / "sample_card.effective.json"
+        _write_json(sc_effective_path, _dump_model(card))
+        meta["artifacts"]["sample_card_effective_json"] = str(sc_effective_path)
+        meta.setdefault("inputs", {}).setdefault("sample", {})
+        meta["inputs"]["sample"]["sample_card_effective_sha256"] = _sha256_file(sc_effective_path)
+
         meta.setdefault("inputs", {}).setdefault("claims", {})
         meta["inputs"]["claims"]["context_gate_review_compat_final"] = compat_final
         _write_json(meta_path, meta)
@@ -4473,7 +4599,15 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             "claim" if claim_backend is not None else ("review" if review_backend else "none")
         )
 
+        backend_identity = {
+            "class": type(shared_backend).__name__ if shared_backend is not None else "",
+            "model_name": str(getattr(shared_backend, "model_name", "") or ""),
+            "host": str(getattr(shared_backend, "host", "") or ""),
+            "temperature": getattr(shared_backend, "temperature", None),
+        }
+
         meta["inputs"]["llm"] = {
+            "backend_identity": backend_identity,
             "claim": {
                 "enabled": (claim_mode_env == "llm"),
                 "claim_mode_env": claim_mode_env,
@@ -4667,7 +4801,9 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             if meth.startswith("llm"):
                 src = "llm_review_confidence"
             elif meth.startswith("proxy"):
-                src = "proxy_review_confidence"
+                # proxy_context_v2 confidence is the deterministic hash-derived u01,
+                # not an empirical or biological confidence estimate.
+                src = "hash_u01_proxy_review"
             elif meth == "off":
                 src = "off"
             else:

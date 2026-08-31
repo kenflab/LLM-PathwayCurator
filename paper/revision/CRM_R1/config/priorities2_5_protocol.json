@@ -1,0 +1,75 @@
+{
+  "protocol_version": "CRM_R1_PRIORITIES2_5_v1",
+  "status": "DRAFT_NOT_FROZEN",
+  "created_utc": "2026-08-09",
+  "core_question": "At matched reporting coverage, does the full audit select pathway claims with more independent support and less overstatement than simpler rules applied to the same candidate pool?",
+  "priority2": {
+    "benchmark_id": "PANCAN_TP53_v1_HNSC_R1",
+    "parent_benchmark_id": "PANCAN_TP53_v1",
+    "condition": "HNSC",
+    "candidate_collection": "MSigDB Hallmark",
+    "candidate_count_expected": 50,
+    "comparison": "TP53_mut_vs_TP53_wt",
+    "context": {
+      "condition": "HNSC",
+      "tissue": "tumor",
+      "perturbation": "genotype"
+    },
+    "claim_strength": "directional_differential_enrichment",
+    "primary_tau": 0.9,
+    "proposal_mode": "deterministic",
+    "mechanical_run": {
+      "context_review_mode": "off",
+      "context_gate_mode": "note"
+    },
+    "full_audit_run": {
+      "context_review_mode": "llm",
+      "context_gate_mode": "hard",
+      "backend": "ollama",
+      "model": "llama3.1:8b"
+    },
+    "methods": [
+      "raw_pool",
+      "q_value_matched",
+      "stability_matched",
+      "full_audit"
+    ],
+    "primary_comparison": "full_audit_vs_q_value_matched",
+    "review_sampling": {
+      "mode": "census",
+      "n": 50,
+      "seed": 20260810
+    }
+  },
+  "priority3": {
+    "population": "all_priority2_candidate_claims",
+    "source_mask_required": true,
+    "evidence_grades": ["E0", "E1", "E2", "E3", "E4"],
+    "contradiction_recorded_separately": true,
+    "literature_abundance_adjustment": true,
+    "release_and_search_dates": null
+  },
+  "priority4": {
+    "population": "all_priority2_candidate_claims",
+    "audit_status_masked": true,
+    "method_membership_masked": true,
+    "minimum_independent_raters": 3,
+    "questions": [
+      "statistical_evidence_supports_wording",
+      "external_evidence_directness",
+      "wording_overstates_evidence"
+    ]
+  },
+  "priority5": {
+    "ontology_sources": ["GO Biological Process", "Reactome"],
+    "safe_go_relations": ["is_a", "part_of"],
+    "excluded_go_relations": ["has_part", "regulates", "positively_regulates", "negatively_regulates"],
+    "ontology_release_dates": null,
+    "utility_aggregations": ["multiplicative", "arithmetic", "minimum", "log_linear"]
+  },
+  "figure_plan": {
+    "figure2": "same-pool method comparison, independent evidence, and blinded overstatement review",
+    "figure3": "ontology-aware consistency and utility robustness",
+    "rendering_rule": "plots read frozen source tables and never recompute analytical endpoints"
+  }
+}

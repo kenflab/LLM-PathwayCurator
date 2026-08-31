@@ -1,0 +1,87 @@
+{
+  "protocol_version": "CRM_R1_PRIORITY3_v1",
+  "status": "QUERY_DESIGN_FROZEN_BEFORE_RETRIEVAL",
+  "parent_priority2_benchmark_id": "PANCAN_TP53_v1_HNSC_R1",
+  "population": "all_50_frozen_priority2_claims",
+  "provider": "NCBI PubMed E-utilities",
+  "base_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+  "tool_name": "llm_pathway_curator_crm_r1",
+  "database": "pubmed",
+  "sort": "relevance",
+  "retmax_per_query": 10,
+  "query_fields": "Title/Abstract",
+  "query_families": [
+    "direct_hnsc_tp53_pathway",
+    "context_hnsc_pathway",
+    "perturbation_tp53_pathway"
+  ],
+  "apply_every_family_to_every_claim": true,
+  "exclude_publication_types": [
+    "Review",
+    "Meta-Analysis",
+    "Editorial",
+    "Comment",
+    "Letter"
+  ],
+  "hnsc_terms": [
+    "head and neck squamous cell carcinoma",
+    "HNSCC",
+    "HNSC"
+  ],
+  "tp53_terms": [
+    "TP53",
+    "p53"
+  ],
+  "pathway_synonyms": {
+    "HALLMARK_APICAL_JUNCTION": ["adherens junction", "cell junction"],
+    "HALLMARK_APICAL_SURFACE": ["apical surface", "epithelial polarity"],
+    "HALLMARK_E2F_TARGETS": ["E2F targets", "E2F transcription"],
+    "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION": ["epithelial mesenchymal transition", "EMT"],
+    "HALLMARK_ESTROGEN_RESPONSE_EARLY": ["estrogen response", "estrogen signaling"],
+    "HALLMARK_ESTROGEN_RESPONSE_LATE": ["estrogen response", "estrogen signaling"],
+    "HALLMARK_OXIDATIVE_PHOSPHORYLATION": ["oxidative phosphorylation", "OXPHOS"],
+    "HALLMARK_UNFOLDED_PROTEIN_RESPONSE": ["unfolded protein response", "UPR"],
+    "HALLMARK_TNFA_SIGNALING_VIA_NFKB": ["TNF alpha signaling", "TNF NF kappa B", "TNF NF-kB"],
+    "HALLMARK_PI3K_AKT_MTOR_SIGNALING": ["PI3K AKT mTOR signaling", "PI3K-AKT-mTOR"],
+    "HALLMARK_WNT_BETA_CATENIN_SIGNALING": ["WNT beta catenin signaling", "Wnt-beta-catenin"],
+    "HALLMARK_TGF_BETA_SIGNALING": ["TGF beta signaling", "TGF-beta signaling"],
+    "HALLMARK_IL6_JAK_STAT3_SIGNALING": ["IL6 JAK STAT3 signaling", "IL-6 JAK STAT3"],
+    "HALLMARK_IL2_STAT5_SIGNALING": ["IL2 STAT5 signaling", "IL-2 STAT5"],
+    "HALLMARK_G2M_CHECKPOINT": ["G2 M checkpoint", "G2/M checkpoint"],
+    "HALLMARK_INTERFERON_ALPHA_RESPONSE": ["interferon alpha response", "type I interferon"],
+    "HALLMARK_INTERFERON_GAMMA_RESPONSE": ["interferon gamma response", "IFN gamma"],
+    "HALLMARK_KRAS_SIGNALING_DN": ["KRAS signaling", "RAS signaling"],
+    "HALLMARK_KRAS_SIGNALING_UP": ["KRAS signaling", "RAS signaling"],
+    "HALLMARK_P53_PATHWAY": ["p53 pathway", "TP53 pathway"],
+    "HALLMARK_PANCREAS_BETA_CELLS": ["pancreatic beta cells", "beta cell"],
+    "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY": ["reactive oxygen species", "oxidative stress"],
+    "HALLMARK_MTORC1_SIGNALING": ["mTORC1 signaling", "mTOR complex 1"],
+    "HALLMARK_MYC_TARGETS_V1": ["MYC targets", "MYC signaling"],
+    "HALLMARK_MYC_TARGETS_V2": ["MYC targets", "MYC signaling"],
+    "HALLMARK_UV_RESPONSE_DN": ["ultraviolet response", "UV response", "DNA damage response"],
+    "HALLMARK_UV_RESPONSE_UP": ["ultraviolet response", "UV response", "DNA damage response"]
+  },
+  "grade_definitions": {
+    "E0": "No eligible supporting record in the frozen retrieval; this is not evidence that the claim is false.",
+    "E1": "General biological relevance without a matched TP53-HNSC pathway relationship.",
+    "E2": "Partial context support: HNSC-pathway or TP53-pathway evidence without an independent direction-matched HNSC TP53 comparison.",
+    "E3": "Independent HNSC evidence linking TP53 status to the pathway with direction consistent with the frozen claim, without direct TP53 perturbation.",
+    "E4": "Direction-consistent TP53 perturbation evidence in a relevant HNSC model or a prospectively independent HNSC validation designed to test the relationship."
+  },
+  "record_grading_fields": {
+    "eligible": ["YES", "NO", "UNCERTAIN"],
+    "exclusion_reason": ["NOT_PRIMARY_RESEARCH", "NO_RELEVANT_PATHWAY_EVIDENCE", "NO_RELEVANT_TP53_OR_HNSC_EVIDENCE", "DUPLICATE_RETRACTED_OR_INACCESSIBLE", "OTHER", "NA"],
+    "evidence_grade": ["EXCLUDE", "E1", "E2", "E3", "E4"],
+    "direction_match": ["MATCH", "MISMATCH", "NOT_TESTED", "UNCERTAIN"],
+    "context_match": ["HNSC_DIRECT", "HNSC_RELEVANT_MODEL", "OTHER_CANCER", "GENERAL", "UNCERTAIN"],
+    "study_design": ["TP53_PERTURBATION", "INDEPENDENT_HNSC_COHORT", "HNSC_ASSOCIATION", "OTHER_CANCER_ASSOCIATION", "MECHANISTIC_NON_HNSC", "OTHER", "UNCERTAIN"],
+    "data_overlap": ["INDEPENDENT", "SAME_TCGA", "POSSIBLE_TCGA_OVERLAP", "NOT_APPLICABLE", "UNCERTAIN"],
+    "contradiction": ["YES", "NO", "UNCERTAIN"]
+  },
+  "claim_level_grade_rule": "Maximum eligible record grade E1-E4; assign E0 only when no eligible supporting record is retrieved.",
+  "primary_independent_support": "maximum grade E3 or E4, direction MATCH, and data overlap INDEPENDENT",
+  "contradiction_recorded_separately": true,
+  "same_or_possible_tcga_overlap_cannot_receive_primary_independent_support": true,
+  "literature_abundance": "record total query hits and unique retrieved PMID count for every claim",
+  "copyright_boundary": "Abstract text is retained only in private grading packets; public source data contain identifiers and coded grades, not abstract text."
+}

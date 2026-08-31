@@ -28,7 +28,7 @@ Outputs live under [`paper/source_data/PANCAN_TP53_v1/`](../source_data/PANCAN_T
 3) Generate Sample Cards: [`fig2_make_sample_cards.py`](../scripts/fig2_make_sample_cards.py)
 4) Compute DE rankings (per cancer): [`fig2_deg_rank.R`](../scripts/fig2_deg_rank.R)
 5) Build EvidenceTables (Hallmark; per cancer): [`fig2_fgsea_to_evidence_table.R`](../scripts/fig2_fgsea_to_evidence_table.R)
-6) Run LLM-PathwayCurator + mechanical audits: [`run_fig2_pipeline.py`](../scripts/fig2_run_pipeline.py)
+6) Run LLM-PathwayCurator + mechanical audits: [`fig2_run_pipeline.py`](../scripts/fig2_run_pipeline.py)
 7) Aggregate + plot panels:  
    [`fig2_collect_risk_coverage.py`](../scripts/fig2_collect_risk_coverage.py), [`fig2_plot_multipanel.py`](../scripts/fig2_plot_multipanel.py), [`fig2_plot_lines_status_by_tau.py`](../scripts/fig2_plot_lines_status_by_tau.py),  
    [`fig2_plot_scatter_human_risk.py`](../scripts/fig2_plot_scatter_human_risk.py) (labels optional), [`fig2_plot_abstain_reasons.py`](../scripts/fig2_plot_abstain_reasons.py)
@@ -64,7 +64,7 @@ export LLMPATH_CONTEXT_REVIEW_MODE=llm
 export LLMPATH_CONTEXT_GATE_MODE=hard
 export LLMPATH_CLAIM_MODE=llm
 
-python paper/scripts/run_fig2_pipeline.py \
+python paper/scripts/fig2_run_pipeline.py \
   --cancers HNSC \
   --variants ours \
   --gate-modes hard \
