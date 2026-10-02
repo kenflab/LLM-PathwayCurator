@@ -1,0 +1,17 @@
+{
+  "schema": "CRM_R1_V15_DIAGNOSTIC_POLICY_1",
+  "analysis_role": "post_hoc_diagnostic",
+  "label_status": "lexical_flags_are_not_biological_truth",
+  "examples_per_cohort_outcome": 2,
+  "example_rule": "q-value-only context FAIL; first two SHA256(cohort|split|claim) per cohort and replication outcome",
+  "lexical_flags": {
+    "mentions_insufficient_support": "no (?:clear |direct |specific )?(?:evidence|support|connection)|lack(?:s|ing| of)? (?:clear |direct )?(?:evidence|support)|not supported",
+    "mentions_context_mismatch": "not (?:clearly |directly )?(?:context.consistent|related|relevant)|does not match|not match|no clear context consistency",
+    "mentions_tp53": "tp53|p53",
+    "mentions_direction": "upregulat|downregulat|enrich|direction|activat|suppress",
+    "mentions_genes": "gene|leading.edge|overlap"
+  },
+  "inference": "Descriptive diagnosis. Average split contributions within cohort, then cohorts equally. No new hypothesis tests.",
+  "claim_scope": "Recorded gates are associated with selection differences; this is not a causal gate ablation.",
+  "frozen_outputs_may_be_changed": false
+}

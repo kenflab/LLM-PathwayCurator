@@ -1,0 +1,12 @@
+{
+  "status": "DRAFT_REQUIRES_INPUT_PROVENANCE",
+  "evidence_column": "evidence_strength",
+  "stability_column": "stability",
+  "context": {
+    "column": "context_score",
+    "kind": "UNRESOLVED",
+    "provenance": ""
+  },
+  "allowed_after_review": "status=DEVELOPMENT_ONLY; kind=llm_derived_score or externally_measured_score; document origin, scale, and interpretation",
+  "interpretation": "LLM confidence is not a calibrated probability of biological correctness. No hash proxy or missing-to-one fallback."
+}
