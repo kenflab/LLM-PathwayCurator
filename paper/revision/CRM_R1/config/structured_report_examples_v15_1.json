@@ -1,0 +1,56 @@
+[
+  {
+    "case_id": "SYNTHETIC_VALID",
+    "evidence": {
+      "evidence_id": "SYNTHETIC_E1",
+      "cohort_id": "COHORT_A",
+      "comparison": "mutant_vs_wild_type",
+      "term_uid": "SYNTHETIC:T1",
+      "direction": "UP",
+      "q_value": 0.2,
+      "evidence_genes": [
+        "GENE_A",
+        "GENE_B"
+      ]
+    },
+    "claim": {
+      "evidence_id": "SYNTHETIC_E1",
+      "cohort_id": "COHORT_A",
+      "comparison": "mutant_vs_wild_type",
+      "term_uid": "SYNTHETIC:T1",
+      "direction": "UP",
+      "reported_q_value": 0.2,
+      "supporting_genes": [
+        "GENE_A"
+      ],
+      "asserts_fdr_significance": false
+    }
+  },
+  {
+    "case_id": "SYNTHETIC_UNSUPPORTED_ASSERTION",
+    "evidence": {
+      "evidence_id": "SYNTHETIC_E1",
+      "cohort_id": "COHORT_A",
+      "comparison": "mutant_vs_wild_type",
+      "term_uid": "SYNTHETIC:T1",
+      "direction": "UP",
+      "q_value": 0.2,
+      "evidence_genes": [
+        "GENE_A",
+        "GENE_B"
+      ]
+    },
+    "claim": {
+      "evidence_id": "SYNTHETIC_E1",
+      "cohort_id": "COHORT_A",
+      "comparison": "mutant_vs_wild_type",
+      "term_uid": "SYNTHETIC:T1",
+      "direction": "UP",
+      "reported_q_value": 0.2,
+      "supporting_genes": [
+        "GENE_A"
+      ],
+      "asserts_fdr_significance": true
+    }
+  }
+]
