@@ -2,7 +2,9 @@
 
 import importlib.util
 import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,62 @@ SCRIPT = (
 SPEC = importlib.util.spec_from_file_location("crm_revision_bundle", SCRIPT)
 installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
+
+
+def r02_layout(layout):
+    repo, data, bundle = layout
+    target = data / "input/revision_code/test_r02"
+    target.parent.mkdir(parents=True)
+    shutil.move(bundle, target)
+    bundle = target
+    (bundle / "metadata_snapshot").mkdir()
+    snapshot = bundle / "metadata_snapshot/METADATA_MANIFEST.json"
+    snapshot.write_text('{"synthetic":true}')
+    path = bundle / "BUNDLE_MANIFEST.json"
+    manifest = json.loads(path.read_text())
+    manifest["schema"] = "CRM_R1_CODE_BUNDLE_v17_R02"
+    manifest["data_files"] = {
+        "metadata_snapshot/METADATA_MANIFEST.json": installer.digest(snapshot.read_bytes())
+    }
+    path.write_text(json.dumps(manifest))
+    return repo, data, bundle
+
+
+def test_r02_snapshot_conflict_stops_before_any_code_write(layout):
+    repo, data, bundle = r02_layout(layout)
+    (bundle / "metadata_snapshot/METADATA_MANIFEST.json").write_text("changed")
+    with pytest.raises(ValueError, match="metadata bundle hash mismatch"):
+        installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
+
+
+def test_r02_run_uses_r02_entrypoint_and_metadata_without_rerunning_r01(layout, monkeypatch):
+    repo, data, bundle = r02_layout(layout)
+    real_run, executions = installer.subprocess.run, []
+
+    def run(command, *args, **kwargs):
+        if command[0] == sys.executable:
+            executions.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert len(executions) == 1
+    assert executions[0][1].endswith("61_revision_r02.py")
+    assert executions[0][-2:] == ["--metadata-snapshot", str(bundle / "metadata_snapshot")]
+
+
+def test_r02_run_from_downloads_stops_before_code_installation(layout):
+    repo, data, bundle = r02_layout(layout)
+    misplaced = bundle.parent.parent.parent.parent / "Downloads/r02"
+    misplaced.parent.mkdir(parents=True)
+    shutil.move(bundle, misplaced)
+    with pytest.raises(ValueError, match="under CRM_R1/input"):
+        installer.apply_bundle(misplaced, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
 
 
 @pytest.fixture

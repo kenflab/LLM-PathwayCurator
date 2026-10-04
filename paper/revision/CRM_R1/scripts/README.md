@@ -2,6 +2,13 @@
 
 ## Current development entry point
 
+`61_revision_r02.py` checks reviewed legacy figure sources and a separately
+supplied GEO metadata snapshot. It makes zero model/network calls and saves
+new results below `CRM_R1/output/revision_v17/`. See
+[R02_FINDINGS.md](../R02_FINDINGS.md) and [V17_WORKFLOW.md](../V17_WORKFLOW.md).
+
+## Completed R01 adapter
+
 `60_revision_r01.py` implements the V17 saved-result inventory and deterministic
 ACC/S001 adapter. See [V17_WORKFLOW.md](../V17_WORKFLOW.md). Run it in the existing
 checkout with `CRM_R1_DATA_ROOT` pointing to the external data directory. It uses

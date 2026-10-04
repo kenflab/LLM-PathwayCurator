@@ -16,7 +16,11 @@ uses `install_revision_bundle.py`. The default is a read-only preflight.
 identical versions. Any differing local file stops the entire preflight before
 code changes. Updated originals and the install log are saved in
 `CRM_R1/output/revision_v17/code_install_<UTC timestamp>/`.
-`--run` executes R01 using the calling Python. Optional `--publish` requires
+`--run` executes the supplied milestone using the calling Python. R01 bundles
+execute R01; R02 bundles execute R02 with their separately supplied metadata
+snapshot. R02 metadata files are checked before installation and are not added
+to Git. Place R02 bundles beneath `CRM_R1/input/` before using `--run`.
+Optional `--publish` requires
 the existing `main` checkout to equal the fetched `origin/main`; it stages and
 commits only listed code files, leaves unrelated staged files out of the commit,
 and uses an ordinary `HEAD:main` push. Git history conflicts stop the operation.
@@ -89,6 +93,32 @@ and negative results remain intact. A new natural-text comparison and external
 dataset protocol must be frozen separately after development. Large repeated
 expert review and completion of all 620 P3 rows are not R01 prerequisites.
 
-Next steps are complete figure provenance and external dataset metadata checks,
-then bounded semantic development and a separately frozen comparison. Do not
-generate or inspect new held-out biological outcomes from R01.
+## R02: historical figure sources and external metadata
+
+After applying the R02 bundle, run from the same checkout:
+
+```bash
+python paper/revision/CRM_R1/scripts/61_revision_r02.py \
+  --metadata-snapshot "$CRM_R1_BUNDLE/metadata_snapshot"
+```
+
+`CRM_R1_DATA_ROOT` is reused. Results go to a new
+`CRM_R1/output/revision_v17/r02_<UTC timestamp>/` directory. The script uses
+pandas and the standard library. It needs no LLM, plotting or PDF dependencies
+and makes no network requests. All accessed code/data hashes are rechecked.
+
+`figures/historical_run_inventory.tsv` retains unsuccessful and uncertified
+records. `figures/reviewed_panel_routes.tsv` distinguishes reviewed visual layout
+from unrecovered PDF assembly lineage. The source map's missing paths and
+templates remain visible in `figures/declared_dependencies.tsv`; the script
+never fixes a declared path by matching only a basename.
+
+`metadata/sample_design.tsv` and `metadata/discovery_pairs.tsv` record the
+public sample census and verified discovery pairing. GSE34313's replicate
+suffixes do not establish donor pairing. `COMPLETE_WITH_FINDINGS` means the
+audit ran successfully and retained unresolved scientific/source issues. It
+does not certify biological validity or an evaluation protocol.
+
+See `R02_FINDINGS.md` for the concrete figure corrections and external design
+limitations. Next is bounded semantic development and a separately frozen
+comparison. Do not generate new held-out biological outcomes from R01/R02.
