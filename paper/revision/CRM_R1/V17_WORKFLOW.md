@@ -20,6 +20,10 @@ code changes. Updated originals and the install log are saved in
 execute R01; R02 bundles execute R02 with their separately supplied metadata
 snapshot. R02 metadata files are checked before installation and are not added
 to Git. Place R02 bundles beneath `CRM_R1/input/` before using `--run`.
+R03 bundles run **offline preparation only** under `--run`; the local-model
+pilot is a separate explicit `62_revision_r03.py --live` invocation. Its
+historical baseline snapshot is checked before installation and stays outside
+Git. Place R03 bundles under `CRM_R1/input/` as well.
 Optional `--publish` requires
 the existing `main` checkout to equal the fetched `origin/main`; it stages and
 commits only listed code files, leaves unrelated staged files out of the commit,
@@ -122,3 +126,59 @@ does not certify biological validity or an evaluation protocol.
 See `R02_FINDINGS.md` for the concrete figure corrections and external design
 limitations. Next is bounded semantic development and a separately frozen
 comparison. Do not generate new held-out biological outcomes from R01/R02.
+
+## R03: bounded atomic development
+
+`R03_DEVELOPMENT.md` defines the fixed development scope and scoring rules.
+Apply/publish the R03 bundle in the same checkout:
+
+```bash
+python "$CRM_R1_BUNDLE/APPLY.py" \
+  --repo "$CRM_R1_REPO" --data-root "$CRM_R1_DATA_ROOT" \
+  --apply --run --publish
+```
+
+The offline status is `PREPARED_NOT_LIVE_TESTED`. It checks all 66 historical
+export hashes, replays the 16 original responses with the unchanged V16.1
+strict parser, and prepares 96 atomic requests for the same known controls.
+There are 20 candidates, four deterministic cases, and 16 semantic cases.
+Preparing requests is not a successful semantic test.
+
+Start the bounded local pilot with the existing Ollama server:
+
+```bash
+python "$CRM_R1_REPO/paper/revision/CRM_R1/scripts/62_revision_r03.py" \
+  --data-root "$CRM_R1_DATA_ROOT" --source-bundle "$CRM_R1_BUNDLE" --live
+```
+
+The script verifies the original `llama3.1:8b` weight digest and records the
+current server version. It never pulls a model, starts a server, or substitutes
+a different model. Generation uses seed 42, temperature 0, context 16384,
+output limit 512, and HTTP timeout 120 seconds. It starts at most 96 new atomic
+requests and stops starting new requests after the default 1800-second budget.
+An in-flight request may finish after that budget. Smaller limits are available
+as `--max-new-requests` and `--wall-budget-seconds`.
+
+Every exact request has one immutable first outcome, including malformed and
+interrupted outcomes. Repeating the command reuses those outcomes and starts
+only previously unattempted requests, such as cases skipped by the budget.
+Do not delete the cache to obtain a different judgment. Prompt/model changes
+produce new request identities and are separate development changes.
+
+Results are new `CRM_R1/output/revision_v17/r03_<UTC>/` directories. The shared
+R03 cache is `.../r03_atomic_cache/`, separate from all old caches. Live runs
+also create a sibling `r03_<UTC>.zip` containing this run's results and only its
+own exact request/response records. The summary records its path as
+`results_archive`. No manual cache collection is needed.
+
+`scores.private.json` retains complete, incomplete and unattempted cases with
+required and forbidden concerns. `baseline_vs_r03.private.json` keeps the old
+and new outcomes together without altering the old results. `NOT_RUN` means
+unattempted; `INCOMPLETE` means at least one attempted aspect did not complete
+or a partially attempted case remains unfinished. All canonical candidates
+are retained in either case.
+
+Passing all 20 known controls is only a development gate. Before submission,
+freeze a separate natural-text comparison and external biological protocol.
+The existing negative P2B results, human ratings, source issues, and P3 missing
+grades remain unchanged. No new expert review is requested by R03.

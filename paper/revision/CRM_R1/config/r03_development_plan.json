@@ -1,0 +1,175 @@
+{
+  "schema": "CRM_R1_R03_DEVELOPMENT_PLAN",
+  "scope": "known_development_controls_not_held_out_or_biological_validation",
+  "fixture": "tests/fixtures/crm_r1_v16_1/cases_v161.json",
+  "fixture_sha256": "ebf76f4e9c1d748ebbe7380131026db4ccecb9aabfced68fc6c1dda913d21e75",
+  "case_order": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "N01",
+    "N02",
+    "N03",
+    "N04",
+    "N05",
+    "N06",
+    "D01",
+    "D02",
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A05",
+    "A06",
+    "A07",
+    "A08"
+  ],
+  "faithful_case_ids": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "A01",
+    "A02",
+    "A03",
+    "A04"
+  ],
+  "required_concerns": {
+    "N03": [
+      "causality"
+    ],
+    "N04": [
+      "metadata"
+    ],
+    "N05": [
+      "disease_specificity"
+    ],
+    "N06": [
+      "literal_pathway_event"
+    ],
+    "A05": [
+      "numerics_and_direction"
+    ],
+    "A06": [
+      "causality"
+    ],
+    "A07": [
+      "metadata"
+    ],
+    "A08": [
+      "metadata"
+    ]
+  },
+  "allowed_concerns": {
+    "N03": [
+      "causality"
+    ],
+    "N04": [
+      "metadata"
+    ],
+    "N05": [
+      "disease_specificity"
+    ],
+    "N06": [
+      "literal_pathway_event"
+    ],
+    "A05": [
+      "numerics_and_direction"
+    ],
+    "A06": [
+      "causality",
+      "metadata"
+    ],
+    "A07": [
+      "metadata"
+    ],
+    "A08": [
+      "metadata"
+    ]
+  },
+  "baseline_snapshot": "baseline_snapshot/v16_1_acceptance_results.zip",
+  "baseline_sha256": "480f58b58ce71c7f63c03075610aaf4f20efcdc9503c749227da1881b59f2328",
+  "generation_options": {
+    "temperature": 0.0,
+    "seed": 42,
+    "num_ctx": 16384,
+    "num_predict": 512,
+    "top_k": 40,
+    "top_p": 0.9,
+    "repeat_penalty": 1.1
+  },
+  "timeout_seconds": 120.0,
+  "new_request_limit": 96,
+  "wall_budget_seconds": 1800,
+  "retry_policy": "first_outcome_only_no_retries_or_reference_repair",
+  "progression_gate": "All 20 known cases complete and meet required and forbidden concern rules. Development gate only; a separately frozen natural-text comparison is still required.",
+  "not_frozen": [
+    "natural_text_generation_prompt",
+    "unseen_comparison_census",
+    "expert_sample",
+    "external_expression_analysis"
+  ],
+  "required_assertion_modes": {
+    "P03": {
+      "causality": [
+        "DENIED"
+      ]
+    },
+    "P04": {
+      "literal_pathway_event": [
+        "DENIED"
+      ]
+    },
+    "A01": {
+      "causality": [
+        "DENIED"
+      ]
+    },
+    "A04": {
+      "disease_specificity": [
+        "DENIED"
+      ]
+    },
+    "N03": {
+      "causality": [
+        "AFFIRMED"
+      ]
+    },
+    "N04": {
+      "metadata": [
+        "AFFIRMED"
+      ]
+    },
+    "N05": {
+      "disease_specificity": [
+        "AFFIRMED"
+      ]
+    },
+    "N06": {
+      "literal_pathway_event": [
+        "AFFIRMED"
+      ]
+    },
+    "A05": {
+      "numerics_and_direction": [
+        "AFFIRMED"
+      ]
+    },
+    "A06": {
+      "causality": [
+        "AFFIRMED"
+      ]
+    },
+    "A07": {
+      "metadata": [
+        "AFFIRMED"
+      ]
+    },
+    "A08": {
+      "metadata": [
+        "AFFIRMED"
+      ]
+    }
+  }
+}

@@ -66,7 +66,12 @@ def prepare(bundle, repo, data_root):
     require(not data_root.is_relative_to(repo), "CRM_R1 data root must be outside Git")
     manifest = json.loads((bundle / "BUNDLE_MANIFEST.json").read_text(encoding="utf-8"))
     require(
-        manifest.get("schema") in {"CRM_R1_CODE_BUNDLE_v17_R01", "CRM_R1_CODE_BUNDLE_v17_R02"},
+        manifest.get("schema")
+        in {
+            "CRM_R1_CODE_BUNDLE_v17_R01",
+            "CRM_R1_CODE_BUNDLE_v17_R02",
+            "CRM_R1_CODE_BUNDLE_v17_R03",
+        },
         "Unknown bundle schema",
     )
     require(manifest.get("repository") == "kenflab/LLM-PathwayCurator", "Wrong bundle repository")
@@ -80,6 +85,16 @@ def prepare(bundle, repo, data_root):
             require(Path(relative).parts[0] == "metadata_snapshot", "Invalid R02 data path")
             raw = file_path(bundle, relative).read_bytes()
             require(digest(raw) == expected, f"R02 metadata bundle hash mismatch: {relative}")
+    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03":
+        data_files = manifest.get("data_files", {})
+        require(
+            "baseline_snapshot/v16_1_acceptance_results.zip" in data_files,
+            "R03 historical baseline missing from bundle",
+        )
+        for relative, expected in data_files.items():
+            require(Path(relative).parts[0] == "baseline_snapshot", "Invalid R03 data path")
+            raw = file_path(bundle, relative).read_bytes()
+            require(digest(raw) == expected, f"R03 baseline bundle hash mismatch: {relative}")
     rows, payloads, originals, conflicts = [], {}, {}, []
     require(manifest.get("files"), "Empty bundle")
     for relative, item in manifest["files"].items():
@@ -149,6 +164,11 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             (bundle / "metadata_snapshot").resolve().is_relative_to(data_root / "input"),
             "Place the R02 bundle under CRM_R1/input/ before --run",
         )
+    if run and manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03":
+        require(
+            bundle.resolve().is_relative_to(data_root / "input"),
+            "Place the R03 bundle under CRM_R1/input/ before --run",
+        )
     for row in rows:
         print(f"{row['action']}: {row['path']}", flush=True)
     if not apply:
@@ -192,7 +212,14 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
                 temporary.unlink(missing_ok=True)
         if run:
             r02 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R02"
-            entry = "61_revision_r02.py" if r02 else "60_revision_r01.py"
+            r03 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03"
+            entry = (
+                "62_revision_r03.py"
+                if r03
+                else "61_revision_r02.py"
+                if r02
+                else "60_revision_r01.py"
+            )
             command = [
                 sys.executable,
                 str(repo / "paper/revision/CRM_R1/scripts" / entry),
@@ -201,6 +228,8 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             ]
             if r02:
                 command.extend(["--metadata-snapshot", str(bundle / "metadata_snapshot")])
+            if r03:
+                command.extend(["--source-bundle", str(bundle)])
             subprocess.run(command, check=True)
         if publish:
             publish_preflight(repo, fetch=True)
@@ -220,7 +249,9 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
                     "commit",
                     "--only",
                     "-m",
-                    "Add CRM R1 R02 figure provenance and external metadata preflight"
+                    "Add CRM R1 R03 bounded atomic semantic development pilot"
+                    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03"
+                    else "Add CRM R1 R02 figure provenance and external metadata preflight"
                     if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R02"
                     else "Integrate CRM R1 contract API and source-checked R01 workflow",
                     "--",

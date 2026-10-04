@@ -2,6 +2,14 @@
 
 ## Current development entry point
 
+`62_revision_r03.py` prepares the known-control atomic review pilot and replays
+the authenticated historical baseline. Default execution makes zero model
+calls. An explicit `--live` run uses the local pinned model for at most 96
+first-response requests, preserving failures and all 20 candidates. See
+[R03_DEVELOPMENT.md](../R03_DEVELOPMENT.md) and [V17_WORKFLOW.md](../V17_WORKFLOW.md).
+
+## Completed R02 preflight
+
 `61_revision_r02.py` checks reviewed legacy figure sources and a separately
 supplied GEO metadata snapshot. It makes zero model/network calls and saves
 new results below `CRM_R1/output/revision_v17/`. See

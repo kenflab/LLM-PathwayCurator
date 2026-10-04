@@ -36,6 +36,52 @@ def r02_layout(layout):
     return repo, data, bundle
 
 
+def r03_layout(layout):
+    repo, data, bundle = layout
+    target = data / "input/revision_code/test_r03"
+    target.parent.mkdir(parents=True)
+    shutil.move(bundle, target)
+    bundle = target
+    (bundle / "baseline_snapshot").mkdir()
+    snapshot = bundle / "baseline_snapshot/v16_1_acceptance_results.zip"
+    snapshot.write_bytes(b"synthetic installer test bytes, not a model result")
+    path = bundle / "BUNDLE_MANIFEST.json"
+    manifest = json.loads(path.read_text())
+    manifest["schema"] = "CRM_R1_CODE_BUNDLE_v17_R03"
+    manifest["data_files"] = {
+        "baseline_snapshot/v16_1_acceptance_results.zip": installer.digest(snapshot.read_bytes())
+    }
+    path.write_text(json.dumps(manifest))
+    return repo, data, bundle
+
+
+def test_r03_baseline_conflict_stops_before_any_code_write(layout):
+    repo, data, bundle = r03_layout(layout)
+    (bundle / "baseline_snapshot/v16_1_acceptance_results.zip").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="baseline bundle hash mismatch"):
+        installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
+
+
+def test_r03_run_prepares_without_calling_live_backend_or_rerunning_r01(layout, monkeypatch):
+    repo, data, bundle = r03_layout(layout)
+    real_run, executions = installer.subprocess.run, []
+
+    def run(command, *args, **kwargs):
+        if command[0] == sys.executable:
+            executions.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert len(executions) == 1
+    assert executions[0][1].endswith("62_revision_r03.py")
+    assert executions[0][-2:] == ["--source-bundle", str(bundle)]
+    assert "--live" not in executions[0]
+
+
 def test_r02_snapshot_conflict_stops_before_any_code_write(layout):
     repo, data, bundle = r02_layout(layout)
     (bundle / "metadata_snapshot/METADATA_MANIFEST.json").write_text("changed")
