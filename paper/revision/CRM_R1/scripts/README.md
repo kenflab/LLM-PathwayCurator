@@ -1,5 +1,16 @@
 # Script map
 
+## Current development entry point
+
+`60_revision_r01.py` implements the V17 saved-result inventory and deterministic
+ACC/S001 adapter. See [V17_WORKFLOW.md](../V17_WORKFLOW.md). Run it in the existing
+checkout with `CRM_R1_DATA_ROOT` pointing to the external data directory. It uses
+no LLM and writes only new directories under `output/revision_v17/`. Historical
+protocols and the scripts below are unchanged; R01 is not a new performance test.
+`install_revision_bundle.py` supports exact-version bundle application to the
+same checkout when direct remote writes are unavailable. It preserves local
+conflicts and stores install records outside Git; see the workflow above.
+
 > Build: `CRM_R1_PRIORITY5_FIGURE3_V10_3_20260810`
 > Frozen protocol: `CRM_R1_PRIORITY1_v5` (unchanged)
 

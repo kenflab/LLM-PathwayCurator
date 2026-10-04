@@ -1,0 +1,1126 @@
+{
+  "schema": "CRM_R1_V16_SEMANTIC_SUITE_v1",
+  "scope": "fixed_synthetic_reporting_contract_not_biological_truth",
+  "cases": [
+    {
+      "case_id": "P01",
+      "group": "positive_control",
+      "purpose": "Previously completed faithful positive-NES statement; reuse exact success.",
+      "reuse_prior_smoke": true,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:E1",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:C1",
+        "evidence_id": "SYNTHETIC:E1",
+        "text": "In this synthetic ACC example the gene set has positive NES in the observational TP53-mutant versus wild-type comparison (NES=1.75, q=0.02).",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NO_CONCERN_DETECTED",
+        "interpretation_eligible": true,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "P02",
+      "group": "positive_control",
+      "purpose": "A faithful nonsignificant description is not an overstatement.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P02",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.4,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:P02",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P02",
+        "text": "In this synthetic ACC example, the gene set has NES=1.75 and BH q=0.40 in the observational TP53-mutant versus wild-type comparison. The positive NES is a point estimate toward TP53-mutant samples; this result does not meet FDR 0.05.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.4,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "NOT_SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NO_CONCERN_DETECTED",
+        "interpretation_eligible": true,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "P03",
+      "group": "positive_control",
+      "purpose": "A faithful negative NES refers to the stated wild-type reference group.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P03",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": -1.75,
+        "q_value": 0.02,
+        "direction": "DOWN",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:P03",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P03",
+        "text": "In this synthetic ACC example, NES=-1.75 and BH q=0.02 describe enrichment toward TP53-wild-type samples in the observational comparison. This does not establish a causal TP53 effect.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "DOWN",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": -1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NO_CONCERN_DETECTED",
+        "interpretation_eligible": true,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "P04",
+      "group": "positive_control",
+      "purpose": "Mentioning a gene-set label alone is not a literal biological event assertion.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P04",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "HALLMARK_ALLOGRAFT_REJECTION",
+        "term_name": "HALLMARK_ALLOGRAFT_REJECTION",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:P04",
+        "evidence_id": "SYNTHETIC:SEMANTIC:P04",
+        "text": "In this synthetic ACC example, the gene set named HALLMARK_ALLOGRAFT_REJECTION has NES=1.75 and BH q=0.02 in the observational TP53-mutant versus wild-type comparison. The gene-set name is a label; these data do not establish that allograft rejection occurred.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "HALLMARK_ALLOGRAFT_REJECTION",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NO_CONCERN_DETECTED",
+        "interpretation_eligible": true,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N01",
+      "group": "text_only_challenge",
+      "purpose": "Free text miscopies NES while typed fields remain correct.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N01",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N01",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N01",
+        "text": "In this synthetic ACC example, the observational TP53-mutant versus wild-type comparison has NES=3.50 and BH q=0.02.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "NUMERICAL_OR_DIRECTION_MISMATCH",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N02",
+      "group": "text_only_challenge",
+      "purpose": "Free text claims significance for q=0.40 while typed assertion is correct.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N02",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.4,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N02",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N02",
+        "text": "In this synthetic ACC example, the positive enrichment (NES=1.75, BH q=0.40) is statistically significant at FDR 0.05.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.4,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "NOT_SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "NUMERICAL_OR_DIRECTION_MISMATCH",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N03",
+      "group": "text_only_challenge",
+      "purpose": "Free text asserts causality while causal_assertion remains false.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N03",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N03",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N03",
+        "text": "In this synthetic ACC example, the observational TP53-mutant versus wild-type comparison (NES=1.75, BH q=0.02) proves that TP53 mutation causes activation of this gene set.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "UNSUPPORTED_CAUSAL_LANGUAGE",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N04",
+      "group": "text_only_challenge",
+      "purpose": "Free text invents an individual tumor subtype absent from metadata.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N04",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N04",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N04",
+        "text": "All tumors in this synthetic ACC example were confirmed to have the oncocytic histological subtype. Their observational TP53-mutant versus wild-type comparison has NES=1.75 and BH q=0.02.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "METADATA_MISMATCH",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N05",
+      "group": "text_only_challenge",
+      "purpose": "An ACC-only comparison is used to assert specificity against other cancers.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N05",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N05",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N05",
+        "text": "The observational TP53-mutant versus wild-type result in this synthetic ACC example (NES=1.75, BH q=0.02) proves that this response is specific to ACC and absent in every other cancer type.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "UNSUPPORTED_DISEASE_SPECIFICITY",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "N06",
+      "group": "text_only_challenge",
+      "purpose": "Free text treats the pathway label as proof of a literal event.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N06",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "HALLMARK_ALLOGRAFT_REJECTION",
+        "term_name": "HALLMARK_ALLOGRAFT_REJECTION",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:N06",
+        "evidence_id": "SYNTHETIC:SEMANTIC:N06",
+        "text": "In this synthetic ACC example, enrichment of HALLMARK_ALLOGRAFT_REJECTION (NES=1.75, BH q=0.02) proves that these patients experienced allograft rejection.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "HALLMARK_ALLOGRAFT_REJECTION",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "CONCERN_REQUIRES_REVIEW",
+        "interpretation_eligible": false,
+        "required_issue_code": "UNSUPPORTED_LITERAL_PATHWAY_EVENT",
+        "deterministic_reason_codes": [],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "D01",
+      "group": "deterministic_control",
+      "purpose": "Structured q transcription mismatch must be handled without an LLM call.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:D01",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:D01",
+        "evidence_id": "SYNTHETIC:SEMANTIC:D01",
+        "text": "In this synthetic ACC example, NES=1.75 and BH q=0.001 describe the observational TP53-mutant versus wild-type comparison.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.001,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": false,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NOT_RUN_CONTRACT_VIOLATION",
+        "interpretation_eligible": false,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [
+          "Q_VALUE_TRANSCRIPTION"
+        ],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    },
+    {
+      "case_id": "D02",
+      "group": "deterministic_control",
+      "purpose": "An explicitly declared causal assertion must be handled without an LLM call.",
+      "reuse_prior_smoke": false,
+      "evidence": {
+        "schema_version": "CRM_R1_EVIDENCE_v16",
+        "evidence_id": "SYNTHETIC:SEMANTIC:D02",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "contrast": {
+          "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+          "positive_group": "TP53_MUTANT",
+          "reference_group": "TP53_WILD_TYPE",
+          "study_design": "observational"
+        },
+        "term_id": "SYNTHETIC_TERM",
+        "term_name": "Synthetic gene-set record",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nes": 1.75,
+        "q_value": 0.02,
+        "direction": "UP",
+        "leading_edge_genes": [
+          "TP53",
+          "CDKN1A",
+          "MDM2"
+        ],
+        "metadata": {
+          "specimen": {
+            "value": "tumor",
+            "source": {
+              "artifact": "SYNTHETIC/canonical_source.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "locator": "fixture:E1"
+            }
+          }
+        },
+        "source": {
+          "artifact": "SYNTHETIC/canonical_source.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:E1"
+        },
+        "stability": {
+          "value": 0.8,
+          "kind": "synthetic_gene_perturbation",
+          "definition": "Fraction of synthetic gene perturbations retaining the declared term result; not sample replication.",
+          "protocol_id": "SYNTHETIC_S_PROTOCOL",
+          "source": {
+            "artifact": "SYNTHETIC/canonical_source.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "fixture:E1"
+          },
+          "source_column": "term_survival_agg",
+          "missing_reason": null
+        }
+      },
+      "claim": {
+        "schema_version": "CRM_R1_CLAIM_v16",
+        "claim_id": "SYNTHETIC:CLAIM:D02",
+        "evidence_id": "SYNTHETIC:SEMANTIC:D02",
+        "text": "This observational result proves a causal TP53 effect.",
+        "cohort_id": "ACC",
+        "cohort_name": "Adrenocortical carcinoma",
+        "split_id": "SYNTHETIC_S001",
+        "term_id": "SYNTHETIC_TERM",
+        "gene_set_version": "SYNTHETIC_FIXTURE_v1",
+        "gene_set_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "direction": "UP",
+        "comparison_id": "TP53_MUTANT_vs_TP53_WILD_TYPE",
+        "reported_nes": 1.75,
+        "reported_q_value": 0.02,
+        "supporting_genes": [
+          "CDKN1A"
+        ],
+        "metadata_assertions": {
+          "specimen": "tumor"
+        },
+        "significance_assertion": "SIGNIFICANT",
+        "causal_assertion": true,
+        "disease_specificity_assertion": false,
+        "literal_pathway_event_assertion": false
+      },
+      "expected": {
+        "semantic_status": "NOT_RUN_CONTRACT_VIOLATION",
+        "interpretation_eligible": false,
+        "required_issue_code": null,
+        "deterministic_reason_codes": [
+          "CAUSAL_ASSERTION_FROM_OBSERVATIONAL_COMPARISON"
+        ],
+        "execution_status": "COMPLETE",
+        "statistical_candidate_retained": true
+      }
+    }
+  ]
+}

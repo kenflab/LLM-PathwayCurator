@@ -14,6 +14,12 @@ dist/
 .coverage
 .pytest_cache/
 ruff_cache/
+.ruff_cache/
+
+# Revision data and private working artifacts stay outside Git.
+**/*.private.*
+/input/
+/output/
 
 # artifacts
 out/
@@ -64,4 +70,3 @@ paper/notebooks/**
 
 # Excel temp files
 ~$*.xlsx
-
