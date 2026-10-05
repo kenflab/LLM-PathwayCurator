@@ -1,0 +1,672 @@
+{
+  "schema": "CRM_R1_R04_DEVELOPMENT_PLAN",
+  "scope": "source_only_reading_probe_known_controls_not_audit_or_validation",
+  "fixture": "tests/fixtures/crm_r1_v16_1/cases_v161.json",
+  "fixture_sha256": "ebf76f4e9c1d748ebbe7380131026db4ccecb9aabfced68fc6c1dda913d21e75",
+  "case_order": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "N01",
+    "N02",
+    "N03",
+    "N04",
+    "N05",
+    "N06",
+    "D01",
+    "D02",
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A05",
+    "A06",
+    "A07",
+    "A08"
+  ],
+  "deterministic_case_ids": [
+    "N01",
+    "N02",
+    "D01",
+    "D02"
+  ],
+  "semantic_case_ids": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "N03",
+    "N04",
+    "N05",
+    "N06",
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A05",
+    "A06",
+    "A07",
+    "A08"
+  ],
+  "returned_r03_snapshot": "returned_r03/r03_20261004T231625491225Z.zip",
+  "returned_r03_sha256": "b80d8e01f07e173c916c63126cd38d6a72ba84f731501549895387d549572a3d",
+  "generation_options": {
+    "temperature": 0,
+    "seed": 42,
+    "num_ctx": 16384,
+    "num_predict": 512,
+    "top_k": 40,
+    "top_p": 0.9,
+    "repeat_penalty": 1.1
+  },
+  "timeout_seconds": 120,
+  "new_request_limit": 16,
+  "wall_budget_seconds": 600,
+  "retry_policy": "immutable_first_outcome_no_retry_no_reference_or_label_repair",
+  "expected_source_locations": {
+    "P01": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "P02": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001",
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "P03": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [
+          "S002"
+        ],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "P04": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [
+          "S002"
+        ],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "N03": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "N04": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001",
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "N05": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "N06": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A01": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [
+          "S002"
+        ],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A02": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001",
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A03": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001",
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A04": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [
+          "S002"
+        ],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A05": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A06": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A07": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S002"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    },
+    "A08": {
+      "numerics_and_direction": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "metadata": {
+        "asserted": [
+          "S001"
+        ],
+        "limited": [],
+        "uncertain": []
+      },
+      "causality": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "disease_specificity": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "literal_pathway_event": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      },
+      "evidence_scope": {
+        "asserted": [],
+        "limited": [],
+        "uncertain": []
+      }
+    }
+  },
+  "scoring": "Exact set agreement for all 18 lists in each of the 16 source-only cases; unknown/omitted/extra/aspect-transferred sentence references fail. No label or expectation is sent to the model.",
+  "annotations": "Developer-reviewed known synthetic controls, disclosed after reviewing R03. Metadata means explicit cohort/clinical/study context, not group names used only as enrichment direction. Gene-set names alone do not assert external validation or event occurrence.",
+  "progression_gate": "All 16 source-only cases parse and match all lists. This is only a reading-probe gate; no biological truth or full-audit benefit is estimated. Freeze and qualify the evidence-comparison stage separately.",
+  "if_gate_fails": "Stop after this bounded pilot and review all saved first outcomes. Do not start held-out comparison or expert ratings. Reassess model capacity or the role of LLM auditing before another protocol.",
+  "interpretation_verdicts_produced": false,
+  "new_expert_ratings_requested": false,
+  "external_expression_outcomes_loaded": false
+}

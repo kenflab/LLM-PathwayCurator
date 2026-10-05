@@ -55,6 +55,75 @@ def r03_layout(layout):
     return repo, data, bundle
 
 
+def r04_layout(layout):
+    repo, data, bundle = layout
+    target = data / "input/revision_code/test_r04"
+    target.parent.mkdir(parents=True)
+    shutil.move(bundle, target)
+    bundle = target
+    (bundle / "returned_r03").mkdir()
+    snapshot = bundle / "returned_r03/r03_20261004T231625491225Z.zip"
+    snapshot.write_bytes(b"synthetic installer test bytes, not a returned model run")
+    path = bundle / "BUNDLE_MANIFEST.json"
+    manifest = json.loads(path.read_text())
+    manifest["schema"] = "CRM_R1_CODE_BUNDLE_v17_R04"
+    reference = repo / "source_reference.json"
+    reference.write_text('{"synthetic_replay_reference":true}')
+    manifest["prerequisite_files"] = {reference.name: installer.digest(reference.read_bytes())}
+    manifest["data_files"] = {
+        "returned_r03/r03_20261004T231625491225Z.zip": installer.digest(snapshot.read_bytes())
+    }
+    path.write_text(json.dumps(manifest))
+    return repo, data, bundle
+
+
+def test_r04_old_source_conflict_stops_before_any_code_write(layout):
+    repo, data, bundle = r04_layout(layout)
+    (repo / "source_reference.json").write_text("changed local source")
+    with pytest.raises(ValueError, match="R04 replay source conflict preserved"):
+        installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
+
+
+def test_r04_snapshot_conflict_stops_before_any_code_write(layout):
+    repo, data, bundle = r04_layout(layout)
+    (bundle / "returned_r03/r03_20261004T231625491225Z.zip").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="R04 returned snapshot hash mismatch"):
+        installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
+
+
+def test_r04_run_is_offline_and_does_not_rerun_r03_or_r01(layout, monkeypatch):
+    repo, data, bundle = r04_layout(layout)
+    real_run, executions = installer.subprocess.run, []
+
+    def run(command, *args, **kwargs):
+        if command[0] == sys.executable:
+            executions.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    installer.apply_bundle(bundle, repo, data, apply=True, run=True)
+    assert len(executions) == 1
+    assert executions[0][1].endswith("63_revision_r04.py")
+    assert executions[0][-2:] == ["--source-bundle", str(bundle)]
+    assert "--live" not in executions[0]
+
+
+def test_r04_run_outside_input_stops_before_code_installation(layout):
+    repo, data, bundle = r04_layout(layout)
+    misplaced = data.parent / "Downloads/r04"
+    misplaced.parent.mkdir(parents=True)
+    shutil.move(bundle, misplaced)
+    with pytest.raises(ValueError, match="under CRM_R1/input"):
+        installer.apply_bundle(misplaced, repo, data, apply=True, run=True)
+    assert (repo / "README.md").read_bytes() == b"old\n"
+    assert not list((data / "output").iterdir())
+
+
 def test_r03_baseline_conflict_stops_before_any_code_write(layout):
     repo, data, bundle = r03_layout(layout)
     (bundle / "baseline_snapshot/v16_1_acceptance_results.zip").write_bytes(b"changed")

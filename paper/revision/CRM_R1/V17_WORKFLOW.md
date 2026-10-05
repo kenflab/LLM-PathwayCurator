@@ -29,6 +29,11 @@ the existing `main` checkout to equal the fetched `origin/main`; it stages and
 commits only listed code files, leaves unrelated staged files out of the commit,
 and uses an ordinary `HEAD:main` push. Git history conflicts stop the operation.
 
+R04 bundles also use `--run` for **offline diagnosis/preparation only**. Their
+returned R03 ZIP is hash-checked before code installation and stays outside Git.
+The separate `63_revision_r04.py --live` command starts the source-only reading
+probe, not an evidence audit. Keep R04 bundles under `CRM_R1/input/`.
+
 ## R01: saved-result inventory and deterministic adapter
 
 Run from the existing checkout, with its existing Python environment:
@@ -182,3 +187,36 @@ Passing all 20 known controls is only a development gate. Before submission,
 freeze a separate natural-text comparison and external biological protocol.
 The existing negative P2B results, human ratings, source issues, and P3 missing
 grades remain unchanged. No new expert review is requested by R03.
+
+## R04: source-only reading after R03 findings
+
+See `R04_DEVELOPMENT.md` for the returned R03 findings and the limited next step.
+Apply/publish the R04 bundle using the same checkout and external data root:
+
+```bash
+python "$CRM_R1_BUNDLE/APPLY.py" \
+  --repo "$CRM_R1_REPO" --data-root "$CRM_R1_DATA_ROOT" \
+  --apply --run --publish
+```
+
+`OFFLINE_READY_NOT_LIVE_TESTED` reproduces all original R03 scores and prepares
+16 source-only requests. It makes zero model calls and creates a new directory
+under `CRM_R1/output/revision_v17/r04_<UTC timestamp>/`.
+
+Then run the single bounded probe with the existing local Ollama server:
+
+```bash
+python "$CRM_R1_REPO/paper/revision/CRM_R1/scripts/63_revision_r04.py" \
+  --data-root "$CRM_R1_DATA_ROOT" --source-bundle "$CRM_R1_BUNDLE" --live
+```
+
+All 20 candidates remain recorded. The 16 source-only cases are scored on every
+asserted/limited/uncertain sentence list. This produces no interpretation
+eligibility decision. It is a different task from R03 auditing, so their match
+fractions are not an improvement estimate. A live result ZIP next to the run
+directory contains this run and only its referenced first-response cache records.
+
+Inspect `r03_diagnostic_summary.json`, `r03_raw_response_diagnostics.private.json`,
+`source_probe_scores.private.json` and `summary.json`. Smaller request/time budgets
+use the same CLI options as R03; the R04 maxima are 16 requests and 1800 seconds.
+Do not rerun R03 as a way to replace its failed first outcomes.

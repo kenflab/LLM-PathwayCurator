@@ -2,6 +2,15 @@
 
 ## Current development entry point
 
+`63_revision_r04.py --source-bundle <R04 bundle>` authenticates the returned R03
+archive, reproduces its unchanged scores and prepares 16 source-only requests.
+Default execution is offline. `--live` runs one bounded reading probe, preserving
+all 20 candidates and the first returned outcome of each request. This does not
+produce audit verdicts. See [R04_DEVELOPMENT.md](../R04_DEVELOPMENT.md) and
+[V17_WORKFLOW.md](../V17_WORKFLOW.md).
+
+## Completed R03 development with findings
+
 `62_revision_r03.py` prepares the known-control atomic review pilot and replays
 the authenticated historical baseline. Default execution makes zero model
 calls. An explicit `--live` run uses the local pinned model for at most 96
