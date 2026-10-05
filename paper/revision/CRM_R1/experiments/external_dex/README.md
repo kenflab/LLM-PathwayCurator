@@ -44,6 +44,43 @@ Interrupted runs preserve their logs and partial outputs. Identical fixed code
 and inputs may run again after an infrastructure failure; a completed result
 cannot be overwritten.
 
+## R08.1 technical correction for the recorded probe-filter stop
+
+The original implementation added a GPL6480 `CONTROL_TYPE` numeric-zero gate
+that is absent from `protocol.json`. GPL annotation contains textual labels
+such as `FALSE`; those are distinct from the numeric raw Agilent `ControlType`.
+R08.1 follows the original protocol's raw `ControlType==0` rule and retains the
+fixed mapping, detection, finite-value and minimum-probe checks. It does not
+change the scientific protocol or relax the 1,000-probe sanity threshold.
+
+For an original R08 run stopped at this filter, install the reviewed correction,
+then record the technical amendment and resume using the existing downloads:
+
+```bash
+python "$CRM_R1_REPO/paper/revision/CRM_R1/experiments/external_dex/run.py" \
+  --data-root "$CRM_R1_DATA_ROOT" --amend-r08-probe-filter
+
+python "$CRM_R1_REPO/paper/revision/CRM_R1/experiments/external_dex/run.py" \
+  --data-root "$CRM_R1_DATA_ROOT" --analyze
+```
+
+The R08.1 bundle's `APPLY.py --apply --run` performs the first command. The
+original `DESIGN_LOCK.json` and its design SHA stay unchanged. A separate
+`TECHNICAL_AMENDMENT_R08_1.json` records the old/new source hashes, unchanged
+protocol, existing inputs/runtime and all files of the preserved failed run.
+Registration stops if any matching original job already has fitted statistics
+or if the original code, input receipts or failure record do not match.
+Subsequent runs verify these records; no locks or old outputs are removed.
+
+Before any new statistical analysis, a base-R regression test exercises mixed
+`FALSE/pos` GPL labels, numeric/logical-only annotations, duplicate spots,
+controls, missing mappings, ambiguous symbols and detection/finite-value rules.
+`PROBE_FILTER_DIAGNOSTIC.json` compares the original code's retention with the
+frozen protocol's retention on the actual normalized data. Per-probe decisions
+and condition counts are saved before any further filter stop. A single old log
+does not identify each filter's contribution; the diagnostic establishes
+whether the unintended GPL condition explains the observed stop.
+
 ## Fixed statistical design
 
 `protocol.json` is authoritative. Discovery uses integer airway counts,

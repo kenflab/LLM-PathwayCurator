@@ -1,0 +1,42 @@
+{
+  "schema": "CRM_R1_EXTERNAL_DEX_TECHNICAL_AMENDMENT_SPEC_R08_1",
+  "date": "2026-10-05",
+  "original_code_sha256": {
+    "run.py": "af2c5f38e3fdad126087beb21a759dbe227830872375870712c980d4b2315cdd",
+    "analysis.R": "9ec7da05b7e5c4887ab243aed1c07999e22bf118e9c6e5dd1844b118429e57f1",
+    "protocol.json": "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3"
+  },
+  "amended_code_sha256": {
+    "run.py": "26a63a06b3fa215aea71ca6f7ec356236a268a5b5b9fdef6dc8846d868770909",
+    "analysis.R": "187f9a064d2267cebd1df450db90f0d610e4455fa95b5ba8e52082a524c065e7",
+    "protocol.json": "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3"
+  },
+  "observed_error": "Fewer than 1,000 mapped/detected non-control probes; no normalization fallback",
+  "implementation_error": "Original R08 adds as.numeric(GPL CONTROL_TYPE)==0, which is absent from the frozen scientific protocol. Text labels such as FALSE/pos/neg are not the numeric raw Agilent ControlType.",
+  "correction": "Use the original frozen raw ControlType==0 rule together with the original symbol mapping, >=3/10 detection and all-finite checks. Save the old numeric GPL gate as a diagnostic only.",
+  "causal_diagnosis_status": "One combined filter-stop log does not determine per-condition counts. PROBE_FILTER_DIAGNOSTIC.json will test whether the unwanted GPL gate explains the actual failure.",
+  "scientific_protocol_bytes_changed": false,
+  "unchanged": [
+    "samples and contrast",
+    "raw normalization",
+    "gene mapping",
+    "3/10 detection requirement",
+    "1000-probe lower bound",
+    "Hallmark snapshot and all 50 candidates",
+    "fixed measured-universe rules",
+    "four paired donor folds",
+    "fgsea settings and seed",
+    "selection rules and reporting endpoints"
+  ],
+  "registration_requirements": [
+    "original R08 design and source hashes",
+    "original input receipts and runtime record",
+    "preserved matching filter-stop jobs",
+    "no completed original analysis or fitted statistical output in any matching saved job"
+  ],
+  "model_calls": 0,
+  "new_expert_ratings": 0,
+  "primary_annotation_source": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL6480",
+  "source_observation": "GPL6480 data table displays CONTROL_TYPE FALSE for standard A_23_* probes; e.g. A_23_P100001 FAM174B and A_23_P100011 AP3S2.",
+  "raw_control_documentation": "https://bioconductor.org/packages/release/bioc/vignettes/limma/inst/doc/usersguide.pdf"
+}

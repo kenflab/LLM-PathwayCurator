@@ -112,19 +112,125 @@ def code_hashes():
     return {name: sha(HERE / name) for name in ("run.py", "analysis.R", "protocol.json")}
 
 
+def check_frozen_files(root, lock_dir, lock, hallmark=None):
+    for name, digest in lock["frozen_file_sha256"].items():
+        require(sha(data_path(root, str((lock_dir / name).relative_to(root)))) == digest, f"Frozen file changed: {name}")
+    source = data_path(root, lock["hallmark_source_relative_path"])
+    require(sha(source) == lock["hallmark_source_sha256"], "Original Hallmark snapshot changed")
+    if hallmark is not None:
+        require(hallmark.resolve() == source.resolve(), "A different Hallmark source cannot replace the frozen snapshot")
+
+
+def amendment_spec():
+    path = HERE / "technical_amendment_r08_1.json"
+    spec = read_json(path)
+    require(spec.get("schema") == "CRM_R1_EXTERNAL_DEX_TECHNICAL_AMENDMENT_SPEC_R08_1", "Unknown technical amendment")
+    require(spec["amended_code_sha256"] == code_hashes(), "Amendment does not authenticate the installed code")
+    require(spec["original_code_sha256"]["protocol.json"] == spec["amended_code_sha256"]["protocol.json"], "Technical amendment cannot replace the frozen scientific protocol")
+    return path, spec
+
+
+def verify_amendment(root, lock_dir, lock):
+    path = lock_dir / "TECHNICAL_AMENDMENT_R08_1.json"
+    if not path.exists():
+        require(lock["code_sha256"] == code_hashes(), "Frozen code changed; retain the lock and run this revision with --amend-r08-probe-filter once")
+        return None
+    source, spec = amendment_spec()
+    record = read_json(path)
+    require(record.get("schema") == "CRM_R1_EXTERNAL_DEX_TECHNICAL_AMENDMENT_R08_1" and
+            record["design_sha256"] == object_sha(lock) and
+            record["original_code_sha256"] == lock["code_sha256"] == spec["original_code_sha256"] and
+            record["amended_code_sha256"] == code_hashes() and record["spec_sha256"] == sha(source),
+            "Technical amendment/parent design changed")
+    require(record["preserved_file_sha256"], "Technical amendment has no preserved evidence")
+    for name, digest in record["preserved_file_sha256"].items():
+        require(sha(data_path(root, name)) == digest, f"Preserved amendment input/failure evidence changed: {name}")
+    return record
+
+
+def register_amendment(root):
+    """Authorize this one technical correction, preserving all previous files."""
+    lock_dir = data_path(root, "output/revision_v17/external_dex_design_v1")
+    require((lock_dir / "DESIGN_LOCK.json").is_file(), "R08.1 needs the existing R08 design; do not delete or rebuild it")
+    lock = read_json(lock_dir / "DESIGN_LOCK.json")
+    check_frozen_files(root, lock_dir, lock)
+    source, spec = amendment_spec()
+    require(lock["code_sha256"] == spec["original_code_sha256"], "Parent design is not the reviewed original R08 code")
+    if (lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists():
+        verify_amendment(root, lock_dir, lock)
+        return
+    require(not (lock_dir / "COMPLETED_ANALYSIS.json").exists(), "Original R08 has completed results; do not replace its execution under a technical hotfix")
+    directory, inputs = input_manifest(root, lock)  # Verify existing receipts; no network.
+    runtime_path = lock_dir / "RUNTIME_IDENTITY.json"
+    require(runtime_path.is_file(), "Original R08 runtime record missing")
+    runtime = read_json(runtime_path)
+    design_sha = object_sha(lock)
+    retained = [lock_dir / "DESIGN_LOCK.json", runtime_path]
+    retained.extend(lock_dir / name for name in lock["frozen_file_sha256"])
+    retained.append(directory / "INPUT_MANIFEST.json")
+    for name in DOWNLOADS:
+        retained.extend([directory / name, directory / (name + ".receipt.json")])
+    failures = []
+    # Inspect every matching saved job. No fitting/GSEA output may precede
+    # this amendment, even if the successful-completion receipt is absent.
+    for job_path in sorted(lock_dir.parent.glob("external_dex_20*/JOB.private.json")):
+        job = read_json(job_path)
+        if job.get("design_sha256") != design_sha:
+            continue
+        out = job_path.parent
+        require(not any(out.glob("*.gene_rank.tsv")) and
+                not any((out / n).exists() for n in (
+                    "discovery.tsv", "validation_24h.tsv", "validation_4h_secondary.tsv",
+                    "R_STATISTICS_COMPLETE.json", "SUMMARY.json")),
+                f"Statistical outputs precede amendment; preserve and review this job: {out}")
+        require(not any(out.glob("donor_loo_*.tsv")), "Donor-fold outputs precede amendment")
+        stop_path, log_path = out / "STOPPED.private.json", out / "analysis.log.txt"
+        if not stop_path.is_file() or not log_path.is_file():
+            raise ValueError(f"An unsealed R08 job exists; preserve and inspect before amendment: {out}")
+        stopped = read_json(stop_path)
+        require(stopped.get("design_sha256") == design_sha and stopped.get("model_calls") == 0, "Failed-run identity mismatch")
+        log = log_path.read_text(encoding="utf-8")
+        require("Error: Fewer than 1,000 mapped/detected non-control probes; no normalization fallback" in log,
+                f"This amendment is restricted to the observed probe-filter stop: {out}")
+        require(job.get("input_manifest_sha256") == object_sha(inputs) and job.get("R_runtime") == runtime,
+                "Failed job used different input/runtime records")
+        require(read_json(out / "DESIGN_LOCK.json") == lock, "Failed job used a different design lock")
+        mapping_path = out / "GPL6480.mapping.tsv"
+        require(mapping_path.is_file(), "Failed-run GPL mapping is missing")
+        with mapping_path.open(encoding="utf-8", newline="") as handle:
+            mapping = list(csv.DictReader(handle, delimiter="\t"))
+        require(mapping == platform_mapping(directory / "GPL6480.soft.txt"), "Failed-run GPL annotation differs from the preserved input")
+        labels = {}
+        for row in mapping:
+            labels[row["control_type"]] = labels.get(row["control_type"], 0) + 1
+        files = sorted(p for p in out.rglob("*") if p.is_file())
+        retained.extend(files)
+        failures.append({"outdir_relative_path": str(out.relative_to(root)),
+                         "GPL_CONTROL_TYPE_annotation_counts": labels,
+                         "statistical_output_files_present": False})
+    require(failures, "No preserved R08 probe-filter failure found; do not invent an amendment history")
+    evidence = {str(p.relative_to(root)): sha(data_path(root, str(p.relative_to(root)))) for p in retained}
+    record = {"schema": "CRM_R1_EXTERNAL_DEX_TECHNICAL_AMENDMENT_R08_1", "created_utc": stamp(),
+              "design_sha256": design_sha, "original_code_sha256": lock["code_sha256"],
+              "amended_code_sha256": code_hashes(), "spec_sha256": sha(source),
+              "input_manifest_sha256": object_sha(inputs), "preserved_file_sha256": evidence,
+              "preserved_failures": failures, "scientific_protocol_bytes_changed": False,
+              "model_calls": 0, "new_expert_ratings": 0,
+              "outcome_exposure": "Normalization ran before the recorded stop. No fitted gene-rank or pathway-result files exist in the matching preserved jobs. Previously published study outcomes remain disclosed in the original protocol."}
+    # Exclusive creation, as for the original lock and receipts. No hard-link
+    # requirement on the user's OneDrive-backed filesystem, and no overwrite.
+    write_json(lock_dir / "TECHNICAL_AMENDMENT_R08_1.json", record)
+    verify_amendment(root, lock_dir, lock)
+
+
 def freeze(root, hallmark=None):
     lock_dir = data_path(root, "output/revision_v17/external_dex_design_v1")
     lock_path = lock_dir / "DESIGN_LOCK.json"
     if lock_dir.exists():
         require(lock_path.is_file(), "Incomplete design directory preserved; inspect before proceeding")
         lock = read_json(lock_path)
-        require(lock["code_sha256"] == code_hashes(), "Frozen code/protocol changed; preserve the lock and document a technical amendment")
-        for name, digest in lock["frozen_file_sha256"].items():
-            require(sha(lock_dir / name) == digest, f"Frozen file changed: {name}")
-        source = data_path(root, lock["hallmark_source_relative_path"])
-        require(sha(source) == lock["hallmark_source_sha256"], "Original Hallmark snapshot changed")
-        if hallmark is not None:
-            require(hallmark.resolve() == source.resolve(), "A different Hallmark source cannot replace the frozen snapshot")
+        check_frozen_files(root, lock_dir, lock, hallmark)
+        verify_amendment(root, lock_dir, lock)
         return lock_dir, lock
     source = hallmark or data_path(root, "output/priority2b/hallmark_lock_v14_1_2/hallmark_gene_sets.tsv")
     require(source.resolve().is_relative_to(root), "Hallmark source must be in the existing CRM_R1 data root")
@@ -375,7 +481,7 @@ def summarize(out, protocol, job):
     write_tsv(out / "TERM_LEDGER.tsv", ledger, list(ledger[0]))
     write_json(out / "SOURCE_TEMPLATES.json", templates)
     write_json(out / "SAMPLE_CARDS.json", {"schema": "GENERIC_STUDY_CONTRAST_v1", "discovery": {"study_id": "GSE52778", "tissue": "human airway smooth muscle", "positive_group": "dexamethasone", "reference_group": "control vehicle", "hours": 18, "paired_donors": 4}, "validation": {"study_id": "GSE34313", "primary_hours": 24, "treated_cultures": 3, "control_cultures": 4, "cell_line": "HASM1", "pairing_verified": False, "cross_study_donor_disjointness_verified": False}})
-    summary = {"schema": "CRM_R1_EXTERNAL_DEX_RESULTS_R08", "status": "COMPLETE_LIMITED_CROSS_STUDY_CASE", "scope": protocol["scope"], "candidate_count": 50, "candidate_retained_count": 50, "discovery_donor_count": 4, "validation_cell_line_count": 1, "validation_primary_cultures": {"dex24": 3, "control": 4}, "model_calls": 0, "new_expert_ratings": 0, "full_audit_performance_estimated": False, "semantic_accuracy_estimated": False, "cross_study_donor_disjointness_verified": False, "descriptive_replication_rate_difference_stability_minus_matched_q": delta, "comparisons": comparisons, "design_sha256": job["design_sha256"], "input_manifest_sha256": job["input_manifest_sha256"], "published_result_exposure": protocol["outcome_exposure"], "interpretation": "Statistical pathway replication in a limited worked case; overlapping pathways do not supply independent trials, and no generalization/superiority CI is computed."}
+    summary = {"schema": "CRM_R1_EXTERNAL_DEX_RESULTS_R08", "status": "COMPLETE_LIMITED_CROSS_STUDY_CASE", "scope": protocol["scope"], "candidate_count": 50, "candidate_retained_count": 50, "discovery_donor_count": 4, "validation_cell_line_count": 1, "validation_primary_cultures": {"dex24": 3, "control": 4}, "model_calls": 0, "new_expert_ratings": 0, "full_audit_performance_estimated": False, "semantic_accuracy_estimated": False, "cross_study_donor_disjointness_verified": False, "descriptive_replication_rate_difference_stability_minus_matched_q": delta, "comparisons": comparisons, "design_sha256": job["design_sha256"], "input_manifest_sha256": job["input_manifest_sha256"], "published_result_exposure": protocol["outcome_exposure"], "interpretation": "Statistical pathway replication in a limited worked case; overlapping pathways do not supply independent trials, and no generalization/superiority CI is computed.", "execution_code_sha256": job["execution_code_sha256"], "technical_amendment_sha256": job["technical_amendment_sha256"], "probe_filter_diagnostic": read_json(out / "PROBE_FILTER_DIAGNOSTIC.json")}
     write_json(out / "SUMMARY.json", summary)
     return summary
 
@@ -398,6 +504,7 @@ def analyze(root, lock_dir, lock, directory, inputs):
     if receipt.exists():
         record = read_json(receipt)
         require(record["input_manifest_sha256"] == object_sha(inputs), "Analysis inputs changed")
+        require(record.get("execution_code_sha256") == code_hashes(), "Completed execution code differs from the installed code")
         out = data_path(root, record["outdir_relative_path"])
         verify_export(out)
         require(sha(Path(str(out) + ".zip")) == record["archive_sha256"], "Existing results archive changed")
@@ -406,9 +513,14 @@ def analyze(root, lock_dir, lock, directory, inputs):
     protocol = read_json(lock_dir / "protocol.json")
     check_sample_metadata(directory / "GSE34313_series_matrix.txt.gz", protocol)
     mapping = platform_mapping(directory / "GPL6480.soft.txt")
+    self_test = subprocess.run([shutil.which("Rscript"), "--vanilla", str(HERE / "analysis.R"), "--self-test"], capture_output=True, text=True, check=False)
+    require(self_test.returncode == 0 and "R08_1_PROBE_FILTER_SELF_TEST_PASS" in self_test.stdout,
+            "Base-R probe-filter self-test failed before statistical analysis: " + self_test.stderr.strip())
+    amendment_path = lock_dir / "TECHNICAL_AMENDMENT_R08_1.json"
+    amendment_sha = sha(amendment_path) if amendment_path.exists() else None
     out = data_path(root, "output/revision_v17/external_dex_" + stamp())
     out.mkdir(parents=True)
-    job = {"schema": "CRM_R1_EXTERNAL_DEX_JOB_R08", "outdir": str(out), "protocol": str(lock_dir / "protocol.json"), "hallmark": str(lock_dir / "hallmark_gene_symbols.tsv"), "design_sha256": object_sha(lock), "input_manifest_sha256": object_sha(inputs), "R_runtime": identity}
+    job = {"schema": "CRM_R1_EXTERNAL_DEX_JOB_R08", "outdir": str(out), "protocol": str(lock_dir / "protocol.json"), "hallmark": str(lock_dir / "hallmark_gene_symbols.tsv"), "design_sha256": object_sha(lock), "input_manifest_sha256": object_sha(inputs), "R_runtime": identity, "execution_code_sha256": code_hashes(), "technical_amendment_sha256": amendment_sha}
     try:
         arrays = out / "raw_arrays"
         arrays.mkdir()
@@ -419,6 +531,10 @@ def analyze(root, lock_dir, lock, directory, inputs):
         shutil.copyfile(lock_dir / "protocol.json", out / "protocol.json")
         shutil.copyfile(lock_dir / "DESIGN_LOCK.json", out / "DESIGN_LOCK.json")
         shutil.copyfile(lock_dir / "hallmark_gene_symbols.tsv", out / "hallmark_gene_symbols.tsv")
+        if amendment_sha is not None:
+            shutil.copyfile(amendment_path, out / "TECHNICAL_AMENDMENT_R08_1.json")
+            shutil.copyfile(HERE / "technical_amendment_r08_1.json", out / "TECHNICAL_AMENDMENT_SPEC_R08_1.json")
+        (out / "R_PROBE_FILTER_SELF_TEST.txt").write_text(self_test.stdout + self_test.stderr, encoding="utf-8")
         write_json(out / "INPUT_MANIFEST.json", inputs)
         write_json(out / "RUNTIME_IDENTITY.json", identity)
         with (out / "analysis.log.txt").open("x", encoding="utf-8") as log:
@@ -442,7 +558,7 @@ def analyze(root, lock_dir, lock, directory, inputs):
         with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as handle:
             for name in [*export, "EXPORT_SHA256.json"]:
                 handle.write(out / name, name)
-        write_json(receipt, {"outdir_relative_path": str(out.relative_to(root)), "input_manifest_sha256": object_sha(inputs), "archive_sha256": sha(archive)})
+        write_json(receipt, {"outdir_relative_path": str(out.relative_to(root)), "input_manifest_sha256": object_sha(inputs), "archive_sha256": sha(archive), "execution_code_sha256": code_hashes(), "technical_amendment_sha256": amendment_sha})
         print(json.dumps({**summary, "outdir": str(out), "results_archive": str(archive)}, indent=2))
     except Exception as error:
         if not (out / "STOPPED.private.json").exists():
@@ -458,6 +574,7 @@ def main(argv=None):
     parser.add_argument("--fetch", action="store_true", help="Download the fixed public GEO files; no model calls")
     parser.add_argument("--analyze", action="store_true", help="Run the fixed statistical analysis")
     parser.add_argument("--install-missing", action="store_true", help="Install only missing free R packages; never update existing packages")
+    parser.add_argument("--amend-r08-probe-filter", action="store_true", help="Record the reviewed technical correction against a preserved original R08 probe-filter failure; do not replace its design")
     args = parser.parse_args(argv)
     try:
         require(not args.install_missing or args.analyze, "--install-missing requires --analyze")
@@ -465,9 +582,13 @@ def main(argv=None):
         require((root / "input").is_dir() and (root / "output").is_dir(), "Use the existing CRM_R1 with input/ and output/")
         repo = HERE.parents[4]
         require(not root.is_relative_to(repo), "Data root must be outside the repository")
+        if args.amend_r08_probe_filter:
+            require(not (args.fetch or args.analyze or args.install_missing or args.hallmark), "Register the technical amendment separately from downloads/analysis")
+            register_amendment(root)
+            print("[R08.1] Technical amendment recorded; original design, inputs and failed job preserved", flush=True)
         lock_dir, lock = freeze(root, args.hallmark.expanduser() if args.hallmark else None)
         identity = runtime_identity()
-        print(json.dumps({"status": "PROTOCOL_FROZEN_BEFORE_ANALYSIS", "design_dir": str(lock_dir), "design_sha256": object_sha(lock), "candidate_count": 50, "R_dependencies": identity, "model_calls": 0, "new_expert_ratings": 0}, indent=2), flush=True)
+        print(json.dumps({"status": "PROTOCOL_FROZEN_BEFORE_ANALYSIS", "design_dir": str(lock_dir), "design_sha256": object_sha(lock), "candidate_count": 50, "R_dependencies": identity, "model_calls": 0, "new_expert_ratings": 0, "technical_amendment": "R08_1" if (lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists() else None}, indent=2), flush=True)
         if args.install_missing:
             install_missing(identity)
         if args.fetch or args.analyze:

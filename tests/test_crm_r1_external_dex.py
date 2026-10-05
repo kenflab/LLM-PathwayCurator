@@ -1,9 +1,11 @@
 """Scientific denominator, provenance and input-safety regressions for the dex case."""
 import copy
+import contextlib
 import gzip
 import importlib.util
 import io
 import json
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -153,6 +155,159 @@ class FrozenInputs(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SOFT annotation"):
             DEX.platform_mapping(path)
 
+    def legacy_failure(self):
+        """Synthetic preservation fixture, not executed R or biological data."""
+        spec = DEX.read_json(DEX.HERE / "technical_amendment_r08_1.json")
+        with mock.patch.object(DEX, "code_hashes", return_value=spec["original_code_sha256"]):
+            lock_dir, lock = DEX.freeze(self.root, self.hallmark)
+        identity = {"ready": True, "missing": [], "R": "SYNTHETIC_TEST_ONLY", "packages": {}}
+        DEX.write_json(lock_dir / "RUNTIME_IDENTITY.json", identity)
+        directory = self.root / "input/external_dex_r08_v1"
+        directory.mkdir()
+        (directory / "GPL6480.soft.txt").write_text("^PLATFORM = GPL6480\n!platform_table_begin\nID\tGENE_SYMBOL\tCONTROL_TYPE\nA_23_TEST\tTP53\tFALSE\nC_TEST\tCONTROL\tpos\n!platform_table_end\n")
+        for name in DEX.DOWNLOADS:
+            if not (directory / name).exists():
+                (directory / name).write_bytes(b"SYNTHETIC_INPUT_ONLY")
+        protocol = DEX.read_json(DEX.HERE / "protocol.json")
+        samples = protocol["validation"]["samples"]
+        text = "!Sample_geo_accession\t" + "\t".join(s["geo_accession"] for s in samples) + "\n"
+        text += "!Sample_title\t" + "\t".join(s["title"] for s in samples) + "\n"
+        text += "!Sample_platform_id\t" + "\t".join(["GPL6480"] * 10) + "\n!series_matrix_table_begin\n"
+        with gzip.open(directory / "GSE34313_series_matrix.txt.gz", "wt") as handle:
+            handle.write(text)
+        with tarfile.open(directory / "GSE34313_RAW.tar", "w") as handle:
+            for sample in samples:
+                item = tarfile.TarInfo(sample["geo_accession"] + "_fixture.txt")
+                payload = b"gMedianSignal gBGMedianSignal gIsWellAboveBG"
+                item.size = len(payload)
+                handle.addfile(item, io.BytesIO(payload))
+        for name in DEX.DOWNLOADS:
+            DEX.write_json(directory / (name + ".receipt.json"), {
+                "url": DEX.DOWNLOADS[name], "sha256": DEX.sha(directory / name), "design_sha256": DEX.object_sha(lock)})
+        _, inputs = DEX.input_manifest(self.root, lock)
+        out = lock_dir.parent / "external_dex_20261005T210901796113Z"
+        out.mkdir()
+        job = {"schema": "CRM_R1_EXTERNAL_DEX_JOB_R08", "outdir": str(out),
+               "design_sha256": DEX.object_sha(lock), "input_manifest_sha256": DEX.object_sha(inputs), "R_runtime": identity}
+        DEX.write_json(out / "JOB.private.json", job)
+        shutil.copyfile(lock_dir / "DESIGN_LOCK.json", out / "DESIGN_LOCK.json")
+        mapping = DEX.platform_mapping(directory / "GPL6480.soft.txt")
+        DEX.write_tsv(out / "GPL6480.mapping.tsv", mapping, ["probe_id", "gene_symbol", "control_type"])
+        (out / "analysis.log.txt").write_text("Array 10 corrected\nError: Fewer than 1,000 mapped/detected non-control probes; no normalization fallback\nExecution halted\n")
+        DEX.write_json(out / "STOPPED.private.json", {"status": "STOPPED_PRESERVED", "design_sha256": DEX.object_sha(lock), "model_calls": 0})
+        (out / "raw_arrays").mkdir()
+        (out / "raw_arrays/GSM847200.txt").write_text("preserved raw fixture\n")
+        return lock_dir, lock, directory, out
+
+    def test_amendment_preserves_parent_design_inputs_and_failed_files_without_network(self):
+        lock_dir, lock, directory, out = self.legacy_failure()
+        before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        with mock.patch.object(DEX.urllib.request, "urlopen", side_effect=AssertionError("No network allowed")):
+            DEX.register_amendment(self.root)
+            self.assertEqual(DEX.freeze(self.root)[1], lock)
+            first = (lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").read_bytes()
+            DEX.register_amendment(self.root)
+        self.assertEqual((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").read_bytes(), first)
+        self.assertTrue(all(p.read_bytes() == raw for p, raw in before.items()))
+        record = json.loads(first)
+        self.assertEqual(record["design_sha256"], DEX.object_sha(lock))
+        self.assertFalse(record["scientific_protocol_bytes_changed"])
+        self.assertEqual(record["preserved_failures"][0]["GPL_CONTROL_TYPE_annotation_counts"], {"FALSE": 1, "pos": 1})
+        self.assertIn(str((out / "raw_arrays/GSM847200.txt").relative_to(self.root)), record["preserved_file_sha256"])
+
+    def test_code_change_without_documented_amendment_is_rejected(self):
+        lock_dir, lock, _, _ = self.legacy_failure()
+        with self.assertRaisesRegex(ValueError, "amend-r08"):
+            DEX.freeze(self.root)
+        self.assertEqual(DEX.read_json(lock_dir / "DESIGN_LOCK.json"), lock)
+
+    def test_completed_original_result_blocks_hotfix(self):
+        lock_dir, _, _, _ = self.legacy_failure()
+        DEX.write_json(lock_dir / "COMPLETED_ANALYSIS.json", {"fixture": True})
+        with self.assertRaisesRegex(ValueError, "completed results"):
+            DEX.register_amendment(self.root)
+        self.assertFalse((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists())
+
+    def test_partial_statistics_also_block_hotfix_without_completion_receipt(self):
+        lock_dir, _, _, out = self.legacy_failure()
+        (out / "discovery.gene_rank.tsv").write_text("already fitted statistics\n")
+        with self.assertRaisesRegex(ValueError, "Statistical outputs precede"):
+            DEX.register_amendment(self.root)
+        self.assertFalse((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists())
+
+    def test_changed_download_receipt_blocks_amendment(self):
+        lock_dir, _, directory, _ = self.legacy_failure()
+        (directory / "GPL6480.soft.txt").write_text("changed annotation\n")
+        with self.assertRaisesRegex(ValueError, "Public input changed"):
+            DEX.register_amendment(self.root)
+        self.assertFalse((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists())
+
+    def test_changed_preserved_failure_is_detected_after_registration(self):
+        _, _, _, out = self.legacy_failure()
+        DEX.register_amendment(self.root)
+        (out / "analysis.log.txt").write_text("modified failure log\n")
+        with self.assertRaisesRegex(ValueError, "failure evidence changed"):
+            DEX.freeze(self.root)
+
+    def test_unrelated_failure_does_not_invent_amendment_history(self):
+        lock_dir, _, _, out = self.legacy_failure()
+        (out / "analysis.log.txt").write_text("Error: unrelated numerical problem\n")
+        with self.assertRaisesRegex(ValueError, "restricted to the observed"):
+            DEX.register_amendment(self.root)
+        self.assertFalse((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists())
+
+    def test_unreviewed_code_is_rejected_even_with_unchanged_protocol(self):
+        lock_dir, _, _, _ = self.legacy_failure()
+        changed = DEX.code_hashes()
+        changed["analysis.R"] = "0" * 64
+        with mock.patch.object(DEX, "code_hashes", return_value=changed):
+            with self.assertRaisesRegex(ValueError, "authenticate the installed code"):
+                DEX.register_amendment(self.root)
+        self.assertFalse((lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").exists())
+
+    def test_unchanged_scientific_protocol_matches_original_delivered_sha(self):
+        self.assertEqual(DEX.sha(DEX.HERE / "protocol.json"), "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3")
+
+    def synthetic_r(self, command, **kwargs):
+        if command[-1] == "--self-test":
+            return type("Result", (), {"returncode": 0, "stdout": "R08_1_PROBE_FILTER_SELF_TEST_PASS\n", "stderr": ""})()
+        job = DEX.read_json(command[-1])
+        out = Path(job["outdir"])
+        protocol = DEX.read_json(DEX.HERE / "protocol.json")
+        names = ["discovery", "validation_24h", "validation_4h_secondary"] + ["donor_loo_" + d for d in sorted({s["donor"] for s in protocol["discovery"]["samples"]})]
+        for name in names:
+            rows = list(table("0.001").values())
+            DEX.write_tsv(out / (name + ".tsv"), rows, list(rows[0]))
+        DEX.write_tsv(out / "common_gene_universe.tsv", [{"gene_symbol": "GENE" + str(i)} for i in range(1000)], ["gene_symbol"])
+        DEX.write_json(out / "R_STATISTICS_COMPLETE.json", {"schema": "CRM_R1_EXTERNAL_DEX_R_STATS_R08", "donor_folds": 4, "model_calls": 0, "common_genes": 1000, "expression_outcomes_loaded": True})
+        DEX.write_json(out / "PROBE_FILTER_DIAGNOSTIC.json", {"scope": "SYNTHETIC_TEST_ONLY", "frozen_protocol_retained_count": 1000})
+        return type("Result", (), {"returncode": 0})()
+
+    def test_amended_coordinator_carries_amendment_and_preserves_original_evidence(self):
+        lock_dir, lock, directory, failed = self.legacy_failure()
+        DEX.register_amendment(self.root)
+        amendment = (lock_dir / "TECHNICAL_AMENDMENT_R08_1.json").read_bytes()
+        inputs = DEX.read_json(directory / "INPUT_MANIFEST.json")
+        runtime = DEX.read_json(lock_dir / "RUNTIME_IDENTITY.json")
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(DEX, "runtime_identity", return_value=runtime), mock.patch.object(DEX.shutil, "which", return_value="SYNTHETIC_RSCRIPT"), mock.patch.object(DEX.subprocess, "run", side_effect=self.synthetic_r) as called:
+            DEX.analyze(self.root, lock_dir, lock, directory, inputs)
+            self.assertEqual(called.call_count, 2)
+            DEX.register_amendment(self.root)
+            DEX.analyze(self.root, lock_dir, lock, directory, inputs)
+            self.assertEqual(called.call_count, 2)
+        completed = DEX.read_json(lock_dir / "COMPLETED_ANALYSIS.json")
+        out = self.root / completed["outdir_relative_path"]
+        self.assertNotEqual(out, failed)
+        self.assertEqual((out / "TECHNICAL_AMENDMENT_R08_1.json").read_bytes(), amendment)
+        self.assertEqual(DEX.read_json(out / "SUMMARY.json")["technical_amendment_sha256"], DEX.sha(lock_dir / "TECHNICAL_AMENDMENT_R08_1.json"))
+        self.assertEqual(DEX.freeze(self.root)[1], lock)
+
+    @unittest.skipUnless(shutil.which("Rscript"), "Base R is unavailable in this test environment")
+    def test_actual_base_r_probe_filter_regression(self):
+        result = DEX.subprocess.run([shutil.which("Rscript"), "--vanilla", str(DEX.HERE / "analysis.R"), "--self-test"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("R08_1_PROBE_FILTER_SELF_TEST_PASS", result.stdout)
+
     def test_coordinator_seals_complete_synthetic_output_and_reuses_without_rerun(self):
         # Synthetic wiring fixture only: R statistics are NOT executed by this test.
         lock_dir, lock = DEX.freeze(self.root, self.hallmark)
@@ -179,21 +334,11 @@ class FrozenInputs(unittest.TestCase):
             DEX.write_json(directory / (name + ".receipt.json"), receipt)
         DEX.write_json(directory / "INPUT_MANIFEST.json", inputs)
         identity = {"ready": True, "missing": [], "R": "SYNTHETIC_TEST_ONLY", "packages": {}}
-        def fake_run(command, **kwargs):
-            job = DEX.read_json(command[-1])
-            out = Path(job["outdir"])
-            names = ["discovery", "validation_24h", "validation_4h_secondary"] + ["donor_loo_" + d for d in sorted({s["donor"] for s in protocol["discovery"]["samples"]})]
-            for name in names:
-                rows = list(table("0.001").values())
-                DEX.write_tsv(out / (name + ".tsv"), rows, list(rows[0]))
-            DEX.write_tsv(out / "common_gene_universe.tsv", [{"gene_symbol": "GENE" + str(i)} for i in range(1000)], ["gene_symbol"])
-            DEX.write_json(out / "R_STATISTICS_COMPLETE.json", {"schema": "CRM_R1_EXTERNAL_DEX_R_STATS_R08", "donor_folds": 4, "model_calls": 0, "common_genes": 1000, "expression_outcomes_loaded": True})
-            return type("Result", (), {"returncode": 0})()
-        with mock.patch.object(DEX, "runtime_identity", return_value=identity), mock.patch.object(DEX.shutil, "which", return_value="SYNTHETIC_RSCRIPT"), mock.patch.object(DEX.subprocess, "run", side_effect=fake_run) as called:
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(DEX, "runtime_identity", return_value=identity), mock.patch.object(DEX.shutil, "which", return_value="SYNTHETIC_RSCRIPT"), mock.patch.object(DEX.subprocess, "run", side_effect=self.synthetic_r) as called:
             DEX.analyze(self.root, lock_dir, lock, directory, inputs)
-            self.assertEqual(called.call_count, 1)
+            self.assertEqual(called.call_count, 2)
             DEX.analyze(self.root, lock_dir, lock, directory, inputs)
-            self.assertEqual(called.call_count, 1)
+            self.assertEqual(called.call_count, 2)
         completed = DEX.read_json(lock_dir / "COMPLETED_ANALYSIS.json")
         out = self.root / completed["outdir_relative_path"]
         summary = DEX.read_json(out / "SUMMARY.json")

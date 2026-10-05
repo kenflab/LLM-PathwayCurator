@@ -30,6 +30,75 @@ raw_probe_order <- function(file) {
   data.frame(probe = vapply(fields, `[[`, character(1), pi), control = vapply(fields, `[[`, character(1), ci), stringsAsFactors = FALSE)
 }
 
+# GPL CONTROL_TYPE is a textual annotation (e.g. FALSE/pos/neg), not the
+# Agilent Feature Extraction ControlType flag. The frozen protocol uses the
+# raw flag only. Keep the old, unintended GPL numeric gate as a diagnostic.
+probe_filters <- function(probe_id, raw_control, detection, normalized, platform) {
+  require_true(all(c("probe_id", "gene_symbol", "control_type") %in% names(platform)), "GPL6480 mapping columns missing")
+  require_true(!anyDuplicated(platform$probe_id) && all(nzchar(platform$probe_id)), "Duplicate/blank GPL6480 mapping ID")
+  require_true(is.matrix(detection) && is.matrix(normalized) && identical(dim(detection), dim(normalized)) &&
+    ncol(detection) == 10L && nrow(detection) == length(probe_id) && length(raw_control) == length(probe_id), "Probe-filter matrix/census mismatch")
+  index <- match(as.character(probe_id), as.character(platform$probe_id))
+  symbols <- trimws(as.character(platform$gene_symbol[index]))
+  # type.convert reproduces the original read.delim type inference for the
+  # legacy diagnostic; the selected set never depends on this annotation.
+  legacy_column <- type.convert(as.character(platform$control_type), as.is = TRUE)
+  legacy_numeric <- suppressWarnings(as.numeric(legacy_column[index]))
+  raw_numeric <- suppressWarnings(as.numeric(as.character(raw_control)))
+  require_true(all(is.finite(raw_numeric)), "Raw Agilent ControlType is not numeric")
+  checks <- data.frame(
+    mapped_to_GPL6480 = !is.na(index),
+    single_gene_symbol = single_symbol(symbols),
+    raw_ControlType_zero = raw_numeric == 0,
+    detected_in_at_least_3_of_10 = rowSums(detection > 0) >= 3L,
+    normalized_values_all_finite = rowSums(!is.finite(normalized)) == 0L)
+  checks[is.na(checks)] <- FALSE
+  retained <- rowSums(as.matrix(checks)) == ncol(checks)
+  legacy_gate <- !is.na(legacy_numeric) & legacy_numeric == 0
+  legacy_gate[is.na(legacy_gate)] <- FALSE
+  records <- data.frame(probe_id = as.character(probe_id), gene_symbol = symbols,
+    GPL_CONTROL_TYPE_annotation = as.character(platform$control_type[index]),
+    raw_ControlType = as.character(raw_control), detection_positive_arrays = rowSums(detection > 0),
+    checks, legacy_GPL_numeric_zero = legacy_gate,
+    legacy_retained = retained & legacy_gate, retained = retained, stringsAsFactors = FALSE)
+  cumulative <- rep(TRUE, length(probe_id))
+  cascade <- data.frame(condition = names(checks), passes_condition = integer(ncol(checks)), retained_cumulatively = integer(ncol(checks)))
+  for (i in seq_len(ncol(checks))) {
+    cumulative <- cumulative & checks[[i]]
+    cascade$passes_condition[[i]] <- sum(checks[[i]])
+    cascade$retained_cumulatively[[i]] <- sum(cumulative)
+  }
+  list(records = records, cascade = cascade, symbols = symbols, retained = retained,
+    legacy_retained_count = sum(retained & legacy_gate), retained_count = sum(retained))
+}
+
+probe_filter_self_test <- function() {
+  # Base R only. Includes actual GPL label syntax, repeated raw spots,
+  # an unmapped ID, ambiguous symbol, control, weak detection and non-finite E.
+  platform <- read.delim(text = paste0("probe_id\tgene_symbol\tcontrol_type\n",
+    "A_1\tTP53\tFALSE\nA_2\tIL6\tFALSE\nA_3\tIL6///STAT3\tFALSE\n",
+    "C_1\tCONTROL\tpos\nA_4\tGAPDH\tFALSE\nA_5\tACTB\tFALSE\n"),
+    colClasses = "character", quote = "", comment.char = "", check.names = FALSE)
+  probes <- c("A_1", "A_2", "A_3", "C_1", "MISSING", "A_4", "A_5", "A_1")
+  detect <- matrix(1, length(probes), 10L)
+  detect[2L, ] <- c(1, 1, 1, rep(0, 7L))
+  detect[6L, ] <- c(1, 1, rep(0, 8L))
+  normalized <- matrix(8, length(probes), 10L)
+  normalized[7L, 1L] <- Inf
+  raw_control <- c(0, 0, 0, 1, 0, 0, 0, 0)
+  result <- probe_filters(probes, raw_control, detect, normalized, platform)
+  require_true(identical(result$retained, c(TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE)), "Probe-filter regression failed")
+  require_true(result$legacy_retained_count == 0L && result$retained_count == 3L, "Textual GPL label regression failed")
+  require_true(identical(result$cascade$retained_cumulatively, c(7L, 6L, 5L, 4L, 3L)), "Filter-cascade regression failed")
+  platform$control_type <- c("0", "0", "0", "1", "0", "0")
+  numeric_result <- probe_filters(probes, raw_control, detect, normalized, platform)
+  require_true(identical(numeric_result$retained, result$retained) && numeric_result$legacy_retained_count == 3L, "GPL annotation incorrectly affects retention")
+  platform$control_type <- c("FALSE", "FALSE", "FALSE", "TRUE", "FALSE", "FALSE")
+  logical_result <- probe_filters(probes, raw_control, detect, normalized, platform)
+  require_true(identical(logical_result$retained, result$retained) && logical_result$legacy_retained_count == 3L, "Logical-only legacy inference regression failed")
+  cat("R08_1_PROBE_FILTER_SELF_TEST_PASS\n")
+}
+
 main <- function(job_file) {
   suppressPackageStartupMessages({
     library(airway)
@@ -105,14 +174,26 @@ main <- function(job_file) {
   normalized <- normalizeBetweenArrays(backgroundCorrect(raw, method = "normexp", offset = 50), method = "quantile")
   require_true(inherits(normalized, "EList") && !inherits(normalized, "EListRaw"), "Expected log2-normalized Agilent EList")
   colnames(normalized$E) <- ids
-  platform <- read.delim(job$platform_mapping, stringsAsFactors = FALSE, check.names = FALSE)
-  index <- match(as.character(normalized$genes$ProbeName), platform$probe_id)
-  val_symbols <- trimws(platform$gene_symbol[index])
-  val_control <- suppressWarnings(as.numeric(platform$control_type[index]))
-  ok <- !is.na(index) & single_symbol(val_symbols) & !is.na(val_control) & val_control == 0 & normalized$genes$ControlType == 0 & rowSums(detection > 0) >= 3 & rowSums(!is.finite(normalized$E)) == 0
-  ok[is.na(ok)] <- FALSE
+  platform <- read.delim(job$platform_mapping, colClasses = "character", quote = "", comment.char = "", check.names = FALSE)
+  filters <- probe_filters(normalized$genes$ProbeName, normalized$genes$ControlType, detection, normalized$E, platform)
+  val_symbols <- filters$symbols
+  ok <- filters$retained
+  # Write diagnostics BEFORE the sanity stop, including a replay of the old
+  # gate. These contain no fitted differential-expression/pathway results.
+  write_tsv(filters$records, file.path(out, "validation_probe_mapping.tsv"))
+  write_tsv(filters$cascade, file.path(out, "validation_probe_filter_counts.tsv"))
+  labels <- table(platform$control_type, useNA = "ifany")
+  write_tsv(data.frame(GPL_CONTROL_TYPE_annotation = names(labels), probe_count = as.integer(labels)), file.path(out, "GPL6480_control_annotation_counts.tsv"))
+  diagnosis <- list(schema = "CRM_R1_EXTERNAL_DEX_PROBE_FILTER_R08_1", raw_probe_count = length(ok),
+    frozen_protocol_retained_count = filters$retained_count, legacy_R08_retained_count = filters$legacy_retained_count,
+    removed_unintended_GPL_gate_excluded_count = filters$retained_count - filters$legacy_retained_count,
+    raw_ControlType_zero_remains_required = TRUE, minimum_detected_arrays = 3L, array_census = 10L,
+    minimum_retained_probes = 1000L, differential_expression_or_pathway_outcomes_loaded = FALSE,
+    GPL_numeric_gate_explains_1000_probe_stop = filters$legacy_retained_count < 1000L && filters$retained_count >= 1000L)
+  write_json(diagnosis, file.path(out, "PROBE_FILTER_DIAGNOSTIC.json"), auto_unbox = TRUE, pretty = TRUE)
+  cat("[R08.1] Probe filter: original code", filters$legacy_retained_count,
+    "; frozen protocol", filters$retained_count, "; total raw", length(ok), "\n")
   require_true(sum(ok) >= 1000L, "Fewer than 1,000 mapped/detected non-control probes; no normalization fallback")
-  write_tsv(data.frame(probe_id = normalized$genes$ProbeName, gene_symbol = val_symbols, retained = ok), file.path(out, "validation_probe_mapping.tsv"))
   expression <- normalized$E[ok, , drop = FALSE]
   groups <- split(seq_len(nrow(expression)), val_symbols[ok])
   expression <- t(vapply(groups, function(i) apply(expression[i, , drop = FALSE], 2L, median), numeric(length(ids))))
@@ -193,5 +274,9 @@ main <- function(job_file) {
 }
 
 args <- commandArgs(trailingOnly = TRUE)
-require_true(length(args) == 1L && file.exists(args[[1L]]), "Supply the Python coordinator's JOB.private.json")
-main(args[[1L]])
+if (identical(args, "--self-test")) {
+  probe_filter_self_test()
+} else {
+  require_true(length(args) == 1L && file.exists(args[[1L]]), "Supply the Python coordinator's JOB.private.json")
+  main(args[[1L]])
+}
