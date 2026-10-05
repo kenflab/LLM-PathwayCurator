@@ -18,7 +18,9 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from collections import Counter
 from datetime import UTC, datetime
+from itertools import chain
 from pathlib import Path
 from statistics import NormalDist
 
@@ -26,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 SCHEMA = "CRM_R1_REVISION_v17_R06"
+TABLE_READER_VERSION = "CRM_R1_P4_TSV_READER_R06_1"
 REPO = Path(__file__).resolve().parents[4]
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "config/r06_p4_reuse_policy.json"
 DEFAULT_BENCHMARK = "PANCAN_TP53_v1_HNSC_R1"
@@ -96,6 +99,7 @@ class Inputs:
         self.root, self.repo = Path(root).resolve(), Path(repo).resolve()
         self.files = {}
         self.checks = []
+        self.table_checks = []
 
     def add(self, path):
         path = Path(path).resolve()
@@ -194,16 +198,84 @@ class Inputs:
         return read_json(path)
 
     def table(self, path):
-        self.add(path)
+        """Reproduce the P4 pandas import without rewriting spreadsheet exports.
+
+        Blank supplementary headers become pandas' positional Unnamed columns.
+        All columns are retained. Named duplicates are rejected before pandas
+        can choose/mangle them; ratings still have to reproduce the frozen lock.
+        """
+        digest = self.add(path)
+        check = {
+            "path": str(Path(path).resolve()),
+            "sha256": digest,
+            "reader_version": TABLE_READER_VERSION,
+            "input_bytes_rewritten": False,
+            "leading_blank_lines": 0,
+            "raw_header": [],
+            "unnamed_header_positions_1_based": [],
+            "duplicate_named_headers": [],
+            "pandas_columns": [],
+            "status": "STARTED",
+        }
+        self.table_checks.append(check)
         with Path(path).open(encoding="utf-8-sig", newline="") as handle:
-            header = next(csv.reader(handle, delimiter="\t"), [])
-        require(
-            header and len(header) == len(set(header)),
-            "DUPLICATE_COLUMNS",
-            f"Empty or duplicate column header: {path}",
+            # pandas skips empty/space-only lines, but a tab-only line is a row.
+            for line in handle:
+                if line.strip() or "\t" in line:
+                    break
+                check["leading_blank_lines"] += 1
+            else:
+                line = ""
+            try:
+                header = next(csv.reader(chain([line], handle), delimiter="\t"), [])
+            except csv.Error as error:
+                check["status"] = "TABLE_PARSE_FAILED"
+                raise ReuseBlocked(
+                    "TABLE_PARSE_FAILED", f"Cannot read TSV header: {path}"
+                ) from error
+        check["raw_header"] = header
+        check["unnamed_header_positions_1_based"] = [
+            i + 1 for i, name in enumerate(header) if name == ""
+        ]
+        duplicates = sorted(name for name, count in Counter(header).items() if name and count > 1)
+        check["duplicate_named_headers"] = duplicates
+        check["status"] = (
+            "EMPTY_TABLE" if not any(name.strip() for name in header) else "HEADER_READ"
         )
-        frame = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+        require(
+            any(name.strip() for name in header), "EMPTY_TABLE", f"Missing named TSV header: {path}"
+        )
+        if duplicates:
+            check["status"] = "DUPLICATE_COLUMNS"
+        require(
+            not duplicates,
+            "DUPLICATE_COLUMNS",
+            f"Duplicate named TSV headers {duplicates}: {path}; no column selected automatically",
+        )
+        try:
+            frame = pd.read_csv(
+                path, sep="\t", dtype=str, keep_default_na=False, encoding="utf-8-sig"
+            )
+        except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeError) as error:
+            check["status"] = "TABLE_PARSE_FAILED"
+            raise ReuseBlocked("TABLE_PARSE_FAILED", f"Cannot parse frozen TSV: {path}") from error
+        check["pandas_columns"] = list(frame.columns)
         require(frame.columns.is_unique, "DUPLICATE_COLUMNS", f"Duplicate columns: {path}")
+        matches = len(header) == len(frame.columns) and all(
+            name == "" or name == frame.columns[i] for i, name in enumerate(header)
+        )
+        if not matches:
+            check["status"] = "HEADER_PARSE_MISMATCH"
+        require(
+            matches, "HEADER_PARSE_MISMATCH", f"Named TSV headers changed during parsing: {path}"
+        )
+        check["rows"] = len(frame)
+        check["unnamed_column_nonempty_counts"] = {
+            str(frame.columns[i]): int(frame.iloc[:, i].ne("").sum())
+            for i, name in enumerate(header)
+            if name == ""
+        }
+        check["status"] = "PARSED_WITH_UNNAMED_COLUMNS" if "" in header else "PARSED"
         return frame
 
     def verify(self):
@@ -914,6 +986,11 @@ def report(outdir, summary, tables=None):
         "全候補は選択しない比較法であり、新規の未監査LLM自由文ではありません。",
         "旧full auditを修正版の監査に置き換えたり、同じ名称で混同したりしません。",
         "",
+        "R06.1のTSV読込は、旧P4と同じpandasの無名補足列処理を使用します。",
+        "原本は書き換えず、採点8列は元の名前で固定台帳と照合します。",
+        "見出しのある列が重複した場合は、列を自動選択せず停止します。",
+        "table_read_checks.private.jsonに実際のヘッダーと読込状態を記録します。",
+        "",
         "評価者は別々に表示します。等重み平均も、この3名を固定した記述値です。",
         "150評価を150の独立候補として扱いません。多数決は正解に使いません。",
         "UNCERTAINは選択候補の分母に残し、該当数と部分情報による上下限を出します。",
@@ -1021,6 +1098,7 @@ def run(
         "revised_audit_performance_estimated": False,
         "independent_validation_performed": False,
         "new_model_comparison_performed": False,
+        "table_reader_version": TABLE_READER_VERSION,
     }
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -1115,6 +1193,10 @@ def run(
     inputs.verify()
     write_json(output / "INPUT_MANIFEST.private.json", {"files": list(inputs.files.values())})
     write_table(output / "manifest_checks.private.tsv", pd.DataFrame(inputs.checks))
+    write_json(
+        output / "table_read_checks.private.json",
+        {"reader_version": TABLE_READER_VERSION, "tables": inputs.table_checks},
+    )
     report(output, summary, tables)
     archive = output.with_suffix(".zip")
     summary["results_archive"] = str(archive)

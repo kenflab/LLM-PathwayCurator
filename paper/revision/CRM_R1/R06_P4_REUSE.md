@@ -24,6 +24,29 @@ is not used. Hashes, candidate/review/rater census, template assignment, origina
 return fields, packet order and wording/evidence fields must match.
 All accessed inputs are hashed again before completion.
 
+### R06.1 spreadsheet-export compatibility fix
+
+The returned R06 run `r06_20261005T160801990532Z` stopped before comparison
+at the second returned rating TSV. Every recorded frozen hash up to that file
+matched. The result archive contains no returned TSV bytes, so it establishes
+a header-reading block, not the exact duplicate/empty header layout.
+A previously shared rating workbook has the eight assigned fields plus two
+unnamed supplementary columns, including side notes. That layout reproduces
+the R06 rejection; the original P4 importer accepted it with pandas.
+
+R06.1 preserves the original TSV bytes and pandas' positional `Unnamed` columns.
+It skips only the leading empty/space-only lines also skipped by pandas.
+All named fields retain their original names; duplicate named columns still
+block instead of selecting or recoding a response. The eight assigned fields
+must reproduce the frozen ratings, and all original hashes still have to match.
+No frozen rating, manifest, selection, wording, endpoint or bootstrap setting
+is edited. Supplementary notes are retained and do not become rating fields.
+
+`table_read_checks.private.json` records the actual raw/pandas headers, leading
+blank lines, unnamed-column positions/nonempty counts and parse status.
+It is included in both completed and blocked result ZIPs. R06.1 is a reader
+fix within the same R06 analysis, not a new validation experiment.
+
 The analysis verifies the operational linkage needed for P4 reuse, not every
 upstream run or every P3 retrieval input. The original blinded literature packet
 is hash-checked as a packet output. P3 grading is neither inspected nor required.
@@ -79,6 +102,7 @@ Successful linkage yields:
 - descriptive_q_value_summary.tsv: statistical significance only.
 - Fig_R06_P4_major_overstatement_by_rater.pdf and .png.
 - READOUT_JA.md, source snapshot and input/output manifests.
+- table_read_checks.private.json: original headers and parser compatibility.
 
 Missing/mismatched frozen records yield P4_REUSE_BLOCKED, a precise reason and
 no performance tables or figure. Exit zero means the diagnostic completed;

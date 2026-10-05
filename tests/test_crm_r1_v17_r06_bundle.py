@@ -35,7 +35,11 @@ def layout(tmp_path):
     (root / "output").mkdir()
     files = {}
     for relative, raw, bases in (
-        ("README.md", b"r06\n", [installer.digest(b"r04\n"), installer.digest(b"r05\n")]),
+        (
+            "README.md",
+            b"r06.1\n",
+            [installer.digest(b"r04\n"), installer.digest(b"r05\n"), installer.digest(b"r06\n")],
+        ),
         ("paper/revision/CRM_R1/scripts/65_revision_r06.py", b"# synthetic\n", [None]),
     ):
         path = bundle / "payload" / relative
@@ -58,12 +62,12 @@ def layout(tmp_path):
     return repo, root, bundle
 
 
-@pytest.mark.parametrize("base", [b"r04\n", b"r05\n"])
-def test_r06_accepts_exact_r04_or_prepared_r05_versions_without_r05_dependency(layout, base):
+@pytest.mark.parametrize("base", [b"r04\n", b"r05\n", b"r06\n"])
+def test_r061_accepts_exact_r04_r05_or_installed_r06_without_other_dependencies(layout, base):
     repo, root, bundle = layout
     (repo / "README.md").write_bytes(base)
     installer.apply_bundle(bundle, repo, root, apply=True)
-    assert (repo / "README.md").read_bytes() == b"r06\n"
+    assert (repo / "README.md").read_bytes() == b"r06.1\n"
 
 
 def test_r06_unknown_local_difference_is_preserved_before_writes(layout):

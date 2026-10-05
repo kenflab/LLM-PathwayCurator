@@ -8,6 +8,13 @@ The R05 paid-backend live recommendation is withdrawn; R05 installation and
 semantic development are not prerequisites for manuscript/figure revision.
 R03/R04 findings and all earlier locked results remain unchanged.
 
+R06.1 fixes original spreadsheet-export compatibility: unnamed supplementary
+columns and leading blank lines are read using the original pandas convention.
+The eight assigned fields still must reproduce the frozen ratings. Duplicate
+named columns block; the actual headers are recorded in the returned ZIP.
+Apply the R06.1 bundle in the same checkout and keep the earlier blocked R06
+run. No original data, analysis policy or endpoint is changed.
+
 Use the existing `LLM-PathwayCurator` checkout for code. Use the existing
 `CRM_R1` directory for inputs, analysis outputs, ratings, and manuscript files.
 Historical smoke-test checkouts and the copy under `CRM_R1/projects/` remain

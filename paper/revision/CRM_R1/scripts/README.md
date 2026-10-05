@@ -8,6 +8,9 @@ It compares unchanged candidates across all-candidate, q-value, stability and
 legacy full-audit selections, retaining individual raters and UNCERTAIN.
 It writes exploratory comparisons, agreement, source tables, PDF/PNG and a
 returned ZIP. No model backend, new expert review or P3 grading is required.
+R06.1 accepts the original spreadsheet export's unnamed supplementary columns
+and leading blank lines, records the actual headers, and still rejects duplicate
+named fields or any difference from the frozen assigned ratings.
 Read [R06_P4_REUSE.md](../R06_P4_REUSE.md) and
 [V17_WORKFLOW.md](../V17_WORKFLOW.md).
 

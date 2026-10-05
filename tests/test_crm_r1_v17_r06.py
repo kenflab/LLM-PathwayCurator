@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import importlib.util
+import io
 import json
 import shutil
 import socket
@@ -417,3 +419,133 @@ def test_missing_original_return_is_reported_without_requesting_new_ratings(froz
     assert summary["status"] == "P4_REUSE_BLOCKED"
     assert summary["blocker_code"] == "MISSING_INPUT"
     assert summary["new_expert_ratings"] == summary["model_calls"] == 0
+
+
+def add_spreadsheet_supplement(path):
+    """Synthetic Excel export with two blank headers and ungraded side notes."""
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    rows[0].extend(["", ""])
+    for i, row in enumerate(rows[1:]):
+        row.extend(["", "MAJOR_OVERSTATEMENT" if i < 2 else ""])
+    output = io.StringIO(newline="")
+    csv.writer(output, delimiter="\t", lineterminator="\n").writerows(rows)
+    path.write_text(output.getvalue(), encoding="utf-8")
+
+
+def test_unnamed_supplement_is_preserved_without_changing_any_rating_or_result(frozen):
+    original = execute(frozen)
+    original_output = Path(original["outdir"])
+    raw = frozen["raw_paths"][1]
+    add_spreadsheet_supplement(raw)
+    refresh_manifests(frozen)
+    before = r06.sha(raw)
+    updated = execute(frozen)
+    assert updated["status"] == "COMPLETE_EXPLORATORY_P4_COMPARISON"
+    assert updated["model_calls"] == updated["new_expert_ratings"] == 0
+    assert r06.sha(raw) == before
+    output = Path(updated["outdir"])
+    for name in ("rater_method_endpoints.tsv", "paired_method_differences.tsv"):
+        pd.testing.assert_frame_equal(
+            pd.read_csv(original_output / name, sep="\t"),
+            pd.read_csv(output / name, sep="\t"),
+        )
+    checks = json.loads((output / "table_read_checks.private.json").read_text())
+    check = next(row for row in checks["tables"] if row["path"] == str(raw))
+    assert check["status"] == "PARSED_WITH_UNNAMED_COLUMNS"
+    assert check["unnamed_header_positions_1_based"] == [9, 10]
+    assert check["unnamed_column_nonempty_counts"] == {"Unnamed: 8": 0, "Unnamed: 9": 2}
+    assert not check["input_bytes_rewritten"]
+    reader = r06.Inputs(frozen["root"], frozen["repo"])
+    parsed = reader.table(raw)
+    assert parsed["Unnamed: 9"].iloc[0] == "MAJOR_OVERSTATEMENT"
+    assert parsed.q3_overstatement.eq("NO_OVERSTATEMENT").all()
+
+
+@pytest.mark.parametrize("prefix", ["\n", " \n\n", "\ufeff\n\n", "\ufeff \r\n"])
+def test_leading_blank_lines_and_bom_use_original_pandas_field_resolution(frozen, prefix):
+    raw = frozen["raw_paths"][1]
+    raw.write_text(prefix + raw.read_text(), encoding="utf-8")
+    refresh_manifests(frozen)
+    before = r06.sha(raw)
+    summary = execute(frozen)
+    assert summary["status"] == "COMPLETE_EXPLORATORY_P4_COMPARISON"
+    assert r06.sha(raw) == before
+    checks = json.loads((Path(summary["outdir"]) / "table_read_checks.private.json").read_text())
+    check = next(row for row in checks["tables"] if row["path"] == str(raw))
+    assert check["leading_blank_lines"] >= 1
+    assert check["pandas_columns"] == check["raw_header"]
+
+
+@pytest.mark.parametrize("same_values", [True, False])
+def test_duplicate_named_rating_column_is_never_chosen_automatically(frozen, same_values):
+    raw = frozen["raw_paths"][1]
+    rows = list(csv.reader(io.StringIO(raw.read_text()), delimiter="\t"))
+    field = "q3_overstatement"
+    index = rows[0].index(field)
+    rows[0].append(field)
+    for row in rows[1:]:
+        row.append(row[index] if same_values else "MAJOR_OVERSTATEMENT")
+    output = io.StringIO(newline="")
+    csv.writer(output, delimiter="\t", lineterminator="\n").writerows(rows)
+    raw.write_text(output.getvalue())
+    refresh_manifests(frozen)
+    summary = execute(frozen)
+    assert summary["status"] == "P4_REUSE_BLOCKED"
+    assert summary["blocker_code"] == "DUPLICATE_COLUMNS"
+    assert not summary["descriptive_p4_comparisons_estimated"]
+    checks = json.loads((Path(summary["outdir"]) / "table_read_checks.private.json").read_text())
+    check = next(row for row in checks["tables"] if row["path"] == str(raw))
+    assert check["duplicate_named_headers"] == [field]
+
+
+def test_unnamed_supplements_do_not_relax_frozen_score_correspondence(frozen):
+    raw = frozen["raw_paths"][1]
+    add_spreadsheet_supplement(raw)
+    frame = pd.read_csv(raw, sep="\t", dtype=str, keep_default_na=False)
+    frame.loc[0, "q3_overstatement"] = "MAJOR_OVERSTATEMENT"
+    output = io.StringIO(newline="")
+    csv.writer(output, delimiter="\t", lineterminator="\n").writerows(
+        [[*frame.columns[:8], "", ""], *frame.to_numpy().tolist()]
+    )
+    raw.write_text(output.getvalue())
+    refresh_manifests(frozen)
+    summary = execute(frozen)
+    assert summary["blocker_code"] == "ORIGINAL_RETURN_DIFFERS"
+    assert not summary["descriptive_p4_comparisons_estimated"]
+
+
+def test_missing_rating_header_is_not_inferred_from_blank_column_position(frozen):
+    raw = frozen["raw_paths"][1]
+    text = raw.read_text()
+    raw.write_text(text.replace("q1_statistical_support", "", 1))
+    refresh_manifests(frozen)
+    summary = execute(frozen)
+    assert summary["blocker_code"] == "BAD_TABLE_SCHEMA"
+    assert not summary["descriptive_p4_comparisons_estimated"]
+
+
+def test_tab_only_row_is_not_skipped_or_treated_as_a_blank_line(frozen):
+    raw = frozen["raw_paths"][1]
+    raw.write_text("\t\t\n" + raw.read_text())
+    refresh_manifests(frozen)
+    summary = execute(frozen)
+    assert summary["blocker_code"] == "EMPTY_TABLE"
+    checks = json.loads((Path(summary["outdir"]) / "table_read_checks.private.json").read_text())
+    check = next(row for row in checks["tables"] if row["path"] == str(raw))
+    assert check["raw_header"] == ["", "", ""]
+    assert check["leading_blank_lines"] == 0
+
+
+def test_parse_failure_is_archived_as_a_block_with_headers_and_no_estimates(frozen):
+    raw = frozen["raw_paths"][1]
+    header = raw.read_text().splitlines()[0]
+    raw.write_text(header + '\n"Unclosed field\n')
+    refresh_manifests(frozen)
+    summary = execute(frozen)
+    assert summary["blocker_code"] == "TABLE_PARSE_FAILED"
+    output = Path(summary["outdir"])
+    checks = json.loads((output / "table_read_checks.private.json").read_text())
+    assert checks["tables"][-1]["status"] == "TABLE_PARSE_FAILED"
+    assert Path(summary["results_archive"]).is_file()
+    assert not (output / "rater_method_endpoints.tsv").exists()
