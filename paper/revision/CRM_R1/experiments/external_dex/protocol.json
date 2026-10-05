@@ -1,0 +1,96 @@
+{
+  "schema": "CRM_R1_EXTERNAL_DEX_PROTOCOL_R08_v1",
+  "scope": "Exploratory non-cancer application and limited cross-study culture-level replication; not independent-donor validation or full-audit superiority",
+  "outcome_exposure": [
+    "The original study abstracts/results and published CRISPLD2 cross-study results were seen during R02 methods review.",
+    "No new Hallmark expression or replication outcomes were computed before preparing this protocol.",
+    "GSE34313 methods metadata and example intensities were inspected. These are not a wholly outcome-naive holdout."
+  ],
+  "candidate_collection": "All 50 terms in the existing frozen human Hallmark gene-symbol snapshot; no new msigdbr download",
+  "discovery": {
+    "series": "GSE52778",
+    "source": "Bioconductor airway::airway integer gene counts; STAR/Ensembl 75 re-quantification, not deposited FPKM or original Cuffdiff statistics",
+    "samples": [
+      {"geo_accession": "GSM1275862", "run": "SRR1039508", "donor": "N61311", "treatment": "control", "hours": 18},
+      {"geo_accession": "GSM1275863", "run": "SRR1039509", "donor": "N61311", "treatment": "dex", "hours": 18},
+      {"geo_accession": "GSM1275866", "run": "SRR1039512", "donor": "N052611", "treatment": "control", "hours": 18},
+      {"geo_accession": "GSM1275867", "run": "SRR1039513", "donor": "N052611", "treatment": "dex", "hours": 18},
+      {"geo_accession": "GSM1275870", "run": "SRR1039516", "donor": "N080611", "treatment": "control", "hours": 18},
+      {"geo_accession": "GSM1275871", "run": "SRR1039517", "donor": "N080611", "treatment": "dex", "hours": 18},
+      {"geo_accession": "GSM1275874", "run": "SRR1039520", "donor": "N061011", "treatment": "control", "hours": 18},
+      {"geo_accession": "GSM1275875", "run": "SRR1039521", "donor": "N061011", "treatment": "dex", "hours": 18}
+    ],
+    "excluded_treatments": ["albuterol", "albuterol+dexamethasone"],
+    "mapping": "airway rowData gene_name snapshot; discard empty/multi-symbol annotations; sum integer counts for Ensembl rows mapping to the same single symbol",
+    "filter": {"minimum_count": 10, "minimum_samples": 4},
+    "model": "edgeR TMM; limma voom; paired ~ donor + treatment; treatmentdex coefficient; eBayes trend=FALSE robust=FALSE",
+    "stability": "Remove each donor with BOTH samples, refit on the fixed full-discovery filtered genes. Four folds; missing/non-estimable folds count as non-replicated. Retain a discovery q<=0.05 term when at least 3/4 folds have q<=0.05 and the full-discovery NES sign. No threshold search."
+  },
+  "validation": {
+    "series": "GSE34313",
+    "platform": "GPL6480",
+    "cell_line": "HASM1",
+    "cell_line_count": 1,
+    "multiple_independent_donors_verified": false,
+    "donor_overlap_with_discovery": "UNVERIFIED",
+    "pairing": "UNVERIFIED: fit unpaired culture-level groups; never infer donor/pair IDs from replicate suffixes",
+    "samples": [
+      {"geo_accession": "GSM847200", "title": "nodex_1", "treatment": "control"},
+      {"geo_accession": "GSM847201", "title": "nodex_2", "treatment": "control"},
+      {"geo_accession": "GSM847202", "title": "nodex_3", "treatment": "control"},
+      {"geo_accession": "GSM847203", "title": "nodex_4", "treatment": "control"},
+      {"geo_accession": "GSM847204", "title": "dex4hr_2", "treatment": "dex4"},
+      {"geo_accession": "GSM847205", "title": "dex4hr_3", "treatment": "dex4"},
+      {"geo_accession": "GSM847206", "title": "dex4hr_4", "treatment": "dex4"},
+      {"geo_accession": "GSM847207", "title": "dex24hr_1", "treatment": "dex24"},
+      {"geo_accession": "GSM847208", "title": "dex24hr_2", "treatment": "dex24"},
+      {"geo_accession": "GSM847209", "title": "dex24hr_3", "treatment": "dex24"}
+    ],
+    "source": "Ten public raw single-channel Cy3 Agilent Feature Extraction files; preserve two exclusions made by the depositing study; add no sample exclusions",
+    "normalization": "limma read.maimages(source=agilent, green.only=TRUE), median foreground/background; normexp offset=50; quantile normalization across all ten public arrays; log2 returned by normalizeBetweenArrays(EListRaw); never guess or re-log deposited normalized values",
+    "probe_filter": "Raw ControlType==0; gIsWellAboveBG>0 in >=3/10 arrays; all normalized values finite; GPL6480 ID -> GENE_SYMBOL with single-symbol annotations only; aggregate all retained probes for a symbol by per-sample median",
+    "model": "Fit primary 24h dex (3) versus public controls (4) with unpaired ~ treatment, limma eBayes(trend=TRUE, robust=FALSE). Fit secondary 4h (3) versus the SAME controls (4) separately; secondary is not independent confirmation. No metadata-driven batch factor is authenticated.",
+    "primary_hours": 24,
+    "secondary_hours": 4
+  },
+  "gene_universe": "Sorted intersection of full-discovery count-filtered single-symbol genes and mapped/filtered validation genes with positive variance across the ten arrays; freeze and export before DE fits. Keep this same universe for discovery, all donor folds, and both validation contrasts. Missing rank in any fit makes that fit's enrichment non-estimable rather than shrinking the universe.",
+  "enrichment": {
+    "engine": "fgseaMultilevel",
+    "rank": "Moderated t-statistic, descending; exact ties ordered by lexical gene symbol, with no random jitter",
+    "minSize": 15,
+    "maxSize": 500,
+    "eps": 0,
+    "sampleSize": 101,
+    "nPermSimple": 10000,
+    "seed": 42,
+    "nproc": 1,
+    "gseaParam": 1,
+    "scoreType": "std",
+    "multiplicity": "BH adjustment across the fixed census of 50 terms (n=50), separately for each fit; retain out-of-size and numerical-failure terms as non-estimable records"
+  },
+  "endpoints": {
+    "primary_replication": "Validation 24h q<=0.05 and nonzero NES sign matching discovery; non-estimable terms are kept in each selected set's denominator and are not counted as replicated",
+    "methods": ["ALL_50_CANDIDATES", "Q_VALUE_0_05", "Q_PLUS_DONOR_LOO_3_OF_4", "MATCHED_Q_K"],
+    "matched_q": "Use K from Q_PLUS_DONOR_LOO_3_OF_4; select lowest discovery q, then lexical term ID. Never use validation outcomes for selection.",
+    "report": "All 50 term records, all four donor folds, selected IDs, denominators, coverage, same-direction counts, significant same-direction counts and descriptive stability-versus-matched-q difference",
+    "uncertainty": "One discovery study with 4 donor units and one validation cell line; overlapping Hallmark terms are not independent trials. No term-level binomial CI, p-value for superiority, or donor-generalization CI is computed.",
+    "zero_selection": "K=0 remains K=0 and replication rates are null; do not enlarge K or change thresholds",
+    "claim_limit": "These endpoints test statistical pathway replication and one audit component. They do not measure semantic correctness, novel biological discovery, full-audit performance, or expert agreement."
+  },
+  "sources": [
+    "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE52778",
+    "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE34313",
+    "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL6480",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC3175579/",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC4057123/",
+    "https://www.bioconductor.org/packages/release/data/experiment/vignettes/airway/inst/doc/airway.html",
+    "https://bioconductor.org/packages/release/bioc/vignettes/limma/inst/doc/usersguide.pdf",
+    "https://bioconductor.org/packages/release/bioc/vignettes/fgsea/inst/doc/fgsea-tutorial.html"
+  ],
+  "stop_rules": [
+    "Changed frozen code, protocol, Hallmark snapshot, sample census, runtime identity or downloaded input hash: stop and preserve the first record.",
+    "Missing GPL6480 required fields, ambiguous file-to-sample identity, missing raw signal/background/detection fields: stop; do not switch normalization or source silently.",
+    "No paid or local model calls, no new expert packet, no ontology or gene endpoint selection from favorable observed outcomes.",
+    "An adverse result or zero selection is a result. Do not replace the dataset, time point, threshold or model to obtain a positive result."
+  ]
+}
