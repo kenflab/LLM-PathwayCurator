@@ -1,0 +1,59 @@
+{
+  "schema": "CRM_R1_P4_REUSE_POLICY_R06",
+  "analysis_role": "post_hoc_exploratory_reanalysis_of_frozen_ratings_and_memberships",
+  "expected_claims": 50,
+  "expected_raters": 3,
+  "bootstrap_replicates": 10000,
+  "bootstrap_seed": 20261005,
+  "confidence_level": 0.95,
+  "q_value_descriptive_threshold": 0.05,
+  "primary_display_endpoint": "confirmed_major_overstatement",
+  "uncertain_handling": "retain_all_selected_items; report_confirmed_fraction_and_uncertainty_bounds",
+  "ratings_are_biological_ground_truth": false,
+  "majority_vote_used": false,
+  "candidate_wording_changed": false,
+  "model_requests_allowed": 0,
+  "methods": {
+    "raw_pool": "raw_pool_selected",
+    "q_value_matched": "q_value_matched_selected",
+    "stability_matched": "stability_matched_selected",
+    "legacy_full_audit": "full_audit_selected"
+  },
+  "questions": {
+    "q1_statistical_support": ["SUPPORTED", "PARTIALLY_SUPPORTED", "NOT_SUPPORTED", "UNCERTAIN"],
+    "q2_external_evidence": ["DIRECT", "INDIRECT", "NO_SUPPORT", "CONTRADICTED", "UNCERTAIN"],
+    "q3_overstatement": ["NO_OVERSTATEMENT", "MINOR_OVERSTATEMENT", "MAJOR_OVERSTATEMENT", "UNCERTAIN"]
+  },
+  "endpoints": {
+    "confirmed_major_overstatement": {
+      "question": "q3_overstatement",
+      "event_categories": ["MAJOR_OVERSTATEMENT"],
+      "interpretation": "fraction explicitly rated MAJOR_OVERSTATEMENT; not biological error rate"
+    },
+    "confirmed_any_overstatement": {
+      "question": "q3_overstatement",
+      "event_categories": ["MINOR_OVERSTATEMENT", "MAJOR_OVERSTATEMENT"],
+      "interpretation": "fraction explicitly rated MINOR or MAJOR_OVERSTATEMENT"
+    },
+    "confirmed_not_statistically_supported": {
+      "question": "q1_statistical_support",
+      "event_categories": ["NOT_SUPPORTED"],
+      "interpretation": "fraction explicitly rated NOT_SUPPORTED; not a causal correctness endpoint"
+    },
+    "confirmed_statistically_supported": {
+      "question": "q1_statistical_support",
+      "event_categories": ["SUPPORTED"],
+      "interpretation": "fraction explicitly rated SUPPORTED"
+    },
+    "confirmed_no_external_support_or_contradicted": {
+      "question": "q2_external_evidence",
+      "event_categories": ["NO_SUPPORT", "CONTRADICTED"],
+      "interpretation": "rater assessment of presented evidence; absence of support is not biological falsity"
+    },
+    "confirmed_direct_external_evidence": {
+      "question": "q2_external_evidence",
+      "event_categories": ["DIRECT"],
+      "interpretation": "fraction explicitly rated DIRECT external evidence"
+    }
+  }
+}

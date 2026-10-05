@@ -1,6 +1,23 @@
 # Script map
 
-## Current development entry point
+## Current analysis entry point
+
+`65_revision_r06.py --data-root "$CRM_R1_DATA_ROOT"` authenticates the
+original P4 packet, templates, returned/locked ratings and frozen P2 memberships.
+It compares unchanged candidates across all-candidate, q-value, stability and
+legacy full-audit selections, retaining individual raters and UNCERTAIN.
+It writes exploratory comparisons, agreement, source tables, PDF/PNG and a
+returned ZIP. No model backend, new expert review or P3 grading is required.
+Read [R06_P4_REUSE.md](../R06_P4_REUSE.md) and
+[V17_WORKFLOW.md](../V17_WORKFLOW.md).
+
+## Withdrawn R05 live-backend recommendation
+
+The 2026-10-05 revision refocus removes paid model calls and backend comparison
+from the revision prerequisites. Keep earlier diagnostic records as history.
+R05 does not need to be installed or run before R06.
+
+## Completed R04 source probe with findings
 
 `63_revision_r04.py --source-bundle <R04 bundle>` authenticates the returned R03
 archive, reproduces its unchanged scores and prepares 16 source-only requests.

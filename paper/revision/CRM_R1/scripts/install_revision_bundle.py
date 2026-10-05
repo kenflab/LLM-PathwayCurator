@@ -72,6 +72,8 @@ def prepare(bundle, repo, data_root):
             "CRM_R1_CODE_BUNDLE_v17_R02",
             "CRM_R1_CODE_BUNDLE_v17_R03",
             "CRM_R1_CODE_BUNDLE_v17_R04",
+            "CRM_R1_CODE_BUNDLE_v17_R05",
+            "CRM_R1_CODE_BUNDLE_v17_R06",
         },
         "Unknown bundle schema",
     )
@@ -113,6 +115,25 @@ def prepare(bundle, repo, data_root):
             require(Path(relative).parts[0] == "returned_r03", "Invalid R04 data path")
             raw = file_path(bundle, relative).read_bytes()
             require(digest(raw) == expected, f"R04 returned snapshot hash mismatch: {relative}")
+    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R05":
+        prerequisites = manifest.get("prerequisite_files", {})
+        require(prerequisites, "R05 replay prerequisites missing from bundle")
+        for relative, expected in prerequisites.items():
+            require(
+                digest(file_path(repo, relative).read_bytes()) == expected,
+                f"R05 replay source conflict preserved: {relative}",
+            )
+        data_files = manifest.get("data_files", {})
+        require(
+            "returned_r04/r04_20261005T100701108792Z.zip" in data_files,
+            "R05 returned R04 snapshot missing from bundle",
+        )
+        for relative, expected in data_files.items():
+            require(Path(relative).parts[0] == "returned_r04", "Invalid R05 data path")
+            require(
+                digest(file_path(bundle, relative).read_bytes()) == expected,
+                f"R05 returned snapshot hash mismatch: {relative}",
+            )
     rows, payloads, originals, conflicts = [], {}, {}, []
     require(manifest.get("files"), "Empty bundle")
     for relative, item in manifest["files"].items():
@@ -124,7 +145,11 @@ def prepare(bundle, repo, data_root):
         current = digest(original) if original is not None else None
         if current == item["sha256"]:
             action = "ALREADY_IDENTICAL"
-        elif current == item["base_sha256"]:
+        elif current in (
+            item.get("base_sha256s", [item["base_sha256"]])
+            if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
+            else [item["base_sha256"]]
+        ):
             action = "CREATE" if current is None else "UPDATE"
         else:
             action = "CONFLICT_PRESERVED"
@@ -182,10 +207,14 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             (bundle / "metadata_snapshot").resolve().is_relative_to(data_root / "input"),
             "Place the R02 bundle under CRM_R1/input/ before --run",
         )
-    if run and manifest["schema"] in {"CRM_R1_CODE_BUNDLE_v17_R03", "CRM_R1_CODE_BUNDLE_v17_R04"}:
+    if run and manifest["schema"] in {
+        "CRM_R1_CODE_BUNDLE_v17_R03",
+        "CRM_R1_CODE_BUNDLE_v17_R04",
+        "CRM_R1_CODE_BUNDLE_v17_R05",
+    }:
         require(
             bundle.resolve().is_relative_to(data_root / "input"),
-            "Place the R03/R04 bundle under CRM_R1/input/ before --run",
+            "Place the R03/R04/R05 bundle under CRM_R1/input/ before --run",
         )
     for row in rows:
         print(f"{row['action']}: {row['path']}", flush=True)
@@ -232,8 +261,14 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             r02 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R02"
             r03 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03"
             r04 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R04"
+            r05 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R05"
+            r06 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
             entry = (
-                "63_revision_r04.py"
+                "65_revision_r06.py"
+                if r06
+                else "64_revision_r05.py"
+                if r05
+                else "63_revision_r04.py"
                 if r04
                 else "62_revision_r03.py"
                 if r03
@@ -249,7 +284,7 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             ]
             if r02:
                 command.extend(["--metadata-snapshot", str(bundle / "metadata_snapshot")])
-            if r03 or r04:
+            if r03 or r04 or r05:
                 command.extend(["--source-bundle", str(bundle)])
             subprocess.run(command, check=True)
         if publish:
@@ -270,7 +305,14 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
                     "commit",
                     "--only",
                     "-m",
-                    "Add CRM R1 R04 saved-response diagnosis and source-only reading probe"
+                    "Add CRM R1 R06 source-linked existing-rater baseline reanalysis"
+                    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
+                    else (
+                        "Add CRM R1 R05 fixed-task backend capacity comparison "
+                        "and revision decision"
+                    )
+                    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R05"
+                    else "Add CRM R1 R04 saved-response diagnosis and source-only reading probe"
                     if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R04"
                     else "Add CRM R1 R03 bounded atomic semantic development pilot"
                     if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R03"

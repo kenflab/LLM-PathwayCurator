@@ -1,5 +1,13 @@
 # CRM R1: one checkout, external results
 
+Current milestone: **R06 existing-rater baseline comparison**, following the
+2026-10-05 revision refocus. Read `R06_P4_REUSE.md`. R06 authenticates the
+unchanged P4 packet/ratings and P2 memberships, then reports each rater's
+same-corpus comparisons and agreement without P3 grading or model calls.
+The R05 paid-backend live recommendation is withdrawn; R05 installation and
+semantic development are not prerequisites for manuscript/figure revision.
+R03/R04 findings and all earlier locked results remain unchanged.
+
 Use the existing `LLM-PathwayCurator` checkout for code. Use the existing
 `CRM_R1` directory for inputs, analysis outputs, ratings, and manuscript files.
 Historical smoke-test checkouts and the copy under `CRM_R1/projects/` remain
@@ -33,6 +41,13 @@ R04 bundles also use `--run` for **offline diagnosis/preparation only**. Their
 returned R03 ZIP is hash-checked before code installation and stays outside Git.
 The separate `63_revision_r04.py --live` command starts the source-only reading
 probe, not an evidence audit. Keep R04 bundles under `CRM_R1/input/`.
+
+R06 bundles use `--run` for the zero-model P4 reanalysis. They need no R05
+bundle, returned model responses, P3 grading lock, or new expert ratings.
+Results go under `output/revision_v17/r06_<UTC timestamp>/`, with a returned
+ZIP. Inspect `summary.json`: `COMPLETE_EXPLORATORY_P4_COMPARISON` means the
+original source linkage passed; `P4_REUSE_BLOCKED` means no performance was
+estimated. Exit zero only certifies completion of the diagnostic.
 
 ## R01: saved-result inventory and deterministic adapter
 
@@ -220,3 +235,21 @@ Inspect `r03_diagnostic_summary.json`, `r03_raw_response_diagnostics.private.jso
 `source_probe_scores.private.json` and `summary.json`. Smaller request/time budgets
 use the same CLI options as R03; the R04 maxima are 16 requests and 1800 seconds.
 Do not rerun R03 as a way to replace its failed first outcomes.
+
+## R05: paid-backend live recommendation withdrawn
+
+The 2026-10-05 refocus removes the candidate paid-backend screen from the
+revision workflow. Do not run R05 access checks or generation. Its earlier
+preparation and diagnostic artifacts remain historical records; installing
+R05 is not required for R06 or manuscript revision.
+
+## R06: source-linked reuse of P4
+
+Run `65_revision_r06.py --data-root "$CRM_R1_DATA_ROOT"` in the existing
+environment, or use the R06 bundle's `APPLY.py --apply --run --publish`.
+R06 has no model flag. It hashes the frozen P2/P4 references, checks exact
+wording and assignments, then produces rater-specific exploratory baseline
+comparisons and agreement. See `R06_P4_REUSE.md` for scopes and output files.
+
+Original ratings, selections, P3 grades and earlier P2B results are not changed.
+A source mismatch yields a returned diagnostic ZIP without performance tables.
