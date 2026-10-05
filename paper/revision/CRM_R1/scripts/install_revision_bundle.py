@@ -74,10 +74,19 @@ def prepare(bundle, repo, data_root):
             "CRM_R1_CODE_BUNDLE_v17_R04",
             "CRM_R1_CODE_BUNDLE_v17_R05",
             "CRM_R1_CODE_BUNDLE_v17_R06",
+            "CRM_R1_CODE_BUNDLE_v17_R07",
         },
         "Unknown bundle schema",
     )
     require(manifest.get("repository") == "kenflab/LLM-PathwayCurator", "Wrong bundle repository")
+    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R07":
+        prerequisites = manifest.get("prerequisite_files", {})
+        require(prerequisites, "R07 source-adapter prerequisites missing from bundle")
+        for relative, expected in prerequisites.items():
+            require(
+                digest(file_path(repo, relative).read_bytes()) == expected,
+                f"R07 source-adapter conflict preserved: {relative}",
+            )
     if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R02":
         data_files = manifest.get("data_files", {})
         require(
@@ -147,7 +156,7 @@ def prepare(bundle, repo, data_root):
             action = "ALREADY_IDENTICAL"
         elif current in (
             item.get("base_sha256s", [item["base_sha256"]])
-            if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
+            if manifest["schema"] in {"CRM_R1_CODE_BUNDLE_v17_R06", "CRM_R1_CODE_BUNDLE_v17_R07"}
             else [item["base_sha256"]]
         ):
             action = "CREATE" if current is None else "UPDATE"
@@ -263,8 +272,11 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
             r04 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R04"
             r05 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R05"
             r06 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
+            r07 = manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R07"
             entry = (
-                "65_revision_r06.py"
+                "66_revision_r07.py"
+                if r07
+                else "65_revision_r06.py"
                 if r06
                 else "64_revision_r05.py"
                 if r05
@@ -305,7 +317,9 @@ def apply_bundle(bundle, repo, data_root, *, apply=False, run=False, publish=Fal
                     "commit",
                     "--only",
                     "-m",
-                    "Add CRM R1 R06 source-linked existing-rater baseline reanalysis"
+                    "Add CRM R1 R07 frozen local natural-text reporting comparison"
+                    if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R07"
+                    else "Add CRM R1 R06 source-linked existing-rater baseline reanalysis"
                     if manifest["schema"] == "CRM_R1_CODE_BUNDLE_v17_R06"
                     else (
                         "Add CRM R1 R05 fixed-task backend capacity comparison "

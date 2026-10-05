@@ -264,3 +264,11 @@ outputs are stricter: `16_freeze_priority1_membership.py` never overwrites them.
 resampled raw fgsea tables are converted by calling the production adapter from
 `14_build_empirical_evidence.py`; do not replace it with a revision-only conversion contract. The
 V5 protocol freezes `primary_tau = 0.80` after review of all four 48 h calibration runs.
+# R07 natural-text comparison
+
+`66_revision_r07.py --data-root "$CRM_R1_DATA_ROOT"` freezes the existing
+source-checked HNSC/S001 50-term census and reporting policy, with zero model
+calls. `--live` starts at most 50 new proposals on the existing pinned local
+llama3.1:8b backend. First outcomes, including errors, are immutable; no paid
+backend or semantic judge is available. Outputs/ZIPs stay outside Git under
+`CRM_R1/output/revision_v17/`. Read `../R07_NATURAL_TEXT_COMPARISON.md`.

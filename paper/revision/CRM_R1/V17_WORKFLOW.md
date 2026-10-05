@@ -1,6 +1,16 @@
 # CRM R1: one checkout, external results
 
-Current milestone: **R06 existing-rater baseline comparison**, following the
+Current milestone: **R07 frozen natural-text reporting comparison**, following the
+completed R06 comparison and final R2 source confirmation. Read
+`R07_NATURAL_TEXT_COMPARISON.md`. R07 reuses the R01 source adapter for the
+fixed HNSC/S001 50-term census, freezes one generation per candidate with the
+existing local llama3.1:8b model, and compares unchanged prose with the existing
+explicit-number gate, matched q selection and a simple source template.
+`APPLY.py --run` freezes the design without calling a model; `66_revision_r07.py
+--live` explicitly starts the bounded local generation. No paid model,
+six-aspect reviewer, new expert evaluation or P3 grading is used.
+
+R06 existing-rater baseline comparison, following the
 2026-10-05 revision refocus. Read `R06_P4_REUSE.md`. R06 authenticates the
 unchanged P4 packet/ratings and P2 memberships, then reports each rater's
 same-corpus comparisons and agreement without P3 grading or model calls.
@@ -257,6 +267,32 @@ environment, or use the R06 bundle's `APPLY.py --apply --run --publish`.
 R06 has no model flag. It hashes the frozen P2/P4 references, checks exact
 wording and assignments, then produces rater-specific exploratory baseline
 comparisons and agreement. See `R06_P4_REUSE.md` for scopes and output files.
+
+## R07: one local generation; unchanged-prose comparators
+
+The reviewed public historical LLM claim records contain context explanations,
+not the free enrichment paragraphs needed by this comparison. They remain
+historical records; R07 generates new prose once, using the already authenticated
+local model. Previously inspected discovery statistics are not held-out outcomes.
+
+Use the R07 bundle's `APPLY.py --apply --run --publish` in the same checkout.
+The offline run writes the immutable `output/revision_v17/r07_natural_text_design_v1`
+and authenticates the complete 50-term HNSC/S001 source census. Repeating offline
+preparation verifies and reuses that design; it does not overwrite it.
+
+Then run `66_revision_r07.py --data-root "$CRM_R1_DATA_ROOT" --live`.
+The new `r07_<UTC>` directory and returned ZIP retain original response strings,
+wire receipts, errors and unattempted candidates. Each candidate has at most one
+first generation outcome, preserved in `r07_first_prose_cache`. A repeated run
+only starts previously unattempted candidates. It never retries an error or
+changes the prompt to obtain more favorable prose.
+
+The numerical gate only checks explicit numeric relations in its existing syntax.
+It is not full audit or a semantic safety decision. A template is a simple
+baseline, not evidence of a novel rewriting benefit. Coverage uses all 50
+candidates. Optional author annotation checks source facts in the original
+prose without the gate decision; it is not an additional expert biological
+evaluation. See `R07_NATURAL_TEXT_COMPARISON.md` for limitations and outputs.
 
 Original ratings, selections, P3 grades and earlier P2B results are not changed.
 A source mismatch yields a returned diagnostic ZIP without performance tables.
