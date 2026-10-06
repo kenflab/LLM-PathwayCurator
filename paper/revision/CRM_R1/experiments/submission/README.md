@@ -39,3 +39,36 @@ labels or replacements for visual review of the manuscript and figures.
 
 The collected ZIP contains private manuscript and rating records. Keep it in
 the existing data directory. Public Git contains only this code and its guides.
+
+## Render verified main-figure drafts
+
+Run the reporting step against one explicitly selected, complete collected ZIP:
+
+```bash
+python paper/revision/CRM_R1/experiments/submission/report.py \
+  --data-root "$CRM_R1_DATA_ROOT" \
+  --source-archive "$CRM_R1_DATA_ROOT/output/revision_v17/<exact-collected-run>.zip"
+```
+
+`report.py` validates every exported byte before creating a new
+`output/revision_v17/manuscript_report_<UTC>/` folder. It checks the 22-cohort,
+20-split P2B census, identical selected K, cohort aggregation and the 12 saved
+fixed-seed cohort-bootstrap intervals. It checks the saved P1, dex, hierarchy
+and original-text counts without fitting expression models, changing a protocol,
+querying models or adding labels. The large claim ledger and raw expression
+payloads absent from the compact ZIP are not certified by these checks.
+
+The four numbered figures show the evidence contract/source examples, matched
+baselines/original raters, temporal/non-cancer components and hierarchy
+diagnostics. `Source_Data/`, `SOURCE_FILE_MAP.tsv` and `SOURCE_VERIFICATION.json`
+record the routes, denominators, plotting code and limits. Parent/child matrices
+use the named status fields; the saved `status_pattern` remains child-to-parent.
+Uncertain labels and unavailable intervals are retained. Incomplete numeric
+coverage is not recoded as incorrect prose. Post hoc source examples are not
+independent expert labels or automatic full-audit correction demonstrations.
+
+The manuscript, author-response drafts and original labels stay in private data
+storage. Source verification and rendering do not establish a general full-audit
+advantage or submission readiness. Complete author review, revision-specific
+release archiving and remaining provenance/scientific requirements before
+submission. This reporting step does not change `src/` or the frozen analyses.
