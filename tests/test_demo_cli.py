@@ -60,6 +60,8 @@ def _run_cli(tmp_path, *, tau: float | None = None):
         "-m",
         "llm_pathway_curator.cli",
         "run",
+        "--workflow",
+        "legacy",
         "--evidence-table",
         str(ev),
         "--sample-card",

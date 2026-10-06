@@ -384,6 +384,7 @@ def _run_one(job: Job, *, force: bool) -> None:
     job.outdir.mkdir(parents=True, exist_ok=True)
 
     cfg = RunConfig(
+        workflow="legacy",
         evidence_table=str(job.evidence_table),
         sample_card=str(job.sample_card),
         outdir=str(job.outdir),

@@ -1,50 +1,66 @@
-# CRM_R1 revision workspace
+# CRM R1 research workspace
 
-Use the existing checkout and the existing data root. Source code and concise
-instructions belong here; manuscripts, ratings, correspondence, raw data and
-analysis outputs remain under `CRM_R1_DATA_ROOT` outside Git.
+This is the single entry point for revision analyses. The public tool is described
+in the [repository README](../../../README.md). Keep using the existing checkout
+and the existing external data root; no additional checkout is needed.
 
-## Current entry points
+## Layout
 
-| Task | Entry point | Role |
-| --- | --- | --- |
-| Collect the current manuscript and frozen source tables | [experiments/submission/README.md](experiments/submission/README.md) | Next manuscript integration step; no fitting or model requests |
-| Render the completed non-cancer example | [experiments/external_dex/README.md](experiments/external_dex/README.md) | Saved-result reporting; preserve the original R08 design and amendment |
-| Reuse existing rater assessments | [R06_P4_REUSE.md](R06_P4_REUSE.md) | Same original standardized statements; rater-specific comparisons |
-| Inspect first natural-language outputs | [R07_NATURAL_TEXT_COMPARISON.md](R07_NATURAL_TEXT_COMPARISON.md) | Frozen reporting comparison; numeric coverage is not semantic accuracy |
-| Manuscript text and figure scope | [manuscript/MANUSCRIPT_METHODS_RESULTS_DRAFT.md](manuscript/MANUSCRIPT_METHODS_RESULTS_DRAFT.md) | Guide to private draft generation and source limitations |
-| Main comparative figure | [manuscript/FIGURE2_LAYOUT_AND_LEGEND.md](manuscript/FIGURE2_LAYOUT_AND_LEGEND.md) | Retain rater disagreement and matched-coverage comparisons |
+| Directory | Contents |
+| --- | --- |
+| `experiments/reassessment/` | Updated public tool applied to unchanged saved texts; development diagnostics |
+| `experiments/external_dex/` | Non-cancer worked case, original design, technical amendment and reporting |
+| `experiments/submission/` | Private manuscript/source collection and saved-result figure rendering |
+| `experiments/revision_tools/` | Historical contract, atomic-review and source-locator prototypes |
+| `scripts/`, `config/` | Research runners and versioned protocols needed to trace completed work |
+| `tests/`, `fixtures/` | Research-specific tests and synthetic development controls |
+| `manuscript/` | Source-linked writing instructions and response/figure scope |
+| `archive/` | Unchanged historical workflow notes and analysis plans |
 
-## Scientific boundaries
+None of the research prototypes or study-specific registries is part of the
+installed `llm_pathway_curator` package. Tests still run through repository pytest.
 
-Empirical sample resampling, historical synthetic gene perturbation, context
-assessment, source-fact checks and biological correctness are distinct tasks.
-PASS means the implemented checks passed; it is not a biological truth label.
-The current full audit has not demonstrated a general interpretive advantage
-against simpler reporting rules. Null or adverse results remain in the record.
+## Current tasks
 
-Existing rater labels apply only to their original statements. Literature
-retrieval is not completed evidence grading. Blank grades remain unknown.
-Ontology sign differences describe directional discordance, not demonstrated
-biological errors. A cross-study culture-level example does not establish
-independent-donor validation.
+The updated public implementation writes source-linked statements and checks
+supplied prose with limited rules. Use
+[experiments/reassessment/README.md](experiments/reassessment/README.md) to
+prepare a new development record and inspect the already generated R07 text.
+This does not add independent expert judgments or estimate biological accuracy.
 
-## Run and Git workflow
+Use [experiments/submission/README.md](experiments/submission/README.md) for frozen
+source collection and manuscript drafting, and
+[experiments/external_dex/README.md](experiments/external_dex/README.md) for the
+completed limited cross-study case. Earlier R06 and R07 notes remain in
+[archive/](archive/README.md).
 
-Keep using `main` in the existing checkout. Review and publish only the explicit
-code paths selected by the revision installer. It preserves unrelated local
-work and uses a normal commit/push. Do not create another checkout or replay
-historical freeze instructions to run a completed analysis.
+## Reanalysis policy
 
-The submission collector creates a new private folder and ZIP in the existing
-output directory. It never overwrites inputs, designs, ratings or manuscripts.
-New model comparisons, broad rerating, full P3 grading and expression refitting
-are not prerequisites for this collection step.
+| Existing analysis | Action after the software update |
+| --- | --- |
+| R07 saved natural text | Recheck all original texts with new source checks; record new implementation and outputs |
+| Legacy full-audit comparative endpoints | Preserve old result; a new algorithm requires new selection outputs and a fixed evaluation design |
+| Original rater statements and returned labels | Retain their exact text links; labels cannot be transferred to newly written prose |
+| P1 and external dex upstream expression/enrichment fits | Retain if inputs, model and endpoint have not changed; refit only if those components change |
+| P3 ungraded records and ontology diagnostics | Preserve unknown grades and diagnostic scope; no conversion into biological truth labels |
 
-## Historical material
+A new report or passing software test does not resolve the manuscript's need for
+comparative semantic/biological evidence. Frozen adverse or null results remain
+reportable. Do not tune a new selector against their validation outcomes and
+then describe the result as an untouched holdout.
 
-The V-numbered workflows, earlier development notes and `ANALYSIS_PLAN.md`
-record prior designs and attempts. They are retained as history and do not
-supersede completed-result receipts or the current entry points above.
-Revision prototypes under `src` are not evidence of a validated public release;
-module cleanup remains separate from frozen scientific results.
+## Storage and reproduction
+
+Inputs, ratings, correspondence, manuscript Word files and analysis outputs stay
+under `CRM_R1_DATA_ROOT`, outside Git. New runners write a fresh directory under
+`output/revision_v17/` and never overwrite prior results.
+
+For exact historical code paths and hashes use commit
+[`b069e8a`](https://github.com/kenflab/LLM-PathwayCurator/tree/b069e8ad3d916618adcf26af0202748790c3ca20).
+The layout migration does not rewrite original locks. Archived installers and
+workflow notes are historical records, not instructions to replace the current
+public package with old bundles.
+
+Version strings in frozen protocol JSON and historical documents link results
+to their method. They remain there deliberately. Current user-facing module
+names and the README entry point do not require those development version names.

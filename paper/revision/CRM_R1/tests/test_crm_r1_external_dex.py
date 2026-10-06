@@ -70,7 +70,8 @@ class FrozenInputs(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Match the CLI: macOS can expose temporary paths through /var aliases.
+        self.root = Path(self.temporary.name).resolve()
         (self.root / "input").mkdir()
         (self.root / "output").mkdir()
         self.hallmark = self.root / "input/hallmark.tsv"

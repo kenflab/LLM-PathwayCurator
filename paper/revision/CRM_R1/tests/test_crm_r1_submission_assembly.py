@@ -35,7 +35,7 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
 
     def test_original_full_path_rebases_by_complete_path_and_traversal_stops(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'CRM_R1'
+            root = Path(tmp).resolve() / 'CRM_R1'
             root.mkdir()
             self.assertEqual(MODULE.local_path(root, '/Users/old/OneDrive/CRM_R1/output/p1/source.tsv'), root / 'output/p1/source.tsv')
             with self.assertRaises(ValueError):
@@ -45,7 +45,7 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
 
     def test_blank_grading_remains_unknown_without_support_endpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, out = Path(tmp) / 'CRM_R1', Path(tmp) / 'report'
+            root, out = Path(tmp).resolve() / 'CRM_R1', Path(tmp).resolve() / 'report'
             root.mkdir(); out.mkdir()
             name = f'output/priority3/{MODULE.BENCHMARK}/grading_working/record_screening_P3C1.private.tsv'
             path = root / name
@@ -61,7 +61,7 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
 
     def test_missing_sources_cannot_become_submission_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, repo = Path(tmp) / 'CRM_R1', Path(tmp) / 'repo'
+            root, repo = Path(tmp).resolve() / 'CRM_R1', Path(tmp).resolve() / 'repo'
             (root / 'input').mkdir(parents=True)
             (root / 'output').mkdir()
             for name in MODULE.GUIDES:
@@ -79,7 +79,7 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
 
     def test_oversized_output_is_stream_verified_without_blocking_small_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, out = Path(tmp) / 'CRM_R1', Path(tmp) / 'report'
+            root, out = Path(tmp).resolve() / 'CRM_R1', Path(tmp).resolve() / 'report'
             folder = root / 'output/frozen'
             folder.mkdir(parents=True); out.mkdir()
             (folder / 'large.tsv').write_bytes(b'x' * (8 * 1024 * 1024 + 1))
@@ -102,7 +102,7 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
 
     def test_oversized_output_hash_mismatch_is_not_excused_by_size(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, out = Path(tmp) / 'CRM_R1', Path(tmp) / 'report'
+            root, out = Path(tmp).resolve() / 'CRM_R1', Path(tmp).resolve() / 'report'
             folder = root / 'output/frozen'
             folder.mkdir(parents=True); out.mkdir()
             path = folder / 'large.tsv'

@@ -46,16 +46,17 @@ class RunConfig:
     outdir
         Output directory path.
     force
-        If True, allow writing into a non-empty outdir.
+        Legacy only: allow writing into a non-empty outdir.
     seed
-        Random seed used for deterministic steps.
+        Legacy only: random seed used for proposal/stress steps.
     run_meta_name
         File name for run metadata JSON written under outdir.
     tau
-        Optional override for audit threshold tau. If None, uses
+        Legacy only: optional override for audit threshold tau. If None, uses
         ``card.audit_tau()``.
     k_claims
-        Optional override for number of claims to propose.
+        Source workflow: cap adjusted-value eligible statements, retaining the census.
+        Legacy workflow: optional override for number of claims to propose.
     stress_evidence_dropout_p
         Probability for evidence gene dropout stress test.
     stress_evidence_dropout_min_keep
@@ -64,6 +65,13 @@ class RunConfig:
         Probability to inject contradictory direction claims.
     stress_contradictory_max_extra
         Cap for number of injected contradictory rows.
+    workflow
+        ``source`` (default) for source-linked reporting and limited draft checks;
+        ``legacy`` for the historical proposal, synthetic stability and context path.
+    claims_file
+        Source only: optional TSV of unchanged draft text linked by pathway identity.
+    q_threshold
+        Source only: declared adjusted-value reporting cutoff.
 
     Notes
     -----
@@ -82,6 +90,9 @@ class RunConfig:
     stress_evidence_dropout_min_keep: int | None = None
     stress_contradictory_p: float | None = None
     stress_contradictory_max_extra: int | None = None
+    workflow: str = "source"
+    claims_file: str | None = None
+    q_threshold: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -4307,7 +4318,7 @@ def _fail_if_empty(df: pd.DataFrame, *, step: str, outdir: Path) -> None:
         raise RuntimeError(f"[{step}] produced 0 rows (outdir={outdir}).")
 
 
-def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
+def _run_legacy_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     """
     Run the full LLM-PathwayCurator pipeline.
 
@@ -5051,3 +5062,48 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
         meta["error"] = {"type": type(e).__name__, "message": str(e), "step": meta.get("step")}
         _write_json(meta_path, meta)
         raise
+
+
+def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
+    """Run source reporting by default; explicitly opt into historical processing.
+
+    ``workflow='source'`` uses adjusted-value selection, source statements and
+    limited draft checks. ``workflow='legacy'`` retains the historical synthetic
+    stability/context pipeline for reproducibility. Their endpoints differ.
+    """
+    if cfg.workflow == "legacy":
+        if cfg.claims_file is not None or cfg.q_threshold != 0.05:
+            raise ValueError("claims_file and q_threshold belong to the source workflow")
+        return _run_legacy_pipeline(cfg, run_id=run_id)
+    if cfg.workflow != "source":
+        raise ValueError("workflow must be 'source' or 'legacy'")
+    if cfg.force or cfg.seed is not None:
+        raise ValueError("force and seed require workflow='legacy'")
+    if cfg.tau is not None or any(
+        value is not None
+        for value in (
+            cfg.stress_evidence_dropout_p,
+            cfg.stress_evidence_dropout_min_keep,
+            cfg.stress_contradictory_p,
+            cfg.stress_contradictory_max_extra,
+        )
+    ):
+        raise ValueError("Synthetic stability thresholds/stress options require workflow='legacy'")
+    if cfg.run_meta_name != "run_meta.json":
+        raise ValueError(
+            "The source workflow writes run_meta.json; custom metadata names are legacy-only"
+        )
+    from .review import ReviewConfig, review_enrichment
+
+    result = review_enrichment(
+        ReviewConfig(
+            evidence_table=cfg.evidence_table,
+            sample_card=cfg.sample_card,
+            outdir=cfg.outdir,
+            claims_file=cfg.claims_file,
+            q_threshold=cfg.q_threshold,
+            k_claims=cfg.k_claims,
+        ),
+        run_id=run_id,
+    )
+    return RunResult(result.run_id, result.outdir, result.artifacts, result.meta_path)

@@ -1,0 +1,4 @@
+term_id	term_name	source	stat	qval	direction	evidence_genes
+PROGRAM_A	Checkpoint program	fgsea	-2.134	0.004	down	GENE1;GENE2;GENE3
+PROGRAM_B	Metabolic program	fgsea	1.11	0.6644	up	GENE4;GENE5
+PROGRAM_C	Unsigned response	ora	8	0.03	na	GENE6;GENE7

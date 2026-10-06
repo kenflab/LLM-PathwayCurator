@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llm-pathway-curator"
 dynamic = ["version"]  
-description = "Transform enrichment outputs into verifiable, auditable pathway claims with calibrated abstention."
+description = "Source-linked enrichment reports and explicit checks of pathway draft wording."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -54,6 +54,7 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.4",
   "openpyxl>=3.1",
+  "scipy>=1.11",
 ]
 
 bench = [
@@ -72,6 +73,7 @@ all = [
   "pytest>=8.0",
   "ruff>=0.4",
   "openpyxl>=3.1",
+  "scipy>=1.11",
   "pyyaml>=6.0",
   "tqdm>=4.66",
   "synapseclient>=2.0",

@@ -59,7 +59,6 @@ convert_fgsea_table_to_evidence_tsv(
     "fgsea_res.tsv",
     "evidence_table.tsv",
 )
-
 ```
 
 ---
@@ -102,7 +101,6 @@ convert_metascape_table_to_evidence_tsv(
     "metascape_result.xlsx",
     "evidence_table.tsv",
 )
-
 ```
 
 ---

@@ -205,8 +205,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     """
     CLI entrypoint for `run`.
 
-    This command executes the end-to-end pipeline:
-    distill → modules → claims → audit → report.
+    The default writes source-linked statistical statements and checks optional
+    draft text. An explicit legacy workflow uses distill/modules/proposal/audit.
 
     Parameters
     ----------
@@ -232,6 +232,28 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     _require_file(evidence_table, "--evidence-table")
     _require_file(sample_card, "--sample-card")
+    if args.workflow == "source":
+        if args.force or args.seed is not None:
+            raise SystemExit("[ERROR] --force and --seed require --workflow legacy")
+        cfg = RunConfig(
+            evidence_table=str(evidence_table),
+            sample_card=str(sample_card),
+            outdir=str(outdir),
+            workflow="source",
+            claims_file=args.claims,
+            q_threshold=args.q_threshold,
+            k_claims=args.k_claims,
+            tau=args.tau,
+            run_meta_name=str(args.run_meta),
+        )
+        try:
+            result = run_pipeline(cfg)
+        except (ValueError, OSError) as error:
+            raise SystemExit(f"[ERROR] {error}") from error
+        print(f"[OK] source report: {result.outdir}/report.html")
+        return
+    if args.claims is not None or args.q_threshold != 0.05:
+        raise SystemExit("[ERROR] --claims and --q-threshold belong to the source workflow")
     _ensure_outdir(outdir, force=bool(args.force))
 
     # contract gate: validate evidence table early (clear CLI error)
@@ -259,6 +281,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         run_meta_name=run_meta_rel,
         tau=args.tau,
         k_claims=k_claims,
+        workflow="legacy",
     )
 
     res = run_pipeline(cfg)
@@ -408,30 +431,44 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="llm-pathway-curator")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    p_run = sub.add_parser("run", help="Run distill → modules → claims → audit → report")
+    p_run = sub.add_parser("run", help="Create a source report and inspect optional draft prose")
+    p_run.add_argument(
+        "--workflow",
+        choices=["source", "legacy"],
+        default="source",
+        help="source is the public default; legacy reproduces historical proxy-based processing",
+    )
+    p_run.add_argument(
+        "--claims", default=None, help="Optional TSV of draft text linked by term_uid or term_id"
+    )
+    p_run.add_argument(
+        "--q-threshold",
+        type=float,
+        default=0.05,
+        help="Adjusted-value cutoff for the source workflow",
+    )
     p_run.add_argument("--evidence-table", required=True, help="TSV EvidenceTable (term×gene)")
     p_run.add_argument("--sample-card", required=True, help="sample_card.json")
     p_run.add_argument("--outdir", required=True, help="output directory")
     p_run.add_argument(
-        "--force", action="store_true", help="Allow writing into an existing non-empty outdir"
+        "--force", action="store_true", help="Legacy only: allow writing into a nonempty outdir"
     )
     p_run.add_argument(
-        "--seed", type=int, default=None, help="Optional seed (plumbing; v0 deterministic)"
+        "--seed", type=int, default=None, help="Legacy only: proposal/stress random seed"
     )
     p_run.add_argument(
         "--tau",
         type=float,
         default=None,
-        help="Audit stability threshold tau (overrides sample_card.audit_tau() if set)",
+        help="Legacy only: audit stability threshold tau",
     )
     p_run.add_argument(
         "--k-claims",
         type=int,
         default=None,
         help=(
-            "Number of claims to propose before audit "
-            "(CLI overrides env LLMPATH_K_CLAIMS; downstream may fall back to "
-            "sample_card.k_claims())"
+            "Source: cap adjusted-value eligible statements, retaining all candidates. "
+            "Legacy: override proposal count."
         ),
     )
     p_run.add_argument(

@@ -7,6 +7,9 @@ DEMO="${ROOT}/examples/demo"
 OUTDIR="${1:-${ROOT}/out/demo}"
 
 export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"
+export LLMPATH_CLAIM_MODE="deterministic"
+export LLMPATH_CONTEXT_REVIEW_MODE="proxy"
+export LLMPATH_CONTEXT_GATE_MODE="note"
 mkdir -p "${OUTDIR}"
 
 EVID="${DEMO}/evidence_table.tsv"
@@ -23,19 +26,21 @@ if [[ ! -s "${EVID}" ]]; then
 fi
 
 # 2) EvidenceTable -> distill/modules/claims/audit/report (core)
-python - <<'PY'
+python - "${ROOT}" "${OUTDIR}" <<'PY'
 from pathlib import Path
+import sys
 from llm_pathway_curator.pipeline import RunConfig, run_pipeline
 
-root = Path(".").resolve()
+root = Path(sys.argv[1]).resolve()
 demo = root / "examples/demo"
-outdir = root / "out/demo"
+outdir = Path(sys.argv[2]).resolve()
 
 cfg = RunConfig(
+    workflow="legacy",
     evidence_table=str(demo / "evidence_table.tsv"),
     sample_card=str(demo / "sample_card.json"),
     outdir=str(outdir),
-    force=True,
+    force=False,
     seed=42,
     run_meta_name="run_meta.json",
     tau=0.80,

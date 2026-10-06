@@ -1,0 +1,22 @@
+{
+  "schema": "saved-text-tool-reassessment/1",
+  "scope": "development_diagnostics_on_previously_seen_R07_text",
+  "candidate_count": 50,
+  "q_threshold": 0.05,
+  "selection": "Supplied adjusted value at or below the declared cutoff; retain all candidates.",
+  "text_policy": "Preserve every original first-response draft. No regeneration or selective rewriting.",
+  "reporting": [
+    "Complete source and original-text census with hashes",
+    "Limited explicit numeric coverage and source contradiction flags",
+    "Inferential wording flags requiring human review",
+    "Original R07 numeric-gate status beside updated limited checks"
+  ],
+  "known_exposure": "The R07 corpus, original gate statuses, and example errors were examined during development. This is not an untouched semantic holdout.",
+  "independent_expert_labels_available": false,
+  "source_faithfulness_accuracy_estimated": false,
+  "biological_accuracy_estimated": false,
+  "full_audit_superiority_estimated": false,
+  "model_calls": 0,
+  "new_expert_ratings": 0,
+  "upstream_expression_or_enrichment_refit": false
+}

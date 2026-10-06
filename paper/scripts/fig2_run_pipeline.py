@@ -702,6 +702,7 @@ def _run_one(job: Job, *, force: bool, plan: dict[str, Any]) -> None:
         _write_json(job.outdir / "run_meta.runner.json", run_meta_runner)
 
         cfg = RunConfig(
+            workflow="legacy",
             evidence_table=str(job.evidence_table),
             sample_card=str(job.sample_card),
             outdir=str(job.outdir),

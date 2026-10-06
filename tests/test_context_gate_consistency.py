@@ -202,6 +202,7 @@ def test_pipeline_effective_context_modes_reach_audit(tmp_path, monkeypatch):
 
     run_pipeline(
         RunConfig(
+            workflow="legacy",
             evidence_table=str(demo / "evidence_table.tsv"),
             sample_card=str(demo / "sample_card.json"),
             outdir=str(outdir),

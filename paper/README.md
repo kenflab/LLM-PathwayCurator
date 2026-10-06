@@ -1,6 +1,12 @@
 <!-- paper/README.md -->
 # Paper artifacts (reproducible figures)
 
+These are historical manuscript artifacts. The [revision workspace](revision/CRM_R1/README.md)
+is the current research entry point; the [repository README](../README.md)
+describes the updated public tool. Exact historical reproduction uses pinned
+commit `b069e8ad3d916618adcf26af0202748790c3ca20`. Historical outcomes are preserved;
+they are not performance estimates for the updated source workflow.
+
 This folder contains the scripts and (when redistributable) frozen/derived artifacts used to reproduce the manuscript figures.
 
 **Canonical reproduction is script-based.**

@@ -1,0 +1,8 @@
+{
+  "condition": "synthetic demonstration",
+  "tissue": "example cell culture",
+  "perturbation": "example drug",
+  "comparison": "drug-treated (positive group) versus vehicle (reference group)",
+  "study_design": "experimental",
+  "notes": "Synthetic software example; no biological or model performance is estimated."
+}

@@ -1,0 +1,4 @@
+term_id	text
+PROGRAM_A	The drug causes checkpoint failure (NES=-2.134; q=0.004).
+PROGRAM_B	The metabolic program is statistically significant (NES=1.11; q=0.6644).
+PROGRAM_C	The unsigned response has adjusted p-value=0.03 and may merit follow-up.

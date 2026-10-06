@@ -1,172 +1,83 @@
-<!-- docs/user-guide.md -->
-
 # User guide
 
-This guide shows how to use LLM-PathwayCurator on your own enrichment results.
+## EvidenceTable
 
----
+Provide a UTF-8 TSV with the following columns.
 
-## 1) Create an EvidenceTable
-**Recommended:** Use a built-in adapter to generate `evidence_table.tsv`. See the [adapter docs]( https://github.com/kenflab/LLM-PathwayCurator/blob/main/src/llm_pathway_curator/adapters/README.md)
+| Column | Meaning |
+| --- | --- |
+| `term_id` | Stable pathway identifier |
+| `term_name` | Display name |
+| `source` | Enrichment source; participates in `source:term_id` identity |
+| `stat` | Source statistic, or blank/`NA` if unavailable |
+| `qval` | Adjusted value in [0,1], or blank/`NA` if unavailable |
+| `direction` | `up`, `down`, or `na` |
+| `evidence_genes` | Semicolon-separated supporting genes |
+| `stat_kind` (optional) | Use `NES` for normalized enrichment scores; fgsea sources infer it |
 
-You can generate an EvidenceTable via:
-- adapters (recommended), or
-- manual TSV export if your pipeline already has term × genes.
+A supplied `term_uid` must equal `source:term_id`. Repeated identities and
+inconsistent signed NES values are rejected. Use separate runs for different
+contrasts. Raw inputs are hashed; normalized records have evidence identities.
+Adapters remain available through `llm-pathway-curator adapt --help`.
 
-**Minimum required columns**
-- `term_id`, `term_name`, `source`, `stat`, `qval`, `direction`, `evidence_genes`
+## Sample Card
 
-**Notes**
-- `evidence_genes` should be a delimiter-joined list (tool accepts common delimiters; canonical export uses `;`).
-- ORA often has `direction=na`. Rank-based EA may have `up/down`.
+The JSON object requires a nonblank `comparison`. Explicitly describe the
+positive group and reference group; do not infer their order from a file name.
 
----
+```json
+{
+  "comparison": "treated (positive group) versus vehicle (reference group)",
+  "condition": "your study condition",
+  "tissue": "your tissue or cell type",
+  "perturbation": "your perturbation",
+  "study_design": "experimental or observational"
+}
+```
 
-## 2) Create a Sample Card
-A Sample Card is structured study context. Keep it explicit and minimal:
-- condition / disease
-- tissue
-- perturbation
-- comparison
+These fields are user-supplied metadata, not inferred facts. No TCGA code or TP53
+comparison is required. Historical Sample Card tuning keys do not control the
+new source workflow.
 
-Use the schema documented in the package docs (and examples).
+## Optional drafts
 
----
+Provide a TSV with `text` and `term_uid`, or an unambiguous `term_id`.
+Include `source` to resolve duplicate term IDs across sources. Optional
+`claim_id` identifies multiple drafts for one pathway. Quoted multiline TSV
+cells are supported and their wording is preserved.
 
-## 3) Run the pipeline
+Optional `comparison`, `condition`, `tissue`, `perturbation`, and
+`evidence_sha256` check explicitly declared attributes. Missing attributes do
+not imply that free prose was checked for them. Unknown evidence links stop
+the run before output creation.
+
+## Run and inspect
+
 ```bash
 llm-pathway-curator run \
-  --sample-card sample_card.json \
-  --evidence-table evidence_table.tsv \
-  --out out/run1/
+  --evidence-table evidence.tsv --sample-card sample_card.json \
+  --claims drafts.tsv --q-threshold 0.05 --outdir out/run_001
 ```
 
----
+`--k-claims` optionally limits eligible source statements. Every pathway and
+every supplied draft stays in the exports. Source decisions and prose
+dispositions are separate fields. Open `report.html` and inspect the original
+wording and quoted findings. `run_meta.json` records inputs, settings, implementation
+hashes and output hashes. No model requests or hash-based context scores are used.
 
-## 4) Read outputs
+Existing nonempty output directories are rejected. `--force`, `--tau`,
+`--seed`, model environment settings and custom metadata paths are legacy options;
+they do not enable new semantic checks in the source workflow.
 
-### `audit_log.tsv`
+## Historical reproduction
 
-Contains:
+`--workflow legacy` selects the original processing path. Model environment
+settings can make API requests there. Source mode never silently switches to a
+model or proxy. Exact frozen paper reproductions should pin
+[`b069e8a`](https://github.com/kenflab/LLM-PathwayCurator/tree/b069e8ad3d916618adcf26af0202748790c3ca20)
+and use their original inputs and recorded environments.
 
-* decision: PASS / ABSTAIN / FAIL
-* reason codes (stable, finite set)
-* pointers to evidence identities
-
-### `report.md` / `report.jsonl`
-
-Decision objects for downstream consumption:
-
-* typed claim fields
-* evidence links (term/module identifiers + hashes)
-* audit outcome and reason codes
-* provenance metadata
-
-## Optional: rank & visualize (`rank` / `plot-ranked`)
-
-If you want a **single ranked table** and **paper-ready plots** (bars / packed circles), use:
-
-- `llm-pathway-curator rank` → generates a ranked table (typically `claims_ranked.tsv`)
-- `llm-pathway-curator plot-ranked` → renders ranked terms/modules from `claims_ranked.tsv` (recommended) or `audit_log.tsv`
-
-### A) Rank (produce `claims_ranked.tsv`)
-
-Run `rank` on an existing run output directory (the directory that contains `audit_log.tsv`, `run_meta.json`, etc.).
-
-```bash
-llm-pathway-curator rank --help
-# Use --help to see the supported inputs and output path options.
-````
-
-### B) Plot ranked results (bars / packed circles)
-
-`plot-ranked` can auto-detect inputs under `--run-dir`.
-Packed circles require an extra dependency:
-
-```bash
-python -m pip install circlify
-```
-
-#### Bars (Metascape-like)
-
-```bash
-llm-pathway-curator plot-ranked \
-  --mode bars \
-  --run-dir out/run1 \
-  --out-png out/run1/plots/ranked_bars.png \
-  --decision PASS \
-  --group-by-module \
-  --left-strip \
-  --strip-labels \
-  --bar-color-mode module
-```
-
-#### Packed circles (modules → terms)
-
-```bash
-llm-pathway-curator plot-ranked \
-  --mode packed \
-  --run-dir out/run1 \
-  --out-png out/run1/plots/ranked_packed.png \
-  --decision PASS \
-  --term-color-mode module
-```
-
-#### Packed circles (direction shading)
-
-```bash
-llm-pathway-curator plot-ranked \
-  --mode packed \
-  --run-dir out/run1 \
-  --out-png out/run1/plots/ranked_packed.direction.png \
-  --decision PASS \
-  --term-color-mode direction
-```
-
-**Tip (side-by-side layout):** `plot-ranked` uses a stable `module_id → M##` display rank and stable module colors,
-so bars and packed circles can be placed next to each other without label/color drift.
-
----
-
-## 5) Tune conservativeness (τ)
-
-τ controls the stability gate operating point.
-Conceptually:
-
-* low τ: higher coverage, potentially higher risk
-* high τ: lower coverage, more abstention
-
-Use τ sweeps for analysis; lock a τ for deployment.
-
----
-
-## 6) Optional: enable proposal-only LLM
-
-When enabled, the LLM can:
-
-* choose context-consistent representatives
-* emit schema-bounded typed claims
-
-It must never:
-
-* invent evidence
-* output free text as “evidence”
-* decide PASS/ABSTAIN/FAIL
-
-All decisions remain mechanical and are logged.
-
----
-
-## 7) Reproducibility checklist
-
-* pin tool version (tag / release)
-* record `run_meta.json`
-* archive inputs (EvidenceTable + Sample Card)
-* prefer Docker / pinned environment for paper matching
-
-## Notes
-
-- For the underlying design, see **[Concepts](concepts.md)**.
-- For deterministic reproduction (benchmarks/figures/Source Data), follow **[paper/README.md](https://github.com/kenflab/LLM-PathwayCurator/tree/main/paper#readme)**.
-
+The legacy demo can be inspected without a paid model by using its original
+offline settings. Legacy results and new source reports are different workflows;
+their performance labels should not be pooled.
 

@@ -1,6 +1,6 @@
 # mkdocs.yml
 site_name: LLM-PathwayCurator
-site_description: "Enrichment interpretations → audited, decision-grade pathway claims."
+site_description: "Source-linked enrichment reports and checks of pathway draft wording."
 repo_name: kenflab/LLM-PathwayCurator
 repo_url: https://github.com/kenflab/LLM-PathwayCurator
 edit_uri: edit/main/docs/

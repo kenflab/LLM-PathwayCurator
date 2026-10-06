@@ -5,6 +5,9 @@ on:
     paths:
       - "src/llm_pathway_curator/**"
       - "tests/**"
+      - "paper/revision/CRM_R1/**"
+      - "paper/scripts/fig2_run_pipeline.py"
+      - "paper/scripts/figS2_run_collections_pipeline.py"
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
@@ -16,6 +19,9 @@ on:
     paths:
       - "src/llm_pathway_curator/**"
       - "tests/**"
+      - "paper/revision/CRM_R1/**"
+      - "paper/scripts/fig2_run_pipeline.py"
+      - "paper/scripts/figS2_run_collections_pipeline.py"
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
@@ -46,8 +52,8 @@ jobs:
 
       - name: Ruff
         run: |
-          ruff check src tests
-          ruff format --check src tests
+          ruff check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py
+          ruff format --check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py
 
       - name: Import smoke
         run: python -c "import llm_pathway_curator; print('import ok')"

@@ -1,109 +1,51 @@
-<!-- docs/concepts.md　-->
+# Concepts and scope
 
-# Concepts
+## Three different questions
 
-LLM-PathwayCurator is an **interpretation QA layer** for enrichment analysis (EA).  
-It transforms EA outputs into **audited, decision-grade claims**.
+| Question | What this software supplies | What still needs evaluation |
+| --- | --- | --- |
+| What does the supplied enrichment table record? | Statistical statements with source identity, adjusted value, signed direction where supplied, and comparison | Correct upstream analysis and study metadata |
+| Does a draft contradict a stated source fact? | Limited numeric, direction, declared context and evidence identity checks; quoted wording flags | Broader semantic assessment and domain expert review |
+| Does a biological interpretation generalize? | Preserved provenance to support follow-up | Independent biological evidence and an appropriate study design |
 
----
+A pathway enrichment direction does not establish activation of a molecular
+event, causation, gene-level expression changes, or clinical efficacy.
 
-## What it is (and is not)
+## Selection and dispositions
 
-**It is:**
-- a framework to convert term lists → **typed, evidence-linked claims**
-- a **mechanical audit suite** producing PASS/ABSTAIN/FAIL with reason codes
-- a way to tune conservativeness via **risk–coverage** (abstention is a feature)
+The source workflow selects estimable adjusted values at or below the declared
+cutoff. An optional top-K cap orders these values and identifiers. This is a
+simple statistical selection rule; no superiority to the same q-value rule is
+claimed. The report retains candidates outside the selected set.
 
-**It is not:**
-- a new enrichment statistic
-- a free-text summarizer
-- a biological truth oracle (it audits internal consistency and evidence linkage)
+`PASS` applies to eligibility of a **source statistical statement**.
+`ABSTAIN` applies to source statements outside the declared rule or missing
+adjusted values. Neither is a biological truth label.
 
----
+For submitted free prose, an explicit limited-check contradiction gives
+`FAIL`. Other prose remains `ABSTAIN` for human review. Causal, mechanistic and
+clinical expressions produce review flags; they do not automatically establish
+a biological error. No draft receives automatic semantic approval.
 
-## Objects
+## Limited wording rules
 
-### EvidenceTable (term × gene contract)
-One row = one enriched term with explicit supporting genes.  
-This enables:
-- term–term overlap (e.g., Jaccard)
-- term–gene bipartite graph construction
-- evidence factorization (modules)
-- stable evidence linkage (hashable gene sets)
+The current rules recognize specified English NES/statistic and q/FDR/adjusted
+p-value expressions, signed enrichment wording, significance expressions, and
+some mechanistic or clinical expressions. Displayed numeric rounding and bounds
+are checked; unqualified p values are not interpreted as adjusted values.
 
-### Sample Card (study context contract)
-A structured record of study intent and context (e.g., condition/tissue/perturbation/comparison).  
-Used for:
-- context-conditioned representative selection
-- context validity gates
-- context stress tests (e.g., context swap)
+Coverage is recorded separately from contradictions. A missing explicit number
+is not a proven wrong number. Negation handling is heuristic. The rules can miss
+paraphrases or flag wording that a researcher can justify with other evidence.
+Unflagged text is not certified as faithful or biologically correct.
 
-### Claim (typed JSON; evidence-linked)
-A claim is a **decision object**, not prose.  
-It must contain resolvable references:
-- `term_id` / `module_id`
-- supporting-gene set identity (hash)
-- typed fields (schema-bounded)
+## Historical modes
 
-### Module IDs vs display ranks (`M##`)
-- `module_id` is the **stable identifier** produced by the tool and referenced by downstream artifacts.
-- `M01`, `M02`, ... are **display ranks** (human-facing labels) used for visualization and layout.
-  They must be consistent across plots but should not be treated as stable IDs.
+The earlier module/proposal pipeline is available only by explicit selection.
+Hash-derived context gates and synthetic gene perturbations in that pipeline
+are not independent semantic assessment or empirical donor stability. Keep
+their historical receipts and unfavorable or null comparisons.
 
----
-
-## Pipeline responsibilities (A → B → C)
-
-### A) Distill (stability distillation; “evidence hygiene”)
-- supporting-gene perturbations (seeded dropout / jitter)
-- survival-like stability proxies (LOO/jackknife, optional extras)
-- **does not decide PASS/ABSTAIN/FAIL**
-
-### B) Modules (evidence factorization)
-- build term–gene graph
-- extract evidence modules (shared vs distinct support)
-- attach module ids / summarize structure
-- **does not decide PASS/ABSTAIN/FAIL**
-
-### C) Claims → Audit → Report
-**C1 (proposal):** select representatives + type claims (LLM optional)  
-**C2 (audit):** mechanical gates assign PASS/ABSTAIN/FAIL + reason codes  
-**C3 (report):** decision-grade report + provenance
-
-### D) Ranked views (presentation utilities)
-These steps do **not** change evidence identity or decisions. They produce ranked summaries and plots for humans.
-
-- **`rank`**: derives a ranked table (e.g., `claims_ranked.tsv`) for inspection/plotting.
-- **`plot-ranked`**: renders Metascape-like bars or packed circles from `claims_ranked.tsv`
-  (recommended) or `audit_log.tsv` (fallback).
-
----
-
-## Decisions
-
-### PASS / ABSTAIN / FAIL
-- **FAIL**: auditable violations (evidence drift, contradictions, schema violations)
-- **ABSTAIN**: under-supported / unstable / context-nonspecific / stress-inconclusive
-- **PASS**: survives the predefined gate suite
-
-### τ (stability threshold) as an operating point
-Higher τ → more conservative (more ABSTAIN, less PASS).  
-This enables a **risk–coverage trade-off**.
-
----
-
-## Stress tests (internal counterfactuals)
-Stress tests are *specification-driven perturbations* (no external knowledge):
-- **context swap**: swap Sample Card context keys
-- **evidence dropout**: remove supporting genes with probability p
-
-Expected outcome: coverage should decrease and ABSTAIN reasons should shift in a stress-specific way.
-
----
-
-## Next
-
-* Start here: **[Getting started](getting-started.md)**
-* End-to-end usage: **[User guide](user-guide.md)**
-* Adapters (inputs → EvidenceTable): see [package](https://github.com/kenflab/LLM-PathwayCurator/tree/main/src/llm_pathway_curator/adapters)
-* API docs: **[API reference](api-reference.md)**
+Research-specific protocols, model experiments and revision tests are outside
+the installed package. Their version names remain in archival records so past
+results can be traced; they are not public runtime API names.
