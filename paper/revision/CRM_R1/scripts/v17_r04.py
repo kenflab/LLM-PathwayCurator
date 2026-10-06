@@ -27,19 +27,19 @@ from v17_revision import (
     write_json,
 )
 
-from llm_pathway_curator.claim_locator_r04 import METHOD_ID, PROMPT_VERSION
-from llm_pathway_curator.claim_locator_r04.locator import (
+from revision_tools.source_locator import METHOD_ID, PROMPT_VERSION
+from revision_tools.source_locator.locator import (
     LocatorResponse,
     implementation_digest,
     make_request,
     resolve,
     sentence_spans,
 )
-from llm_pathway_curator.claim_locator_r04.runtime import CallBudget, FirstOutcomeStore
-from llm_pathway_curator.contract_v161.checks import prepare
-from llm_pathway_curator.contract_v161.models import ASPECTS, GenerationOptions
-from llm_pathway_curator.contract_v161.prompt import strict_json
-from llm_pathway_curator.contract_v161.runtime import TechnicalError
+from revision_tools.source_locator.runtime import CallBudget, FirstOutcomeStore
+from revision_tools.legacy_contract.checks import prepare
+from revision_tools.legacy_contract.models import ASPECTS, GenerationOptions
+from revision_tools.legacy_contract.prompt import strict_json
+from revision_tools.legacy_contract.runtime import TechnicalError
 
 PLAN = REPO / "paper/revision/CRM_R1/config/r04_development_plan.json"
 VERSION = "CRM_R1_REVISION_v17_R04"
@@ -141,7 +141,7 @@ def run_r04(
         Path(__file__).with_name("v17_r04_diagnostics.py"),
     ]:
         inputs.add(source)
-    for file in sorted((REPO / "src/llm_pathway_curator/claim_locator_r04").glob("*.py")):
+    for file in sorted((REPO / "paper/revision/CRM_R1/experiments/revision_tools/source_locator").glob("*.py")):
         inputs.add(file)
     plan, cases, diagnosis, raw_rows, old_scores, historical = load_sources(bundle, inputs)
     out.mkdir(parents=True)

@@ -13,11 +13,11 @@ from pathlib import Path
 from v17_r03 import score_case
 from v17_revision import REPO, require
 
-from llm_pathway_curator.contract_v17.atomic import aggregate, make_request, parse_response
-from llm_pathway_curator.contract_v161.checks import prepare
-from llm_pathway_curator.contract_v161.models import ASPECTS, ModelConfig
-from llm_pathway_curator.contract_v161.prompt import digest, strict_json
-from llm_pathway_curator.contract_v161.runtime import TechnicalError
+from revision_tools.atomic_review.atomic import aggregate, make_request, parse_response
+from revision_tools.legacy_contract.checks import prepare
+from revision_tools.legacy_contract.models import ASPECTS, ModelConfig
+from revision_tools.legacy_contract.prompt import digest, strict_json
+from revision_tools.legacy_contract.runtime import TechnicalError
 
 
 def required_source_files():
@@ -27,10 +27,10 @@ def required_source_files():
     ]
     files += [
         REPO / "paper/revision/CRM_R1/config/r03_development_plan.json",
-        REPO / "tests/fixtures/crm_r1_v16_1/cases_v161.json",
+        REPO / "paper/revision/CRM_R1/fixtures/development_controls/cases_v161.json",
     ]
-    for folder in ("contract_v161", "contract_v17"):
-        files.extend(sorted((REPO / "src/llm_pathway_curator" / folder).glob("*.py")))
+    for folder in ("legacy_contract", "atomic_review"):
+        files.extend(sorted((REPO / "paper/revision/CRM_R1/experiments/revision_tools" / folder).glob("*.py")))
     return files
 
 

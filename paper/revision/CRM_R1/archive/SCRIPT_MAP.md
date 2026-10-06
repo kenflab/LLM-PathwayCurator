@@ -11,8 +11,8 @@ returned ZIP. No model backend, new expert review or P3 grading is required.
 R06.1 accepts the original spreadsheet export's unnamed supplementary columns
 and leading blank lines, records the actual headers, and still rejects duplicate
 named fields or any difference from the frozen assigned ratings.
-Read [R06_P4_REUSE.md](../archive/R06_P4_REUSE.md) and
-[V17_WORKFLOW.md](../archive/V17_WORKFLOW.md).
+Read [R06_P4_REUSE.md](../R06_P4_REUSE.md) and
+[V17_WORKFLOW.md](../V17_WORKFLOW.md).
 
 ## Withdrawn R05 live-backend recommendation
 
@@ -26,8 +26,8 @@ R05 does not need to be installed or run before R06.
 archive, reproduces its unchanged scores and prepares 16 source-only requests.
 Default execution is offline. `--live` runs one bounded reading probe, preserving
 all 20 candidates and the first returned outcome of each request. This does not
-produce audit verdicts. See [R04_DEVELOPMENT.md](../archive/R04_DEVELOPMENT.md) and
-[V17_WORKFLOW.md](../archive/V17_WORKFLOW.md).
+produce audit verdicts. See [R04_DEVELOPMENT.md](../R04_DEVELOPMENT.md) and
+[V17_WORKFLOW.md](../V17_WORKFLOW.md).
 
 ## Completed R03 development with findings
 
@@ -35,19 +35,19 @@ produce audit verdicts. See [R04_DEVELOPMENT.md](../archive/R04_DEVELOPMENT.md) 
 the authenticated historical baseline. Default execution makes zero model
 calls. An explicit `--live` run uses the local pinned model for at most 96
 first-response requests, preserving failures and all 20 candidates. See
-[R03_DEVELOPMENT.md](../archive/R03_DEVELOPMENT.md) and [V17_WORKFLOW.md](../archive/V17_WORKFLOW.md).
+[R03_DEVELOPMENT.md](../R03_DEVELOPMENT.md) and [V17_WORKFLOW.md](../V17_WORKFLOW.md).
 
 ## Completed R02 preflight
 
 `61_revision_r02.py` checks reviewed legacy figure sources and a separately
 supplied GEO metadata snapshot. It makes zero model/network calls and saves
 new results below `CRM_R1/output/revision_v17/`. See
-[R02_FINDINGS.md](../archive/R02_FINDINGS.md) and [V17_WORKFLOW.md](../archive/V17_WORKFLOW.md).
+[R02_FINDINGS.md](../R02_FINDINGS.md) and [V17_WORKFLOW.md](../V17_WORKFLOW.md).
 
 ## Completed R01 adapter
 
 `60_revision_r01.py` implements the V17 saved-result inventory and deterministic
-ACC/S001 adapter. See [V17_WORKFLOW.md](../archive/V17_WORKFLOW.md). Run it in the existing
+ACC/S001 adapter. See [V17_WORKFLOW.md](../V17_WORKFLOW.md). Run it in the existing
 checkout with `CRM_R1_DATA_ROOT` pointing to the external data directory. It uses
 no LLM and writes only new directories under `output/revision_v17/`. Historical
 protocols and the scripts below are unchanged; R01 is not a new performance test.
@@ -271,4 +271,4 @@ source-checked HNSC/S001 50-term census and reporting policy, with zero model
 calls. `--live` starts at most 50 new proposals on the existing pinned local
 llama3.1:8b backend. First outcomes, including errors, are immutable; no paid
 backend or semantic judge is available. Outputs/ZIPs stay outside Git under
-`CRM_R1/output/revision_v17/`. Read `../archive/R07_NATURAL_TEXT_COMPARISON.md`.
+`CRM_R1/output/revision_v17/`. Read `../R07_NATURAL_TEXT_COMPARISON.md`.

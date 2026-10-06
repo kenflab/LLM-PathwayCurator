@@ -28,22 +28,22 @@ from v17_revision import (
     write_json,
 )
 
-from llm_pathway_curator.contract_v17 import METHOD_ID, PROMPT_VERSION
-from llm_pathway_curator.contract_v17.atomic import (
+from revision_tools.atomic_review import METHOD_ID, PROMPT_VERSION
+from revision_tools.atomic_review.atomic import (
     CallBudget,
     FirstOutcomeStore,
     aggregate,
     implementation_digest,
     make_request,
 )
-from llm_pathway_curator.contract_v161.checks import prepare
-from llm_pathway_curator.contract_v161.models import ASPECTS, GenerationOptions, ModelConfig
-from llm_pathway_curator.contract_v161.prompt import digest, strict_json
-from llm_pathway_curator.contract_v161.runtime import (
+from revision_tools.legacy_contract.checks import prepare
+from revision_tools.legacy_contract.models import ASPECTS, GenerationOptions, ModelConfig
+from revision_tools.legacy_contract.prompt import digest, strict_json
+from revision_tools.legacy_contract.runtime import (
     OllamaTransport,
     TechnicalError,
 )
-from llm_pathway_curator.contract_v161.runtime import (
+from revision_tools.legacy_contract.runtime import (
     parse_response as parse_legacy,
 )
 
@@ -273,8 +273,8 @@ def run_r03(
     inputs = Inputs()
     for file in [Path(__file__), Path(__file__).with_name("62_revision_r03.py")]:
         inputs.add(file)
-    for folder in ("contract_v161", "contract_v17"):
-        for file in sorted((REPO / "src/llm_pathway_curator" / folder).glob("*.py")):
+    for folder in ("legacy_contract", "atomic_review"):
+        for file in sorted((REPO / "paper/revision/CRM_R1/experiments/revision_tools" / folder).glob("*.py")):
             inputs.add(file)
     inputs.add(Path(__file__).with_name("v17_revision.py"))
     plan, cases, baseline_rows, baseline_summary, historical = load_sources(source_bundle, inputs)

@@ -35,9 +35,9 @@ from v17_revision import (
     write_json,
 )
 
-from llm_pathway_curator.contract_v161.models import Evidence, ModelConfig
-from llm_pathway_curator.contract_v161.prompt import canonical_json, digest, strict_json
-from llm_pathway_curator.contract_v161.runtime import (
+from revision_tools.legacy_contract.models import Evidence, ModelConfig
+from revision_tools.legacy_contract.prompt import canonical_json, digest, strict_json
+from revision_tools.legacy_contract.runtime import (
     AttemptStore,
     OllamaTransport,
     TechnicalError,
@@ -45,7 +45,7 @@ from llm_pathway_curator.contract_v161.runtime import (
     now,
     write_new,
 )
-from llm_pathway_curator.contract_v161.text_checks import (
+from revision_tools.legacy_contract.text_checks import (
     explicit_numeric_checks,
     factual_statement,
 )
@@ -71,8 +71,8 @@ def code_paths():
         Path(__file__).with_name("v17_revision.py"),
         POLICY,
     ]
-    result.extend(sorted((REPO / "src/llm_pathway_curator/contract_v161").glob("*.py")))
-    result.append(REPO / "src/llm_pathway_curator/contract_pipeline.py")
+    result.extend(sorted((REPO / "paper/revision/CRM_R1/experiments/revision_tools/legacy_contract").glob("*.py")))
+    result.append(REPO / "paper/revision/CRM_R1/experiments/revision_tools/legacy_pipeline.py")
     return result
 
 

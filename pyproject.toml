@@ -96,7 +96,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = []
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "paper/revision/CRM_R1/tests"]
 addopts = "-q"
 markers = [
   "smoke: developer-facing adapter smoke tests (contract checks)",
@@ -107,6 +107,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["llm_pathway_curator*"]
+namespaces = false
 
 [tool.setuptools_scm]
 tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:\\.post\\d+)?(?:a\\d+|b\\d+|rc\\d+)?)$"

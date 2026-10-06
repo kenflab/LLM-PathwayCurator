@@ -24,6 +24,8 @@ import pandas as pd
 
 VERSION = "CRM_R1_REVISION_v17_R01"
 REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "paper/revision/CRM_R1/experiments"))
 P2B = Path("output/priority2b")
 STATS = P2B / "discovery_stats_lock_v14_1_3/discovery_statistics.tsv"
 STATS_MANIFEST = STATS.parent / "discovery_statistics_manifest.json"
@@ -299,10 +301,10 @@ def validate_stats(table, gene_sets, cohort_names, *, expected_terms=50):
 
 
 def export_adapter(root, out, inputs, *, cohort="ACC", split="S001"):
-    from llm_pathway_curator.contract_pipeline import ContractRunConfig, run_contract_pipeline
-    from llm_pathway_curator.contract_v161.models import Claim, Evidence
-    from llm_pathway_curator.contract_v161.registry import TCGA_NAMES
-    from llm_pathway_curator.contract_v161.text_checks import factual_statement
+    from revision_tools.legacy_pipeline import ContractRunConfig, run_contract_pipeline
+    from revision_tools.legacy_contract.models import Claim, Evidence
+    from revision_tools.legacy_contract.registry import TCGA_NAMES
+    from revision_tools.legacy_contract.text_checks import factual_statement
 
     stats_manifest, checks = verify_manifest(root, STATS_MANIFEST, inputs)
     hallmark_manifest, extra = verify_manifest(root, HALLMARK_MANIFEST, inputs)
@@ -364,7 +366,7 @@ def export_adapter(root, out, inputs, *, cohort="ACC", split="S001"):
         "Wrong gene identifier",
     )
     gene_version = f"Hallmark gene-symbol snapshot; msigdbr {meta['msigdbr_version']}"
-    registry_path = REPO / "src/llm_pathway_curator/contract_v161/registry.py"
+    registry_path = REPO / "paper/revision/CRM_R1/experiments/revision_tools/legacy_contract/registry.py"
     inputs.add(registry_path)
     evidence, claims, mapping = [], [], []
     for index, row in selected.sort_values("term_id").iterrows():
@@ -611,9 +613,9 @@ def run_r01(root, output=None):
     inputs = Inputs()
     for path in [Path(__file__), REPO / "paper/revision/CRM_R1/scripts/60_revision_r01.py"]:
         inputs.add(path)
-    for path in sorted((REPO / "src/llm_pathway_curator/contract_v161").glob("*.py")):
+    for path in sorted((REPO / "paper/revision/CRM_R1/experiments/revision_tools/legacy_contract").glob("*.py")):
         inputs.add(path)
-    inputs.add(REPO / "src/llm_pathway_curator/contract_pipeline.py")
+    inputs.add(REPO / "paper/revision/CRM_R1/experiments/revision_tools/legacy_pipeline.py")
     versions = {name: importlib.metadata.version(name) for name in ("pandas", "numpy", "pydantic")}
     started = {
         "schema": VERSION,
