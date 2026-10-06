@@ -81,6 +81,36 @@ and condition counts are saved before any further filter stop. A single old log
 does not identify each filter's contribution; the diagnostic establishes
 whether the unintended GPL condition explains the observed stop.
 
+## Report a completed analysis
+
+```bash
+python "$CRM_R1_REPO/paper/revision/CRM_R1/experiments/external_dex/report.py" \
+  --data-root "$CRM_R1_DATA_ROOT"
+```
+
+This reads the original completed-analysis receipt and saved result ZIP. It
+verifies the recorded export bytes, original design and technical amendment,
+sample assignments, measured-gene intersection, all candidate/fold records,
+BH adjustment within the family of 50, selection identities and comparison
+denominators. It does not download data, refit R models, run fgsea, call a model
+or request ratings. The compact ZIP does not contain the original raw archive
+or airway count payload; these raw input hashes are not recomputed by the
+reporter and are not described as newly authenticated expression data.
+
+The reporter uses the existing project dependency matplotlib and writes a new
+folder and ZIP under `output/revision_v17/external_dex_report_<UTC>/`. Original
+statistics, inputs and design files are read only. Outputs contain two figure
+drafts in PDF/SVG/PNG, all 50 term records, all 350 fit records, denominator
+tables and draft Results/STAR Methods/legends/response text. An explicit
+`--archive` can review a returned ZIP; `--outdir` must be a new folder under
+the existing data root's output directory.
+
+Interpretation distinguishes equal endpoint rates from identical selected
+sets. If donor stability and size-matched q select the same terms, this case
+does not show an incremental selection benefit. The 24-h contrast remains
+primary and the shared-control 4-h contrast remains secondary. This analysis
+evaluates the statistical stability component, not the full LLM audit.
+
 ## Fixed statistical design
 
 `protocol.json` is authoritative. Discovery uses integer airway counts,
