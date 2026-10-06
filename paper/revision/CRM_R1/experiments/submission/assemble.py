@@ -164,25 +164,41 @@ class Collection:
             require(self.read(sha_companion).decode().split()[0] == digest(raw), "Output manifest companion hash mismatch")
         records = manifest[hash_key]
         require(isinstance(records, dict) and records, "Empty saved output hash inventory")
-        verified = []
+        verified, copied, omitted = [], [], []
         for name, record in records.items():
             if isinstance(record, str):
                 recorded, expected = str(Path(relative).parent / name), record
             else:
                 recorded, expected = record["path"], record["sha256"]
             path = local_path(self.root, recorded)
+            size = path.stat().st_size
+            if size > 8 * 1024 * 1024:
+                observed = file_sha(path)
+                require(observed == expected, "Saved output hash mismatch: " + str(path.relative_to(self.root)))
+                relative_path = str(path.relative_to(self.root))
+                self.inputs[relative_path] = observed
+                verified.append(relative_path)
+                omitted.append({"path": relative_path, "sha256": observed,
+                                "size_bytes": size,
+                                "reason": "HASH_VERIFIED_NOT_COPIED_COMPACT_SIZE_LIMIT"})
+                continue
             raw_output = self.read(path)
             require(digest(raw_output) == expected, "Saved output hash mismatch: " + str(path.relative_to(self.root)))
-            require(len(raw_output) <= 8 * 1024 * 1024, "Saved output too large for compact source collection")
             destination = self.out / "frozen_source_data" / path.relative_to(self.root)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(raw_output)
             verified.append(str(path.relative_to(self.root)))
+            copied.append(str(path.relative_to(self.root)))
         manifest_copy = self.out / "frozen_source_data" / relative
         manifest_copy.parent.mkdir(parents=True, exist_ok=True)
         manifest_copy.write_bytes(raw)
+        if local_path(self.root, sha_companion).is_file():
+            companion_copy = self.out / "frozen_source_data" / sha_companion
+            companion_copy.write_bytes(self.read(sha_companion))
         return {"recorded_output_files_checked": len(verified), "paths": verified,
-                "scope": "Recorded output hashes only; raw inputs and statistical models not rerun"}
+                "copied_output_file_count": len(copied), "copied_paths": copied,
+                "verified_but_not_copied": omitted,
+                "scope": "Recorded output hashes only; files above 8 MiB are stream-hashed and listed without copying; raw inputs and statistical models not rerun"}
 
 
 def collect_r06(collection):

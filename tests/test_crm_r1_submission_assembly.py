@@ -1,6 +1,7 @@
 """Protect manuscript and evidence boundaries of the read-only collector."""
 import importlib.util
 import io
+import hashlib
 import json
 import tempfile
 import unittest
@@ -75,6 +76,41 @@ class SourceAndManuscriptBoundaries(unittest.TestCase):
             self.assertNotIn('Results — existing-rater comparison', (out / 'RESULTS_AND_DISCUSSION_DRAFT_EN.txt').read_text())
             with self.assertRaises(ValueError):
                 MODULE.build(root, out, repo)
+
+    def test_oversized_output_is_stream_verified_without_blocking_small_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, out = Path(tmp) / 'CRM_R1', Path(tmp) / 'report'
+            folder = root / 'output/frozen'
+            folder.mkdir(parents=True); out.mkdir()
+            (folder / 'large.tsv').write_bytes(b'x' * (8 * 1024 * 1024 + 1))
+            (folder / 'summary.tsv').write_text('method\tn\nraw\t50\n')
+            manifest = {"outputs": {n: {"path": str(folder / n),
+                        "sha256": MODULE.file_sha(folder / n)}
+                        for n in ('large.tsv', 'summary.tsv')}}
+            raw = json.dumps(manifest).encode()
+            (folder / 'manifest.json').write_bytes(raw)
+            (folder / 'manifest.sha256').write_text(hashlib.sha256(raw).hexdigest() + '\n')
+            collection = MODULE.Collection(root, out)
+            result = collection.verify_output_manifest('output/frozen/manifest.json')
+            self.assertEqual(result['recorded_output_files_checked'], 2)
+            self.assertEqual(result['copied_output_file_count'], 1)
+            self.assertFalse((out / 'frozen_source_data/output/frozen/large.tsv').exists())
+            self.assertTrue((out / 'frozen_source_data/output/frozen/summary.tsv').exists())
+            self.assertEqual(result['verified_but_not_copied'][0]['sha256'], MODULE.file_sha(folder / 'large.tsv'))
+            self.assertEqual(collection.inputs['output/frozen/large.tsv'], MODULE.file_sha(folder / 'large.tsv'))
+            self.assertTrue((out / 'frozen_source_data/output/frozen/manifest.sha256').exists())
+
+    def test_oversized_output_hash_mismatch_is_not_excused_by_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, out = Path(tmp) / 'CRM_R1', Path(tmp) / 'report'
+            folder = root / 'output/frozen'
+            folder.mkdir(parents=True); out.mkdir()
+            path = folder / 'large.tsv'
+            path.write_bytes(b'x' * (8 * 1024 * 1024 + 1))
+            (folder / 'manifest.json').write_text(json.dumps({"outputs": {
+                "large": {"path": str(path), "sha256": '0' * 64}}}))
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                MODULE.Collection(root, out).verify_output_manifest('output/frozen/manifest.json')
 
 
 if __name__ == '__main__':

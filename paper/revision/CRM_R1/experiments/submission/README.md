@@ -26,6 +26,13 @@ Original absolute CRM_R1 paths are rebased by their complete relative path.
 The program does not search for a newer run or a similarly named alternative.
 It copies only bounded reporting artifacts, not raw expression data.
 
+Saved outputs above 8 MiB are checked with a streaming SHA-256 calculation and
+listed as `HASH_VERIFIED_NOT_COPIED_COMPACT_SIZE_LIMIT`. They remain in place;
+their size does not invalidate a complete, matching output manifest. Smaller
+declared outputs and the manifest are copied. `copied_paths` and
+`verified_but_not_copied` distinguish available table bytes from hash-only checks.
+An actual hash mismatch or missing file still leaves the component unverified.
+
 Word extraction separates deleted text and comments from the final-view body.
 Phrase flags identify passages for author review; they are not automatic error
 labels or replacements for visual review of the manuscript and figures.
