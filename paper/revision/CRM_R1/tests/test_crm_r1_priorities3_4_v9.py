@@ -39,6 +39,7 @@ def test_priority3_protocol_applies_the_same_fixed_queries_to_every_claim() -> N
     assert list(queries) == protocol["query_families"]
     assert all('"Review"[Publication Type]' in query for query in queries.values())
     assert all("NOT (" in query for query in queries.values())
+    assert all("AND NOT" not in query for query in queries.values())
     assert '"p53 pathway"[Title/Abstract]' in queries["direct_hnsc_tp53_pathway"]
 
 
@@ -71,6 +72,68 @@ def test_priority3_client_uses_required_contact_fields_and_does_not_mutate_respo
     assert parameters["maxdate"] == ["2026/08/09"]
     assert observed["timeout"] == 120.0
     assert result["esearchresult"]["idlist"] == ["123"]
+
+
+def test_priority3_rejects_lost_exclusion_and_ignored_boolean_operator() -> None:
+    import pytest
+
+    module = load_script("30_fetch_priority3_pubmed.py")
+    responses = [
+        {"count": "1", "idlist": ["123"], "querytranslation": "cancer AND Review[pt]"},
+        {
+            "count": "1",
+            "idlist": ["123"],
+            "querytranslation": "cancer NOT Review[pt]",
+            "warninglist": {"outputmessages": ["NOT"]},
+        },
+        {"errorlist": {"fieldsnotfound": ["badfield"]}},
+    ]
+    for response in responses:
+        client = module.NCBIClient(
+            base_url="https://example.test/eutils",
+            tool="crm_test",
+            email="a@example.org",
+            requester=lambda request, timeout, value=response: json.dumps(
+                {"esearchresult": value}
+            ).encode(),
+        )
+        client.interval_seconds = 0
+        with pytest.raises(ValueError):
+            client.search(
+                query="cancer NOT Review[pt]",
+                retmax=10,
+                sort="relevance",
+                publication_cutoff="2026-08-09",
+            )
+    with pytest.raises(ValueError, match="AND NOT"):
+        client.search(
+            query="cancer AND NOT Review[pt]",
+            retmax=10,
+            sort="relevance",
+            publication_cutoff="2026-08-09",
+        )
+
+
+def test_priority3_accepts_preserved_pubmed_not_translation() -> None:
+    module = load_script("30_fetch_priority3_pubmed.py")
+    client = module.NCBIClient(
+        base_url="https://example.test/eutils",
+        tool="crm_test",
+        email="a@example.org",
+        requester=lambda request, timeout: json.dumps(
+            {
+                "esearchresult": {
+                    "count": "1",
+                    "idlist": ["123"],
+                    "querytranslation": '"cancer"[Title/Abstract] NOT "Review"[Publication Type]',
+                }
+            }
+        ).encode(),
+    )
+    client.interval_seconds = 0
+    assert client.search(
+        query="cancer NOT Review[pt]", retmax=10, sort="relevance", publication_cutoff="2026-08-09"
+    )["esearchresult"]["idlist"] == ["123"]
 
 
 def test_priority3_tls_modes_never_disable_certificate_verification() -> None:

@@ -142,9 +142,9 @@ def build_queries(entity: str, protocol: dict[str, Any]) -> dict[str, str]:
     pathway = tagged_clause(pathway_terms(entity, protocol))
     exclude = exclusion_clause(protocol)
     return {
-        "direct_hnsc_tp53_pathway": f"{hnsc} AND {tp53} AND {pathway} AND {exclude}",
-        "context_hnsc_pathway": f"{hnsc} AND {pathway} AND {exclude}",
-        "perturbation_tp53_pathway": f"{tp53} AND {pathway} AND {exclude}",
+        "direct_hnsc_tp53_pathway": f"{hnsc} AND {tp53} AND {pathway} {exclude}",
+        "context_hnsc_pathway": f"{hnsc} AND {pathway} {exclude}",
+        "perturbation_tp53_pathway": f"{tp53} AND {pathway} {exclude}",
     }
 
 
@@ -223,6 +223,7 @@ class NCBIClient:
         sort: str,
         publication_cutoff: str,
     ) -> dict[str, Any]:
+        require(not re.search(r"\bAND\s+NOT\b", query), "Use PubMed NOT, not AND NOT")
         cutoff = publication_cutoff.replace("-", "/")
         body = self.request(
             "esearch.fcgi",
@@ -238,6 +239,15 @@ class NCBIClient:
         )
         value = json.loads(body.decode("utf-8"))
         require("esearchresult" in value, "Malformed ESearch response")
+        result = value["esearchresult"]
+        require(not result.get("errorlist") and not value.get("error"), "ESearch query error")
+        ignored = result.get("warninglist", {}).get("outputmessages", [])
+        require("NOT" not in ignored, "ESearch ignored the NOT operator")
+        if re.search(r"\bNOT\b", query):
+            require(
+                bool(re.search(r"\bNOT\b", result.get("querytranslation", ""))),
+                "ESearch translation lost the exclusion operator",
+            )
         return value
 
     def fetch(self, pmids: list[str]) -> bytes:
