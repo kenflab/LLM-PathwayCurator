@@ -10,14 +10,15 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-RULESET = "enrichment-source-checks/1"
+RULESET = "enrichment-source-checks/1.1"
 _NUMBER = r"[-+−]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-−]?\d+)?"
 _NUMERIC = re.compile(
     r"\b(?P<kind>NES|q(?:[-_ ]?value)?|qval|padj|FDR|"
     r"adjusted\s+(?:p(?:[- ]?value)?|value)|stat(?:istic)?)\b\s*[\])]?[ ]*"
     r"(?:=|:|\bis\b|\bwas\b|\bof\b)?\s*"
     r"(?P<op>[<>≤≥]=?)?\s*(?P<value>" + _NUMBER + r""
-    r"(?:\s*[×x]\s*10\s*(?:\^|\*\*)\s*[-+−]?\d+)?)",
+    r"(?:\s*[×x]\s*10\s*(?:\^|\*\*)\s*[-+−]?\d+)?)"
+    r"(?P<percent>[ \t]*%)?",
     re.I,
 )
 _SIGNIFICANCE = re.compile(
@@ -37,7 +38,8 @@ _CAUTION = re.compile(
 )
 _BOUNDARY = re.compile(r"[;.!?]\s+|\b(?:but|however|and|whereas)\b", re.I)
 _NEGATION = re.compile(
-    r"\b(?:no|not|never|cannot|can't|doesn't|didn't|without|insufficient)\b", re.I
+    r"\b(?:no|not(?!\s+only\b)|never|cannot|can't|doesn't|didn't|without|insufficient)\b",
+    re.I,
 )
 
 
@@ -79,9 +81,11 @@ def _numeric_match(reported: Decimal, expected: Decimal, operator: str) -> bool:
 def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str, Any]:
     """Return span-level findings; retain original wording and missing coverage.
 
-    Numeric rounding uses half a unit of the final displayed digit. Inequalities
-    are checked as inequalities. Significance wording is checked against the
-    caller's declared cutoff. Unqualified p values are never treated as q values.
+    Numeric rounding uses half a unit of the final displayed digit. Adjusted
+    values written with a percent sign are scaled with their precision retained.
+    Inequalities are checked as inequalities. Ambiguous negation asks for review
+    instead of establishing a significance violation. Unqualified p values are
+    never treated as q values.
     """
     findings: list[dict[str, Any]] = []
     covered: set[str] = set()
@@ -102,6 +106,14 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
     for match in _NUMERIC.finditer(text):
         kind = match["kind"].lower()
         field = "stat" if kind == "nes" or kind.startswith("stat") else "qval"
+        if match["percent"] and field != "qval":
+            add(
+                match,
+                "NUMERIC_UNIT_UNVERIFIED",
+                "REVIEW",
+                "A percent unit cannot be assumed for the source statistic.",
+            )
+            continue
         if kind == "nes" and str(evidence.get("stat_kind", "")).upper() != "NES":
             add(
                 match,
@@ -117,6 +129,8 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
         covered.add(field)
         try:
             reported = decimal_number(match["value"])
+            if match["percent"]:
+                reported = reported.scaleb(-2)
             expected = Decimal(str(value))
             satisfied = _numeric_match(reported, expected, match["op"] or "=")
         except (InvalidOperation, ValueError, OverflowError):
@@ -137,7 +151,7 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
             )
 
     for match in _SIGNIFICANCE.finditer(text):
-        negative = bool(match["neg"]) or _negated(text, match.start())
+        negative = bool(match["neg"])
         qval = evidence.get("qval")
         if qval is None:
             add(
@@ -145,6 +159,15 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
                 "SIGNIFICANCE_UNVERIFIED",
                 "REVIEW",
                 "No estimable adjusted value is available.",
+            )
+        elif not negative and _negated(text, match.start()):
+            add(
+                match,
+                "SIGNIFICANCE_SCOPE_REQUIRES_REVIEW",
+                "REVIEW",
+                "An earlier negation makes the scope of the significance wording ambiguous; "
+                "inspect the sentence instead of assigning a significance violation.",
+                expected=qval,
             )
         elif (not negative) != (qval <= cutoff):
             add(

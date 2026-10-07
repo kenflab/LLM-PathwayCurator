@@ -102,7 +102,8 @@ def _evidence(path: Path) -> tuple[bytes, list[dict[str, Any]]]:
     for index, row in enumerate(rows, 2):
         if any(not row[k].strip() for k in ("term_id", "term_name", "source")):
             raise ValueError(f"Blank evidence identity at TSV line {index}")
-        uid = f"{row['source'].strip()}:{row['term_id'].strip()}"
+        source = row["source"].strip()
+        uid = f"{source}:{row['term_id'].strip()}"
         if row.get("term_uid", uid).strip() != uid:
             raise ValueError(f"term_uid does not match source:term_id at line {index}")
         if uid in seen:
@@ -115,7 +116,7 @@ def _evidence(path: Path) -> tuple[bytes, list[dict[str, Any]]]:
             raise ValueError(f"Direction must be up/down/na at line {index}")
         stat = _number(row["stat"], "stat")
         kind = row.get("stat_kind", "").strip() or (
-            "NES" if row["source"].lower().startswith("fgsea") else "source statistic"
+            "NES" if source.lower().startswith("fgsea") else "source statistic"
         )
         if kind.upper() == "NES" and stat is not None and direction in {"up", "down"}:
             if (stat > 0 and direction != "up") or (stat < 0 and direction != "down") or stat == 0:
@@ -125,7 +126,7 @@ def _evidence(path: Path) -> tuple[bytes, list[dict[str, Any]]]:
             "term_uid": uid,
             "term_id": row["term_id"].strip(),
             "term_name": row["term_name"].strip(),
-            "source": row["source"].strip(),
+            "source": source,
             "stat": stat,
             "stat_kind": kind,
             "qval": _number(row["qval"], "qval"),
@@ -165,6 +166,13 @@ def _claims(path: Path | None, evidence: list[dict]) -> tuple[bytes | None, dict
             uid = matches[0]
         if uid not in by_uid:
             raise ValueError(f"Unknown evidence link at claims line {index}: {uid}")
+        for field in ("term_id", "source"):
+            declared = row.get(field, "").strip()
+            if declared and declared != by_uid[uid][field]:
+                raise ValueError(
+                    f"Conflicting evidence identity at claims line {index}: "
+                    f"{field} disagrees with term_uid {uid}"
+                )
         cid = row.get("claim_id", "").strip() or f"submitted_{index - 1}"
         if cid in ids:
             raise ValueError(f"Duplicate claim_id: {cid}")
