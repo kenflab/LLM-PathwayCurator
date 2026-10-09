@@ -334,6 +334,7 @@ def fgsea_to_evidence_table(
         - ``term_name`` : str
         - ``source`` : str
         - ``stat`` : float
+        - ``stat_kind`` : {"NES", "ES"}, preserving the selected input statistic
         - ``qval`` : float or NA (from padj only)
         - ``direction`` : {"up", "down", "na"}
         - ``evidence_genes`` : list[str]
@@ -435,6 +436,7 @@ def fgsea_to_evidence_table(
             "term_name": df["__pathway"],
             "source": config.source_name,
             "stat": df["__stat"].astype(float),
+            "stat_kind": stat_col,
             "qval": qval,
             "direction": df["direction"],
             "evidence_genes": df["evidence_genes"],

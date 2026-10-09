@@ -241,6 +241,10 @@ def cmd_run(args: argparse.Namespace) -> None:
             outdir=str(outdir),
             workflow="source",
             claims_file=args.claims,
+            modules=args.modules,
+            module_min_shared_genes=args.module_min_shared_genes,
+            module_jaccard_min=args.module_jaccard_min,
+            proposals_file=args.proposals,
             q_threshold=args.q_threshold,
             k_claims=args.k_claims,
             tau=args.tau,
@@ -252,6 +256,13 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(f"[ERROR] {error}") from error
         print(f"[OK] source report: {result.outdir}/report.html")
         return
+    if (
+        args.modules
+        or args.proposals is not None
+        or args.module_min_shared_genes != 3
+        or args.module_jaccard_min != 0.10
+    ):
+        raise SystemExit("[ERROR] Structured curation options belong to the source workflow")
     if args.claims is not None or args.q_threshold != 0.05:
         raise SystemExit("[ERROR] --claims and --q-threshold belong to the source workflow")
     _ensure_outdir(outdir, force=bool(args.force))
@@ -448,6 +459,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Adjusted-value cutoff for the source workflow",
     )
     p_run.add_argument("--evidence-table", required=True, help="TSV EvidenceTable (term×gene)")
+    p_run.add_argument(
+        "--modules",
+        action="store_true",
+        help="Add descriptive supporting-gene modules and a structured proposal packet",
+    )
+    p_run.add_argument("--module-min-shared-genes", type=int, default=3)
+    p_run.add_argument("--module-jaccard-min", type=float, default=0.10)
+    p_run.add_argument(
+        "--proposals",
+        default=None,
+        help="Import structured JSONL proposals with exact source references; no model calls",
+    )
     p_run.add_argument("--sample-card", required=True, help="sample_card.json")
     p_run.add_argument("--outdir", required=True, help="output directory")
     p_run.add_argument(

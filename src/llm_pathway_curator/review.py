@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from . import _shared
+from .curation import (
+    CURATION_SCHEMA,
+    curation_html,
+    prepare_curation,
+    read_proposals,
+    source_anchor,
+)
 from .grounding import RULESET, factual_statement, inspect_text
 
 
@@ -37,6 +44,12 @@ class ReviewConfig:
         Adjusted-value cutoff for source statistical statement eligibility.
     k_claims
         Optional cap on eligible source statements. All candidates remain exported.
+    modules
+        Add exact support-overlap components and a structured proposal packet.
+    module_min_shared_genes, module_jaccard_min
+        Fixed edge cutoffs; require modules=True when changed from defaults.
+    proposals_file
+        Optional JSONL of typed, source-bound proposals; all prose requires review.
     """
 
     evidence_table: str
@@ -45,6 +58,10 @@ class ReviewConfig:
     claims_file: str | None = None
     q_threshold: float = 0.05
     k_claims: int | None = None
+    modules: bool = False
+    module_min_shared_genes: int = 3
+    module_jaccard_min: float = 0.10
+    proposals_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,9 +135,9 @@ def _evidence(path: Path) -> tuple[bytes, list[dict[str, Any]]]:
         kind = row.get("stat_kind", "").strip() or (
             "NES" if source.lower().startswith("fgsea") else "source statistic"
         )
-        if kind.upper() == "NES" and stat is not None and direction in {"up", "down"}:
+        if kind.upper() in {"NES", "ES"} and stat is not None and direction in {"up", "down"}:
             if (stat > 0 and direction != "up") or (stat < 0 and direction != "down") or stat == 0:
-                raise ValueError(f"NES direction mismatch at line {index}")
+                raise ValueError(f"{kind.upper()} direction mismatch at line {index}")
         genes = sorted(set(_shared.parse_genes(row["evidence_genes"])))
         item = {
             "term_uid": uid,
@@ -194,7 +211,7 @@ def _write_tsv(path: Path, rows: list[dict], fields: list[str]) -> None:
             )
 
 
-def _html(records: list[dict], comparison: str) -> str:
+def _html(records: list[dict], comparison: str, curation: dict | None = None) -> str:
     esc = html.escape
     cards = []
     for record in records:
@@ -215,7 +232,8 @@ def _html(records: list[dict], comparison: str) -> str:
         search = esc((source["term_name"] + " " + source["term_uid"]).lower(), quote=True)
         chosen = str(record["selected"]).lower()
         cards.append(
-            f"<article data-search='{search}' data-selected='{chosen}'><header>"
+            f"<article id='{source_anchor(source['term_uid'])}' "
+            f"data-search='{search}' data-selected='{chosen}'><header>"
             f"<h3>{esc(source['term_name'])}</h3>"
             f"<span class='badge'>{record['decision_status']}</span></header>"
             f"<p>{esc(record['source_statement'])}</p><p class='small'>"
@@ -244,6 +262,9 @@ h3{margin:0;font-size:19px}
 input[type=search]{padding:10px;width:min(450px,85%);font:inherit;
 border:1px solid #aab6c4;border-radius:6px}
 li{margin:8px 0}p{overflow-wrap:anywhere}.verbatim{white-space:pre-wrap}
+.panel{background:white;border:1px solid #d9e0e8;border-radius:10px;padding:16px;margin:12px 0}
+summary{cursor:pointer}a{color:#155c9a}.curation{margin:28px 0}
+article:target{border:2px solid #155c9a}
 </style></head><body><h1>Pathway source report</h1><p>"""
     note = """</p><p>Source statements use the supplied statistics.
 PASS refers to statistical reporting eligibility under the declared cutoff.
@@ -261,8 +282,24 @@ function filter(){
 }
 document.querySelector('#search').addEventListener('input',filter);
 document.querySelector('#selected').addEventListener('change',filter);
+function revealSource(){
+  const target=document.getElementById(location.hash.slice(1));
+  if(target && target.tagName==='ARTICLE'){
+    document.querySelector('#search').value='';
+    document.querySelector('#selected').checked=false;
+    filter();target.scrollIntoView();
+  }
+}
+window.addEventListener('hashchange',revealSource);
+document.addEventListener('click',e=>{
+  const link=e.target.closest('a[href^="#source-"]');
+  if(link){document.querySelector('#search').value='';
+    document.querySelector('#selected').checked=false;filter();}
+});
+revealSource();
 </script></body></html>"""
-    return head + esc(comparison) + note + "".join(cards) + script
+    panel = curation_html(curation, records) if curation else ""
+    return head + esc(comparison) + note + panel + "".join(cards) + script
 
 
 def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> ReviewResult:
@@ -275,6 +312,8 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
         raise ValueError("q_threshold must be finite and between 0 and 1")
     if cfg.k_claims is not None and (type(cfg.k_claims) is not int or cfg.k_claims < 1):
         raise ValueError("k_claims must be a positive integer")
+    if not cfg.modules and (cfg.module_min_shared_genes != 3 or cfg.module_jaccard_min != 0.10):
+        raise ValueError("Module thresholds require modules=True / --modules")
     ev_path, card_path = Path(cfg.evidence_table), Path(cfg.sample_card)
     raw_ev, evidence = _evidence(ev_path)
     raw_card = card_path.read_bytes()
@@ -289,6 +328,9 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
             "with its direction explicitly described"
         )
     raw_claims, claims = _claims(Path(cfg.claims_file) if cfg.claims_file else None, evidence)
+    raw_proposals, proposals = read_proposals(
+        Path(cfg.proposals_file) if cfg.proposals_file else None
+    )
     ranked = sorted(
         (e for e in evidence if e["qval"] is not None and e["qval"] <= cfg.q_threshold),
         key=lambda e: (e["qval"], e["term_uid"]),
@@ -301,7 +343,24 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
             check = inspect_text(submitted["text"], item, cfg.q_threshold)
             for field in ("comparison", "condition", "tissue", "perturbation"):
                 asserted = submitted.get(field, "").strip()
-                if asserted and asserted != str(card.get(field, "")):
+                source_context = card.get(field)
+                context_unavailable = source_context is None or (
+                    isinstance(source_context, str) and not source_context.strip()
+                )
+                if asserted and context_unavailable:
+                    check["findings"].append(
+                        {
+                            "code": "CONTEXT_ATTRIBUTE_UNVERIFIED",
+                            "severity": "REVIEW",
+                            "start": None,
+                            "end": None,
+                            "quote": asserted,
+                            "source_value": source_context,
+                            "message": f"The Sample Card does not provide {field}; "
+                            "the draft's declared value requires human verification.",
+                        }
+                    )
+                elif asserted and asserted != str(source_context):
                     check["findings"].append(
                         {
                             "code": "CONTEXT_ATTRIBUTE_MISMATCH",
@@ -379,6 +438,17 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
             }
         )
 
+    curation = None
+    if cfg.modules or cfg.proposals_file is not None:
+        curation = prepare_curation(
+            records,
+            card,
+            include_modules=cfg.modules,
+            min_shared=cfg.module_min_shared_genes,
+            jaccard_min=cfg.module_jaccard_min,
+            proposals=proposals,
+            cutoff=cfg.q_threshold,
+        )
     out = Path(cfg.outdir).resolve()
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise ValueError(
@@ -474,8 +544,60 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
                 f"- {f['code']}: {f['quote']} — {f['message']}" for f in checked["findings"]
             )
             lines.append("")
+    if curation:
+        for key, filename, value in (
+            ("structured_claims", "claims.structured.jsonl", curation["structured_claims"]),
+            ("proposals_checked", "proposals.checked.jsonl", curation["checked_proposals"]),
+            ("proposal_packet", "proposal_packet.json", curation["packet"]),
+            ("modules", "modules.json", curation["grouping"]),
+        ):
+            if value is None:
+                continue
+            path = out / filename
+            content = (
+                "".join(_json(x) + "\n" for x in value)
+                if filename.endswith(".jsonl")
+                else _json(value) + "\n"
+            )
+            path.write_text(content, encoding="utf-8")
+            artifacts[key] = str(path)
+        if raw_proposals is not None:
+            path = out / "proposals.submitted.jsonl"
+            path.write_bytes(raw_proposals)
+            artifacts["proposals_submitted"] = str(path)
+        lines.extend(["## Supporting-gene summaries", ""])
+        for module in (curation["grouping"] or {}).get("modules", []):
+            lines.extend(
+                [
+                    f"### {module['module_id']}",
+                    "",
+                    module["source_summary"],
+                    "",
+                    "Source members: " + "; ".join(module["member_term_uids"]),
+                    "",
+                    "Review flags: " + "; ".join(module["review_flags"]),
+                    "",
+                ]
+            )
+        lines.extend(["## Proposed interpretations — human review required", ""])
+        for checked in curation["checked_proposals"]:
+            proposal = checked["proposal"]
+            lines.extend(
+                [
+                    f"### {proposal['claim_id']} ({proposal['claim_type']})",
+                    "",
+                    proposal["text"],
+                    "",
+                    f"Disposition: {checked['prose_disposition']}",
+                    "",
+                ]
+            )
+            lines.extend(f"- {f['code']}: {f['message']}" for f in checked["findings"])
+            lines.append("")
     Path(artifacts["report_md"]).write_text("\n".join(lines), encoding="utf-8")
-    Path(artifacts["report_html"]).write_text(_html(records, card["comparison"]), encoding="utf-8")
+    Path(artifacts["report_html"]).write_text(
+        _html(records, card["comparison"], curation), encoding="utf-8"
+    )
     inputs = {
         "evidence_table": {"path": str(ev_path.resolve()), "sha256": _sha(raw_ev)},
         "sample_card": {"path": str(card_path.resolve()), "sha256": _sha(raw_card)},
@@ -484,6 +606,11 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
         inputs["claims_file"] = {
             "path": str(Path(cfg.claims_file).resolve()),
             "sha256": _sha(raw_claims),
+        }
+    if raw_proposals is not None:
+        inputs["proposals_file"] = {
+            "path": str(Path(cfg.proposals_file).resolve()),
+            "sha256": _sha(raw_proposals),
         }
     rid = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     meta = {
@@ -511,12 +638,23 @@ def review_enrichment(cfg: ReviewConfig, *, run_id: str | None = None) -> Review
         "implementation_sha256": {
             Path(__file__).name: _sha(Path(__file__).read_bytes()),
             "grounding.py": _sha(Path(__file__).with_name("grounding.py").read_bytes()),
+            "curation.py": _sha(Path(__file__).with_name("curation.py").read_bytes()),
         },
         "artifacts": {
             key: {"path": path, "sha256": _sha(Path(path).read_bytes())}
             for key, path in artifacts.items()
         },
     }
+    if curation:
+        meta["curation"] = {
+            "schema_version": CURATION_SCHEMA,
+            "module_count": len((curation["grouping"] or {}).get("modules", [])),
+            "proposal_count": len(curation["checked_proposals"]),
+            "proposal_dispositions": dict(
+                Counter(p["prose_disposition"] for p in curation["checked_proposals"])
+            ),
+            "grouping_affects_statistical_selection": False,
+        }
     meta_path = out / "run_meta.json"
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8"

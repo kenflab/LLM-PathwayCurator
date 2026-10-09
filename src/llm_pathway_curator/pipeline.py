@@ -93,6 +93,10 @@ class RunConfig:
     workflow: str = "source"
     claims_file: str | None = None
     q_threshold: float = 0.05
+    modules: bool = False
+    module_min_shared_genes: int = 3
+    module_jaccard_min: float = 0.10
+    proposals_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -5072,6 +5076,13 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
     stability/context pipeline for reproducibility. Their endpoints differ.
     """
     if cfg.workflow == "legacy":
+        if (
+            cfg.modules
+            or cfg.proposals_file is not None
+            or cfg.module_min_shared_genes != 3
+            or cfg.module_jaccard_min != 0.10
+        ):
+            raise ValueError("Structured curation options belong to the source workflow")
         if cfg.claims_file is not None or cfg.q_threshold != 0.05:
             raise ValueError("claims_file and q_threshold belong to the source workflow")
         return _run_legacy_pipeline(cfg, run_id=run_id)
@@ -5103,6 +5114,10 @@ def run_pipeline(cfg: RunConfig, *, run_id: str | None = None) -> RunResult:
             claims_file=cfg.claims_file,
             q_threshold=cfg.q_threshold,
             k_claims=cfg.k_claims,
+            modules=cfg.modules,
+            module_min_shared_genes=cfg.module_min_shared_genes,
+            module_jaccard_min=cfg.module_jaccard_min,
+            proposals_file=cfg.proposals_file,
         ),
         run_id=run_id,
     )
