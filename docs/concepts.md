@@ -29,10 +29,17 @@ a biological error. No draft receives automatic semantic approval.
 
 ## Limited wording rules
 
-The current rules recognize specified English NES/statistic and q/FDR/adjusted
+The current rules recognize specified English NES/ES/statistic and q/FDR/adjusted
 p-value expressions, signed enrichment wording, significance expressions, and
 some mechanistic or clinical expressions. Displayed numeric rounding and bounds
 are checked; unqualified p values are not interpreted as adjusted values.
+
+The fgsea adapter preserves whether the input statistic was NES or ES. Explicit
+unadjusted, uncorrected, or nominal significance wording within the same clause
+is sent for review because an adjusted value alone cannot verify it. A draft
+context attribute absent from the Sample Card is also unverified; it is not a
+proven context contradiction. These limited rules do not resolve all statistical
+bases, sentence scopes, or study-context synonyms.
 
 Coverage is recorded separately from contradictions. A missing explicit number
 is not a proven wrong number. Negation handling is heuristic. The rules can miss
@@ -40,6 +47,11 @@ paraphrases or flag wording that a researcher can justify with other evidence.
 Unflagged text is not certified as faithful or biologically correct.
 
 ## Historical modes
+
+The current source workflow can also generate descriptive support-overlap
+modules with `--modules` and import typed proposals with `--proposals`.
+These options retain all source candidates and do not use the historical
+context/stability ranking score. See [Structured curation](structured-curation.md).
 
 The earlier module/proposal pipeline is available only by explicit selection.
 Hash-derived context gates and synthetic gene perturbations in that pipeline

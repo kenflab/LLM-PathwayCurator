@@ -10,10 +10,10 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-RULESET = "enrichment-source-checks/1.1"
+RULESET = "enrichment-source-checks/1.2"
 _NUMBER = r"[-+−]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-−]?\d+)?"
 _NUMERIC = re.compile(
-    r"\b(?P<kind>NES|q(?:[-_ ]?value)?|qval|padj|FDR|"
+    r"\b(?P<kind>NES|ES|q(?:[-_ ]?value)?|qval|padj|FDR|"
     r"adjusted\s+(?:p(?:[- ]?value)?|value)|stat(?:istic)?)\b\s*[\])]?[ ]*"
     r"(?:=|:|\bis\b|\bwas\b|\bof\b)?\s*"
     r"(?P<op>[<>≤≥]=?)?\s*(?P<value>" + _NUMBER + r""
@@ -41,6 +41,16 @@ _NEGATION = re.compile(
     r"\b(?:no|not(?!\s+only\b)|never|cannot|can't|doesn't|didn't|without|insufficient)\b",
     re.I,
 )
+_UNADJUSTED_BASIS = re.compile(r"\b(?:unadjusted|uncorrected|nominal(?:ly)?)\b", re.I)
+
+
+def _local_clause(text: str, start: int, end: int) -> str:
+    """Bound a significance cue by the existing conservative clause separators."""
+    before = list(_BOUNDARY.finditer(text[:start]))
+    after = _BOUNDARY.search(text, end)
+    left = before[-1].end() if before else 0
+    right = after.start() if after else len(text)
+    return text[left:right]
 
 
 def decimal_number(value: str) -> Decimal:
@@ -105,7 +115,7 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
 
     for match in _NUMERIC.finditer(text):
         kind = match["kind"].lower()
-        field = "stat" if kind == "nes" or kind.startswith("stat") else "qval"
+        field = "stat" if kind in {"nes", "es"} or kind.startswith("stat") else "qval"
         if match["percent"] and field != "qval":
             add(
                 match,
@@ -114,12 +124,12 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
                 "A percent unit cannot be assumed for the source statistic.",
             )
             continue
-        if kind == "nes" and str(evidence.get("stat_kind", "")).upper() != "NES":
+        if kind in {"nes", "es"} and str(evidence.get("stat_kind", "")).upper() != kind.upper():
             add(
                 match,
                 "STATISTIC_TYPE_UNVERIFIED",
                 "REVIEW",
-                "The source statistic is not identified as NES.",
+                f"The source statistic is not identified as {kind.upper()}.",
             )
             continue
         value = evidence.get(field)
@@ -153,7 +163,16 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
     for match in _SIGNIFICANCE.finditer(text):
         negative = bool(match["neg"])
         qval = evidence.get("qval")
-        if qval is None:
+        if _UNADJUSTED_BASIS.search(_local_clause(text, match.start(), match.end())):
+            add(
+                match,
+                "SIGNIFICANCE_BASIS_REQUIRES_REVIEW",
+                "REVIEW",
+                "This clause refers to nominal or unadjusted significance. "
+                "The source adjusted value alone cannot verify that statement.",
+                expected=qval,
+            )
+        elif qval is None:
             add(
                 match,
                 "SIGNIFICANCE_UNVERIFIED",

@@ -17,6 +17,12 @@ context scores or simulated gene survival to select statements. You can inspect
 drafts written by a person or any language model without calling that model again.
 The historical LLM pipeline remains available through an explicit legacy mode.
 
+The optional [structured curation workflow](docs/structured-curation.md) adds
+supporting-gene modules, typed source observations and a proposal packet. Import
+saved model- or human-authored JSONL with `--proposals` to review proposed
+interpretations beside their exact sources. This candidate feature makes no
+model calls and never automatically approves free prose.
+
 ## Install the current source
 
 The workflow below is available from this repository. Earlier PyPI releases and

@@ -7,6 +7,11 @@ Start with [Getting started](getting-started.md). The [User guide](user-guide.md
 specifies the input tables and decisions. [Concepts](concepts.md) distinguishes
 statistical reporting, draft inspection and independent biological validation.
 
+The [structured curation guide](structured-curation.md) adds optional
+supporting-gene modules, typed observations and saved model- or human-authored
+proposals to the same source workflow. Module membership does not change
+statistical eligibility or certify the meaning of a proposal.
+
 The current repository source includes this workflow. Previously published
 packages and the [historical preprint](https://doi.org/10.64898/2026.02.18.706381)
 describe an earlier pipeline. Exact historical paper reproduction uses a pinned
