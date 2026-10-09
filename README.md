@@ -17,6 +17,10 @@ context scores or simulated gene survival to select statements. You can inspect
 drafts written by a person or any language model without calling that model again.
 The historical LLM pipeline remains available through an explicit legacy mode.
 
+For TCGA figure reproduction, read the [upstream input correction](paper/scripts/README.md#corrected-tcga-inputs).
+Archived TCGA rankings and dependent results require regeneration after gene-ID
+and mutation-assessment fixes; the source-report tool cannot repair those inputs.
+
 The optional [structured curation workflow](docs/structured-curation.md) adds
 supporting-gene modules, typed source observations and a proposal packet. Import
 saved model- or human-authored JSONL with `--proposals` to review proposed

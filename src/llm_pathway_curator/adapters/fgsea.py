@@ -276,9 +276,7 @@ def read_fgsea_table(path: str) -> pd.DataFrame:
 def _rename_with_aliases(df: pd.DataFrame) -> pd.DataFrame:
     """Rename columns to the adapter's canonical schema using ``ALIASES``.
 
-    The first encountered column that maps to a canonical name wins.
-    Additional columns mapping to the same canonical name are recorded
-    in ``out.attrs["alias_conflicts"]`` for debugging.
+    Reject competing aliases rather than selecting a statistic by column order.
 
     Parameters
     ----------
@@ -306,7 +304,7 @@ def _rename_with_aliases(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.rename(columns=rename)
     if conflicts:
-        out.attrs["alias_conflicts"] = conflicts
+        raise ValueError(f"fgsea_to_evidence_table: ambiguous column aliases: {conflicts}")
     return out
 
 
@@ -357,6 +355,8 @@ def fgsea_to_evidence_table(
     if config is None:
         config = FgseaAdapterConfig()
 
+    if fgsea_df.columns.duplicated().any():
+        raise ValueError("fgsea_to_evidence_table: duplicate input column names")
     df = _rename_with_aliases(fgsea_df.copy())
 
     missing = [c for c in REQUIRED_CORE if c not in df.columns]
@@ -402,6 +402,10 @@ def fgsea_to_evidence_table(
     # qval: ONLY padj maps to qval (FDR). pval stored separately if present.
     if "padj" in df.columns:
         qval = df["padj"].map(_to_float)
+        invalid = ~df["padj"].map(_is_na) & qval.isna()
+        outside = qval.notna() & ((qval < 0) | (qval > 1))
+        if invalid.any() or outside.any():
+            raise ValueError("fgsea_to_evidence_table: padj must be missing or finite in [0, 1]")
     else:
         qval = pd.Series([pd.NA] * len(df), index=df.index)
 
@@ -446,6 +450,12 @@ def fgsea_to_evidence_table(
             "term_id_h": term_hash,
         }
     ).reset_index(drop=True)
+
+    # Carry an explicit upstream declaration without inferring identity from
+    # numeric-looking leading-edge tokens. This is provenance, not validation
+    # of the upstream expression-to-gene or sample-to-genotype mapping.
+    if "gene_id_type" in df.columns:
+        out["gene_id_type"] = df["gene_id_type"].map(_clean_str).to_numpy()
 
     # Paper-aligned filtering and stable ordering
     if config.drop_na_qval and "qval" in out.columns:

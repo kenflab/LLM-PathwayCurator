@@ -2,6 +2,9 @@
 # paper/scripts/fig2_make_groups.py
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -143,8 +146,8 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
 def _normalize_barcode(s: str) -> str:
     """Normalize a TCGA barcode string for sample-level matching.
 
-    The current implementation trims to the first 16 characters after
-    stripping whitespace.
+    Match DNA aliquots and RNA samples at the 15-character TCGA sample level.
+    Do not collapse distinct sample types to a patient-only barcode.
 
     Parameters
     ----------
@@ -156,8 +159,51 @@ def _normalize_barcode(s: str) -> str:
     str
         Normalized barcode prefix.
     """
-    s = str(s).strip()
-    return s[:16]
+    s = str(s).strip().upper()
+    match = re.fullmatch(r"(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-\d{2})(?:[A-Z](?:-.*)?)?", s)
+    if not match:
+        raise ValueError(f"Invalid TCGA sample/aliquot barcode: {s!r}")
+    return match.group(1)
+
+
+def assign_tp53_groups(
+    samples: pd.DataFrame, mutant_samples: set[str], assessment: pd.DataFrame | None
+) -> pd.DataFrame:
+    """Classify absence of a qualifying call as WT only with explicit assessment.
+
+    The assessment table must come from assay/sample metadata and TP53 coverage
+    review, not from the presence of other genes' mutation rows. Its columns are
+    sample and tp53_assessed (true/false or 1/0). WT operationally means no
+    qualifying protein-altering TP53 call under the chosen mutation policy.
+    """
+    result = samples.copy()
+    result["sample"] = result["sample"].map(_normalize_barcode)
+    if result["sample"].duplicated().any():
+        raise ValueError("Duplicate sample after TCGA barcode normalization")
+    mutant_samples = {_normalize_barcode(s) for s in mutant_samples}
+    assessed: set[str] = set()
+    if assessment is not None:
+        if not {"sample", "tp53_assessed"}.issubset(assessment.columns):
+            raise ValueError("Assessment requires sample and tp53_assessed columns")
+        assessment = assessment.copy()
+        assessment["sample"] = assessment["sample"].map(_normalize_barcode)
+        values = assessment["tp53_assessed"].astype(str).str.strip().str.lower()
+        if not values.isin({"true", "false", "1", "0"}).all():
+            raise ValueError("tp53_assessed must be true/false or 1/0")
+        assessment["evaluated"] = values.isin({"true", "1"})
+        if assessment.groupby("sample")["evaluated"].nunique().gt(1).any():
+            raise ValueError("Conflicting assessments for the same normalized sample")
+        assessed = set(assessment.loc[assessment["evaluated"], "sample"])
+        denied = set(assessment.loc[~assessment["evaluated"], "sample"])
+        if denied & mutant_samples:
+            raise ValueError("TP53 mutation call conflicts with explicit unassessed status")
+    result["group"] = "TP53_unknown"
+    result["group_basis"] = "no_TP53_assessment"
+    known = result["sample"].isin(assessed)
+    result.loc[known, ["group", "group_basis"]] = ["TP53_wt", "assessed_no_protein_altering_call"]
+    mutated = result["sample"].isin(mutant_samples)
+    result.loc[mutated, ["group", "group_basis"]] = ["TP53_mut", "protein_altering_call"]
+    return result
 
 
 def _norm_disease(x: str) -> str:
@@ -215,9 +261,9 @@ def main() -> None:
     Outputs
     -------
     derived/groups/{TCGA}.groups.tsv
-        Two-column table: ``sample`` and ``group``.
+        Table with ``sample``, ``group`` and ``group_basis``.
     derived/groups/PANCAN.groups.tsv
-        Three-column table: ``sample``, ``cancer``, ``group``.
+        Table with ``sample``, ``cancer``, ``group`` and ``group_basis``.
 
     Raises
     ------
@@ -228,12 +274,23 @@ def main() -> None:
     Notes
     -----
     - Group assignment is based on membership in the TP53-mutated sample
-      set; otherwise samples are labeled TP53_wt.
+      set; absence of a call is WT only with explicit assessment, otherwise UNKNOWN.
     - The script prints warnings when a cancer has zero samples in either
       arm.
     """
-    mc3_path = RAW / "mc3.v0.2.8.PUBLIC.xena.gz"
-    pheno_path = RAW / "TCGA_phenotype_dense.tsv.gz"
+    parser = argparse.ArgumentParser(
+        description="Build assessed TP53 groups; missing status is UNKNOWN."
+    )
+    parser.add_argument("--mc3", type=Path, default=RAW / "mc3.v0.2.8.PUBLIC.xena.gz")
+    parser.add_argument("--phenotype", type=Path, default=RAW / "TCGA_phenotype_dense.tsv.gz")
+    parser.add_argument(
+        "--assessed-samples",
+        type=Path,
+        help="Reviewed TSV: sample, tp53_assessed. Required to establish WT.",
+    )
+    parser.add_argument("--outdir", type=Path, default=OUT_GROUPS)
+    args = parser.parse_args()
+    mc3_path, pheno_path = args.mc3, args.phenotype
 
     mc3 = _read_tsv_gz(mc3_path)
     pheno = _read_tsv_gz(pheno_path)
@@ -288,6 +345,8 @@ def main() -> None:
             "Unique primary_disease (normalized) examples:\n" + "\n".join(uniq[:80])
         )
 
+    if ph.groupby("sample")["cancer"].nunique().gt(1).any():
+        _die("Conflicting cancer labels for the same normalized sample")
     ph = ph.drop_duplicates(subset=["sample"], keep="first")
     print("[make_groups] phenotype mapped samples:", len(ph))
     print("[make_groups] cancers:", sorted(ph["cancer"].unique().tolist()))
@@ -344,26 +403,50 @@ def main() -> None:
     # -------------------------
     # groups table (mapped cancers only)
     # -------------------------
-    df = ph[["sample", "cancer"]].copy()
-    df["group"] = df["sample"].map(lambda x: "TP53_mut" if x in tp53_mut else "TP53_wt")
-
-    OUT_GROUPS.mkdir(parents=True, exist_ok=True)
-
+    assessment = None
+    if args.assessed_samples is not None:
+        assessment = pd.read_csv(args.assessed_samples, sep="\t", dtype=str).fillna("")
+    df = assign_tp53_groups(ph[["sample", "cancer"]], tp53_mut, assessment)
+    if assessment is None:
+        print("[make_groups] No assessment manifest: non-mutants remain TP53_unknown")
     cancers = sorted(df["cancer"].unique().tolist())
+    destinations = [args.outdir / f"{c}.groups.tsv" for c in cancers]
+    destinations += [args.outdir / "PANCAN.groups.tsv", args.outdir / "groups.provenance.json"]
+    if any(p.exists() for p in destinations):
+        _die("Group outputs already exist; use a new --outdir")
+    args.outdir.mkdir(parents=True, exist_ok=True)
     for cancer in cancers:
         g = df[df["cancer"] == cancer].copy()
-        out_path = OUT_GROUPS / f"{cancer}.groups.tsv"
-        g[["sample", "group"]].to_csv(out_path, sep="\t", index=False)
+        out_path = args.outdir / f"{cancer}.groups.tsv"
+        g[["sample", "group", "group_basis"]].to_csv(out_path, sep="\t", index=False)
 
         n_mut = int((g["group"] == "TP53_mut").sum())
         n_wt = int((g["group"] == "TP53_wt").sum())
         if n_mut == 0 or n_wt == 0:
             print(f"[make_groups] WARNING: {cancer} has n_mut={n_mut}, n_wt={n_wt}")
 
-    master = OUT_GROUPS / "PANCAN.groups.tsv"
+    master = args.outdir / "PANCAN.groups.tsv"
     master.write_text(
-        df[["sample", "cancer", "group"]].to_csv(sep="\t", index=False),
+        df[["sample", "cancer", "group", "group_basis"]].to_csv(sep="\t", index=False),
         encoding="utf-8",
+    )
+
+    def sha256(path: Path) -> str:
+        with path.open("rb") as handle:
+            return hashlib.file_digest(handle, "sha256").hexdigest()
+
+    provenance = {
+        "mc3_sha256": sha256(mc3_path),
+        "phenotype_sha256": sha256(pheno_path),
+        "assessment_sha256": sha256(args.assessed_samples) if args.assessed_samples else None,
+        "mutation_filter": "FILTER=PASS" if filter_col is not None else "no_FILTER_column",
+        "protein_altering_classes": sorted(PROTEIN_ALTERING),
+        "group_counts": df.groupby(["cancer", "group"]).size().unstack(fill_value=0).to_dict(),
+        "barcode_unit": "TCGA_sample_15_characters",
+        "wild_type_definition": "assessed_no_qualifying_protein_altering_TP53_call",
+    }
+    (args.outdir / "groups.provenance.json").write_text(
+        json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
     )
 
     print("[make_groups] OK")
