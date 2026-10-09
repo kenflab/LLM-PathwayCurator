@@ -6,8 +6,7 @@ on:
       - "src/llm_pathway_curator/**"
       - "tests/**"
       - "paper/revision/CRM_R1/**"
-      - "paper/scripts/fig2_run_pipeline.py"
-      - "paper/scripts/figS2_run_collections_pipeline.py"
+      - "paper/scripts/**"
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
@@ -20,8 +19,7 @@ on:
       - "src/llm_pathway_curator/**"
       - "tests/**"
       - "paper/revision/CRM_R1/**"
-      - "paper/scripts/fig2_run_pipeline.py"
-      - "paper/scripts/figS2_run_collections_pipeline.py"
+      - "paper/scripts/**"
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
@@ -30,6 +28,21 @@ on:
       - ".github/workflows/ci.yml"
 
 jobs:
+  tcga-input-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install limma
+        shell: Rscript {0}
+        run: |
+          install.packages("BiocManager")
+          BiocManager::install("limma", ask = FALSE, update = FALSE)
+      - name: Test TCGA gene identity and group contracts
+        run: Rscript tests/test_tcga_inputs.R
+
   test:
     runs-on: ubuntu-latest
     strategy:

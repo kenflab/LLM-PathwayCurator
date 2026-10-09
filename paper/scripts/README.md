@@ -5,6 +5,82 @@ This directory contains the **canonical, script-based** pipelines used to reprod
 For the authoritative mapping of **inputs ↔ scripts ↔ outputs**, see [`paper/FIGURE_MAP.csv`](../FIGURE_MAP.csv).
 Notebooks are exploratory and are not required for reproduction.
 
+> **TCGA input correction (2026-10-09):** the archived TCGA rankings contain
+> numeric row indices exported as gene identifiers, which were then interpreted
+> as Entrez IDs. The old grouping code also treated samples without a qualifying
+> mutation record as WT without confirming assessment. These inputs and their
+> dependent TCGA figures require regeneration; their q-values do not establish
+> a biological absence of enrichment. Archived research outputs are retained.
+
+## Corrected TCGA inputs
+
+- `fig2_make_groups.py` now distinguishes `TP53_mut`, `TP53_wt`, and
+  `TP53_unknown`. WT requires a reviewed TSV with `sample` and `tp53_assessed`
+  (`true`/`false` or `1`/`0`). This file must be based on assay/sample metadata and
+  TP53 assessment, not inferred from the presence of other mutation records.
+  Without it, samples lacking qualifying TP53 calls remain UNKNOWN.
+- Matching uses the 15-character TCGA sample barcode, including sample type;
+  different aliquots can match, but normal and tumor sample types are not merged.
+- `fig2_deg_rank.R` retains gene identity in an explicit limma annotation column.
+  Numeric Xena IDs are resolved through the versioned `--gene-map` table
+  (`gene_id`, `gene_symbol`; default: `resources/gene_id_maps/id_map.tsv.gz`).
+  Ambiguous mappings stop the run. Unmapped numeric rows are excluded and listed
+  individually in the mapping audit. Symbol rows are retained unchanged; this
+  does not automatically resolve historical symbol aliases.
+- Duplicate resolved symbols are averaged on the supplied log-expression scale
+  per sample, before fitting. Rankings contain unique symbols and an explicit
+  `gene_id_type=symbol`; scores are never associated through `topTable` row names.
+- Both Hallmark and collection-specific fgsea scripts require the new ranking
+  contract and use `msigdbr` **gene symbols**. Numeric row-index rankings and
+  rankings without a declared namespace are rejected. Exact ties use gene-name
+  order without changing t statistics. Membership snapshots, input checksums,
+  mapping decisions, sample counts and package versions accompany new outputs.
+- UNKNOWN samples are excluded from differential expression. The fit requires
+  at least two assessed samples per arm and ten overall; passing this technical
+  minimum does not establish adequate power or a suitable biological comparison.
+- All corrected TCGA input scripts refuse to replace existing outputs. Use fresh
+  directories. They do not relock studies, run language models, or update figures.
+
+Example from the repository root, after preparing a genuine assessment table:
+
+```bash
+export TCGA_RERUN="/absolute/path/to/a/new/tcga_input_run"
+export TP53_ASSESSMENT="/absolute/path/to/reviewed_tp53_assessment.tsv"
+
+python paper/scripts/fig2_make_groups.py \
+  --assessed-samples "$TP53_ASSESSMENT" --outdir "$TCGA_RERUN/groups"
+
+Rscript paper/scripts/fig2_deg_rank.R HNSC \
+  --groups "$TCGA_RERUN/groups/HNSC.groups.tsv" \
+  --outdir "$TCGA_RERUN/rankings"
+
+Rscript paper/scripts/fig2_fgsea_to_evidence_table.R HNSC \
+  --rank "$TCGA_RERUN/rankings/HNSC.deg_ranking.tsv" \
+  --outdir "$TCGA_RERUN/evidence_tables"
+
+Rscript paper/scripts/figS2_fgsea_to_evidence_table.R HNSC \
+  --rank "$TCGA_RERUN/rankings/HNSC.deg_ranking.tsv" \
+  --collection C2 --subcategory CP:REACTOME \
+  --outdir "$TCGA_RERUN/evidence_tables"
+```
+
+Use `--mc3`/`--phenotype` for external raw files in the group builder and
+`--expression`/`--gene-map` for external inputs in the ranking script. The
+example retains the existing unadjusted MUT-minus-WT contrast; it does not add
+clinical covariates or change the scientific design. Reassess cohort eligibility
+(especially a small OV WT arm) before producing manuscript figures.
+
+The Python fgsea adapter converts already computed enrichment results; it cannot
+repair upstream sample or gene identities from a leading-edge list. It rejects
+ambiguous column aliases and invalid adjusted p-values and preserves an explicit
+`gene_id_type` declaration without certifying its accuracy. Numeric Entrez IDs
+remain valid adapter inputs; a short consecutive leading-edge list alone is not
+evidence of the TCGA row-index failure.
+
+Regression checks: `pytest tests/test_tcga_inputs.py tests/test_fgsea_input_integrity.py`
+and `Rscript tests/test_tcga_inputs.R` (requires limma). The R test reproduces the
+duplicate-ID failure with real limma and checks the corrected gene/score mapping.
+
 > Sanity check (recommended): run the deterministic, LLM-free demo first: [`examples/demo/`](../../examples/demo/).
 
 ## Conventions
