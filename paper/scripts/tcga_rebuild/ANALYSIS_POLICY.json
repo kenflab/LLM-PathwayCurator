@@ -1,0 +1,36 @@
+{
+  "analysis_id": "TCGA_MC3_OV_WGA_with_GDC_discordance_guard_20261009_OVFIX1",
+  "status": "new diagnostic reanalysis; existing study locks unchanged",
+  "code_commit": "764b18ec0140d9c878bf7866f129e6513ac751d4",
+  "cohorts": [
+    "BRCA",
+    "HNSC",
+    "LUAD",
+    "LUSC",
+    "OV",
+    "SKCM",
+    "UCEC"
+  ],
+  "sample_type": "01 primary solid tumor only",
+  "assay_evidence": "membership in official MC3 best tumor-normal pairing table, matched at 15-character sample level",
+  "genotype_policy": "OV: accept exact PASS or wga-only TP53 variants and D/W/X/G DNA analytes; exclude native_wga_mix, badseq, contest and only-nonpreferred context. Other six cohorts retain the previous native-DNA/PASS policy.",
+  "RNA_QC": "RNASeqV2 platform, explicit Do_not_use=False and pathology exclusion=0; ambiguous or missing QC excluded",
+  "WT_definition": "Operationally no qualifying MC3 TP53 call after the declared assay exclusions; OV known GDC-positive/MC3-negative discordances excluded. No biological WT or per-base callability guarantee.",
+  "ambiguous_TP53": "exclude non-mutants with filtered protein-altering TP53 calls or classes outside the current seven-class definition",
+  "minimum_fit": "current tool requirement: >=2 samples per arm and >=10 total; minor arm <20 flagged as small, not silently dropped",
+  "comparison": "unadjusted TP53_mut minus TP53_wt, preserving the existing contrast",
+  "WGA_rescue": "OV only: bare wga tag, as specified by Bailey et al. Cell 2018. Do not admit wga plus other flags.",
+  "q_threshold": 0.05,
+  "enrichment": "current repository fgseaMultilevel; Hallmark; seed=0; minSize=15; maxSize=500; nproc=1",
+  "inference_scope": "Corrected diagnostic reanalysis; not a TP53 prevalence estimate for the whole TCGA-OV project, a causal TP53 effect, or an LLM accuracy result.",
+  "duplicate_expression_samples": "Exclude all columns sharing a sample identifier; no arbitrary replicate selection",
+  "bundle_revision": "OVFIX1",
+  "OV_wga_only": true,
+  "OV_GDC_positive_guard": true,
+  "OV_GDC_rule": "Exclude MC3-call-negative OV samples if the bundled current GDC snapshot contains a protein-altering TP53 call in the same case. Do not relabel them MUT or infer WT from absence in GDC. This is a case-level discordance guard, not sample-matched genotype integration.",
+  "references": [
+    "https://doi.org/10.1016/j.cell.2018.02.060",
+    "https://gdc.cancer.gov/about-data/publications/ov_2011",
+    "https://portal.gdc.cancer.gov/genes/ENSG00000141510"
+  ]
+}

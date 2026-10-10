@@ -179,3 +179,10 @@ This pipeline evaluates audited outcomes across gene set collections (Hallmark /
 ### Notes:
 - All acceptance decisions are mechanical (audit suite).
 - Human labels are not required for this figure.
+
+## Reproduce the corrected TCGA sample policy
+
+See [tcga_rebuild/README.md](tcga_rebuild/README.md) for the OV WGA-only policy,
+MC3 call-negative comparator definition, saved GDC discordance check, and
+rebuild entry point. The saved-output q-baseline audit is
+`summarize_tcga_source_baseline.py`.
