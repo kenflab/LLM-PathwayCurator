@@ -10,7 +10,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-RULESET = "enrichment-source-checks/1.2"
+RULESET = "enrichment-source-checks/1.3"
 _NUMBER = r"[-+−]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-−]?\d+)?"
 _NUMERIC = re.compile(
     r"\b(?P<kind>NES|ES|q(?:[-_ ]?value)?|qval|padj|FDR|"
@@ -24,7 +24,8 @@ _NUMERIC = re.compile(
 _SIGNIFICANCE = re.compile(
     r"\b(?P<neg>not\s+|non[- ]?)?"
     r"(?:statistically\s+significant|significant\s+"
-    r"(?:enrichment|association|difference|change))\b",
+    r"(?:enrichment|association|difference|change|(?:up|down)[- ]?regulation)|"
+    r"significantly\s+(?:up|down)[- ]?regulated)\b",
     re.I,
 )
 _DIRECTION = re.compile(r"\b(?P<pol>positive(?:ly)?|negative(?:ly)?)\s+enrich(?:ment|ed)\b", re.I)
@@ -42,6 +43,9 @@ _NEGATION = re.compile(
     re.I,
 )
 _UNADJUSTED_BASIS = re.compile(r"\b(?:unadjusted|uncorrected|nominal(?:ly)?)\b", re.I)
+_NONSTATISTICAL_PREFIX = re.compile(
+    r"\b(?:biologically|clinically|functionally|practically)\s+$", re.I
+)
 
 
 def _local_clause(text: str, start: int, end: int) -> str:
@@ -163,7 +167,16 @@ def inspect_text(text: str, evidence: dict[str, Any], cutoff: float) -> dict[str
     for match in _SIGNIFICANCE.finditer(text):
         negative = bool(match["neg"])
         qval = evidence.get("qval")
-        if _UNADJUSTED_BASIS.search(_local_clause(text, match.start(), match.end())):
+        if _NONSTATISTICAL_PREFIX.search(text[: match.start()]):
+            add(
+                match,
+                "SIGNIFICANCE_BASIS_REQUIRES_REVIEW",
+                "REVIEW",
+                "This significance wording is explicitly non-statistical. "
+                "The source adjusted value alone cannot verify that statement.",
+                expected=qval,
+            )
+        elif _UNADJUSTED_BASIS.search(_local_clause(text, match.start(), match.end())):
             add(
                 match,
                 "SIGNIFICANCE_BASIS_REQUIRES_REVIEW",

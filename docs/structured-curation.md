@@ -120,3 +120,13 @@ equate a shared claim ID with the same text and context shown to a rater, pool
 multiple raters by discarding duplicates, or estimate a new performance score.
 Its saved WNT example distinguishes the original model rationale from the
 source enrichment statistic and adjusted q-value. Archived outputs are preserved.
+
+## Significance wording
+
+Source checks recognize “significant up-regulation” and “significantly downregulated”,
+including joined, spaced and hyphenated up/down variants, against the declared
+adjusted-value cutoff. Negation, explicit unadjusted significance and explicitly
+biological or clinical significance retain separate handling. These checks neither
+establish gene-expression regulation from enrichment nor approve free prose.
+Unsupported wording still requires human review; the supported expressions are not
+a complete natural-language parser.
