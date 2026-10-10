@@ -1,0 +1,111 @@
+{
+  "code_commit": "764b18ec0140d9c878bf7866f129e6513ac751d4",
+  "repository": "kenflab/LLM-PathwayCurator",
+  "full_mc3": {
+    "url": "https://api.gdc.cancer.gov/data/1c8cfe5f-e52d-41ba-94da-f15ea1337efc",
+    "retrieved_utc": "2026-10-09T22:17:10.342702+00:00",
+    "bytes": 753339089,
+    "md5": "639ad8f8386e98dacc22e439188aa8fa",
+    "expected_md5": "639ad8f8386e98dacc22e439188aa8fa",
+    "sha256": "cb0caa0e3a80a24cc4ccaaacc95c690a4032cc87c8ac78519a5b33f3aa3f6b81",
+    "seconds": 12.695019006729126
+  },
+  "public_files": [
+    {
+      "path": "public_inputs/pairing_of_best_bams_2016-04-05.txt",
+      "sha256": "2c60d4a5174e83470dc65bc48d312ff719a508a4bb787a372a55d0f1df8e5a08",
+      "bytes": 6648920,
+      "download": {
+        "url": "https://api.gdc.cancer.gov/data/752fa601-8e54-4ce1-9184-9e15ea742e78",
+        "retrieved_utc": "2026-10-09T22:14:44.962009+00:00",
+        "bytes": 6648920,
+        "sha256": "2c60d4a5174e83470dc65bc48d312ff719a508a4bb787a372a55d0f1df8e5a08"
+      }
+    },
+    {
+      "path": "public_inputs/merged_sample_quality_annotations.tsv",
+      "sha256": "e3190253ccb55f9f5ccc558b7f994577b2e90c2ee306814231b7d5f077364deb",
+      "bytes": 8463670,
+      "download": {
+        "url": "https://api.gdc.cancer.gov/data/1a7d7be8-675d-4e60-a105-19d4121bdebf",
+        "retrieved_utc": "2026-10-09T22:14:59.914241+00:00",
+        "bytes": 8463670,
+        "sha256": "e3190253ccb55f9f5ccc558b7f994577b2e90c2ee306814231b7d5f077364deb"
+      }
+    },
+    {
+      "path": "public_inputs/TCGA_phenotype_dense.tsv.gz",
+      "sha256": "ac3923bb155ada3391b653a811f6c8c9c4734593b0c2b0a1555728928d83e5a2",
+      "bytes": 61165,
+      "download": {
+        "url": "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz",
+        "retrieved_utc": "2026-10-09T22:15:01.144953+00:00",
+        "bytes": 61165,
+        "sha256": "ac3923bb155ada3391b653a811f6c8c9c4734593b0c2b0a1555728928d83e5a2"
+      }
+    },
+    {
+      "path": "public_inputs/xena_mutation_metadata.json",
+      "sha256": "00eda889e5497417c5bee716bff50f4eeda6d92f12b7928b391df10e61f65225",
+      "bytes": 1178,
+      "download": {
+        "url": "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/mc3.v0.2.8.PUBLIC.xena.json",
+        "retrieved_utc": "2026-10-09T22:15:01.220222+00:00",
+        "bytes": 1178,
+        "sha256": "00eda889e5497417c5bee716bff50f4eeda6d92f12b7928b391df10e61f65225"
+      }
+    },
+    {
+      "path": "public_inputs/mc3.TP53.all_filters.tsv.gz",
+      "sha256": "b8a3d214c39a7ec7c922e10b0aef7d377acb2a38c61c8fa04afb5f7310f106e8",
+      "bytes": 2499285,
+      "derived_from": "mc3.v0.2.8.PUBLIC.maf.gz; all 3,600,963 rows scanned, without FILTER selection"
+    },
+    {
+      "path": "public_inputs/mc3_sample_filter_inventory.json",
+      "sha256": "77fd9bb132eeb8f7b77868428207e48766bd526837ad1d1621ea9cfeb5a09daf",
+      "bytes": 2645178,
+      "derived_from": "mc3.v0.2.8.PUBLIC.maf.gz; all 3,600,963 rows scanned, without FILTER selection"
+    },
+    {
+      "path": "public_inputs/expression_duplicate_audit.json",
+      "bytes": 907,
+      "sha256": "276af317b1f8a279499f510c3a691776540aaf638d037260696f7f786aca8916",
+      "derived_from": "Full verified expression matrix; exact text comparison of all 20,531 rows"
+    },
+    {
+      "path": "public_inputs/hallmark.2026_1_Hs.memberships.tsv",
+      "bytes": 240820,
+      "sha256": "77b23637914b3ef7f6c5a683b96fd7615006c7478c889f0235aca75b21340b7f",
+      "derived_from": "msigdbr 26.1.1; Homo sapiens; collection H; MSigDB 2026.1.Hs; unique gs_name/gene_symbol pairs"
+    },
+    {
+      "path": "public_inputs/gdc_OV_TP53_occurrences.json",
+      "bytes": 1046273,
+      "sha256": "f6d832ad24b636f20b08e203ba7d7c2c7c45fe0030eaab61e06e74530c69f137",
+      "retrieved_utc": "2026-10-10",
+      "purpose": "OV case-level positive-call discordance guard only; not a WT or frequency denominator source"
+    },
+    {
+      "path": "public_inputs/gdc_OV_TP53_occurrences.url.txt",
+      "bytes": 567,
+      "sha256": "9db37f97788744e3fc9a3715c5474498dc386a9cc0e21ed00a2f74d0490187f3",
+      "retrieved_utc": "2026-10-10",
+      "purpose": "OV case-level positive-call discordance guard only; not a WT or frequency denominator source"
+    },
+    {
+      "path": "public_inputs/gdc_status.json",
+      "bytes": 221,
+      "sha256": "a8b1c69f9cfc678486e1c897aee6d878f47fab9cb4c60eb6818598bbe30a7139",
+      "retrieved_utc": "2026-10-10",
+      "purpose": "OV case-level positive-call discordance guard only; not a WT or frequency denominator source"
+    }
+  ],
+  "expression": {
+    "url": "https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/EB%2B%2BAdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.xena.gz",
+    "bytes": 331000731,
+    "sha256": "a00532ec86af8c07630c618f10f6277f09c484d0a9c17db5901edf95c7714b38"
+  },
+  "bundle_revision": "OVFIX1",
+  "supersedes_zip_sha256": "d4607d1cfc7a0981a25e8050b5c2169280736114a92c8aa21a96f4b8699ffa57"
+}
