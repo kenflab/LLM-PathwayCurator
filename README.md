@@ -58,6 +58,17 @@ Omit `--claims` to create a report from the enrichment table alone.
 Supply a new or empty output directory for each run. Previous reports and input
 files are preserved.
 
+## Visualize saved results
+
+```bash
+llm-pathway-curator plot-source --run-dir out/source_report --outdir out/source_plot
+```
+
+This writes PNG/PDF/SVG figures, the plotted table and an input-hash receipt.
+Source statistics, statistical selection and draft-check counts remain distinct.
+The [visualization guide](docs/visualization.md) explains the display and the
+retained `plot-ranked` packed-circle and bar plots for historical ranked inputs.
+
 ## Inputs
 
 The EvidenceTable TSV requires `term_id`, `term_name`, `source`, `stat`, `qval`,

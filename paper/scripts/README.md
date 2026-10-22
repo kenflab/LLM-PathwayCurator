@@ -1,8 +1,16 @@
 <!-- paper/scripts/README.md -->
 # Figure reproduction scripts (canonical)
 
-This directory contains the **canonical, script-based** pipelines used to reproduce manuscript figures and publication Source Data.
-For the authoritative mapping of **inputs ↔ scripts ↔ outputs**, see [`paper/FIGURE_MAP.csv`](../FIGURE_MAP.csv).
+For the current Figures 1–3 and Supplementary Data 1–4, start with the
+[figure reproduction guide](../revision/CRM_R1/FIGURE_REPRODUCTION.md) and
+[`paper/FIGURE_MAP.csv`](../FIGURE_MAP.csv). Upstream ranking and enrichment
+scripts in this directory remain in use. Saved-result manuscript renderers live
+under `paper/revision/CRM_R1/figures/` and accept external source-data folders.
+
+The older figure recipes below retain their **original figure numbering**.
+Their input/script/output mapping is preserved in the
+[original figure map](../revision/CRM_R1/archive/FIGURE_MAP_original.csv).
+They are historical reproduction instructions, not the current manuscript layout.
 Notebooks are exploratory and are not required for reproduction.
 
 > **TCGA input correction (2026-10-09):** the archived TCGA rankings contain

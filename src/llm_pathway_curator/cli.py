@@ -32,6 +32,7 @@ from .pipeline import RunConfig, run_pipeline
 from .ranked import write_claims_ranked_tsv
 from .schema import EvidenceTable
 from .viz_ranked import PlotRankedConfig, plot_ranked
+from .viz_source import plot_source
 
 
 def _p(path: str | Path) -> Path:
@@ -417,10 +418,17 @@ def cmd_plot_ranked(args: argparse.Namespace) -> None:
         bar_cmap=str(args.bar_cmap),
         bar_vmin=float(args.bar_vmin),
         bar_vmax=float(args.bar_vmax),
+        hide_module_labels=bool(args.hide_module_labels),
     )
 
     out = plot_ranked(cfg)
     print(f"[OK] wrote plot: {out}")
+
+
+def cmd_plot_source(args: argparse.Namespace) -> None:
+    """Plot a saved source report, including unselected and unchecked records."""
+    out = plot_source(args.run_dir, args.outdir, top_n=args.top_n)
+    print(f"[OK] wrote source plot: {out}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -537,13 +545,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_rank.add_argument("--fill-direction-if-na", action="store_true")
     p_rank.set_defaults(func=cmd_rank)
 
-    p_plot = sub.add_parser("plot-ranked", help="Plot ranked claims (packed circles or bars)")
+    p_source = sub.add_parser("plot-source", help="Plot saved source statistics and draft checks")
+    p_source.add_argument("--run-dir", required=True, help="Completed source-report directory")
+    p_source.add_argument("--outdir", required=True, help="New directory for figures and receipt")
+    p_source.add_argument(
+        "--top-n", type=int, default=50, help="Rows ordered by adjusted value; 0=all"
+    )
+    p_source.set_defaults(func=cmd_plot_source)
+
+    p_plot = sub.add_parser("plot-ranked", help="Plot historical ranked claims (circles or bars)")
     p_plot.add_argument("--mode", default="packed", choices=["packed", "bars"])
     p_plot.add_argument(
         "--in-tsv", default="", help="claims_ranked.tsv (recommended) or audit_log.tsv"
     )
     p_plot.add_argument("--run-dir", default="", help="Auto-detect TSV under this directory")
-    p_plot.add_argument("--out-png", required=True, help="Output PNG path")
+    p_plot.add_argument("--out-png", required=True, help="Output .png, .pdf or .svg path")
 
     p_plot.add_argument(
         "--decision", default="PASS", help="Filter decision/status (e.g., PASS or PASS,ABSTAIN)"
@@ -559,6 +575,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plot.add_argument("--size-min-norm", type=float, default=0.03)
     p_plot.add_argument("--min-term-label-r", type=float, default=0.09)
     p_plot.add_argument("--dark", action="store_true")
+    p_plot.add_argument("--hide-module-labels", action="store_true")
     p_plot.add_argument("--module-cmap", default="tab20")
     p_plot.add_argument(
         "--term-color-mode", default="module", choices=["score", "module", "direction"]

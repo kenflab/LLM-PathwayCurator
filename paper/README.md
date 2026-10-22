@@ -7,6 +7,12 @@ describes the updated public tool. Exact historical reproduction uses pinned
 commit `b069e8ad3d916618adcf26af0202748790c3ca20`. Historical outcomes are preserved;
 they are not performance estimates for the updated source workflow.
 
+For current Figures 1–3 and Supplementary Data 1–4, use the
+[figure reproduction guide](revision/CRM_R1/FIGURE_REPRODUCTION.md) and
+[current figure map](FIGURE_MAP.csv). The layout described below is historical;
+its [original map](revision/CRM_R1/archive/FIGURE_MAP_original.csv) remains available.
+The new map does not discard the upstream scripts or the saved adverse results.
+
 This folder contains the scripts and (when redistributable) frozen/derived artifacts used to reproduce the manuscript figures.
 
 **Canonical reproduction is script-based.**
@@ -45,7 +51,7 @@ Root: [`paper/source_data/BEATAML_TP53_v1/`](./source_data/BEATAML_TP53_v1)
 
 
 ## Publication Source Data (Excel/CSV exports)
-[`paper/journal_source_data/`](./journal_source_data) contains “Source Data” workbooks (e.g., [`SourceData_Fig2.xlsx`](./journal_source_data/SourceData_EDFig2.xlsx) and any exported CSVs used to populate them. Each workbook’s sheet mapping is documented inside the workbook and is linked from [`paper/FIGURE_MAP.csv`](./FIGURE_MAP.csv).
+[`paper/journal_source_data/`](./journal_source_data) contains “Source Data” workbooks (e.g., [`SourceData_Fig2.xlsx`](./journal_source_data/SourceData_EDFig2.xlsx) and any exported CSVs used to populate them. Each historical workbook’s sheet mapping is documented inside the workbook and in the [original figure map](revision/CRM_R1/archive/FIGURE_MAP_original.csv).
 
 ## Risk–coverage definition (Fig. 2; reused in ED figures)
 - **Coverage (PASS rate):** `n_pass / n_total` under a given stability threshold τ.
