@@ -1,5 +1,10 @@
 # Research script map
 
+For current manuscript Figures 1–3 and Supplementary Data 1–4, see the
+[figure reproduction guide](../FIGURE_REPRODUCTION.md). Existing runners and
+historical outputs remain available; old plotting filenames retain old figure numbers.
+
+
 Use the [revision README](../README.md) as the current entry point.
 The public installed tool is documented at the repository root.
 

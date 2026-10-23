@@ -83,6 +83,10 @@ rate or module count should be interpreted as utility, sensitivity or precision.
 
 ## Reproducible software demonstration
 
+Use `plot-source` to visualize a saved report's statistics and flat-draft checks;
+see the [visualization guide](visualization.md). The HTML remains the detailed
+view for support modules and structured proposals.
+
 ```bash
 python examples/structured_curation/run_demo.py --outdir out/curation_demo
 ```

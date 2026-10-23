@@ -424,8 +424,8 @@ def _find_input_tsv(run_dir: Path) -> Path:
     Priority:
     1) `run_dir/claims_ranked.tsv`
     2) `run_dir/audit_log.tsv`
-    If not found at the top level, recursively searches for either filename and
-    returns the lexicographically smallest match. Raises on failure.
+    If absent at the top level, accept exactly one nested run. Multiple runs
+    require an explicit --in-tsv path; never silently choose a cohort or version.
     """
     for name in ["claims_ranked.tsv", "audit_log.tsv"]:
         p = run_dir / name
@@ -435,8 +435,11 @@ def _find_input_tsv(run_dir: Path) -> Path:
     for name in ["claims_ranked.tsv", "audit_log.tsv"]:
         hits.extend(run_dir.rglob(name))
     hits = [p for p in hits if p.is_file() and p.stat().st_size > 0]
-    if hits:
-        return sorted(hits)[0]
+    parents = {p.parent for p in hits}
+    if len(parents) == 1:
+        return _find_input_tsv(next(iter(parents)))
+    if len(parents) > 1:
+        _die("[plot-ranked] Multiple nested runs found; select one with --in-tsv.")
     _die(f"[plot-ranked] Could not find claims_ranked.tsv or audit_log.tsv under: {run_dir}")
 
 
@@ -489,7 +492,10 @@ def _normalize_claims_ranked(
         lambda x: _simplify_term_label(x, drop_hallmark_prefix)
     )
 
-    out["score"] = pd.to_numeric(df[score_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    scores = pd.to_numeric(df[score_col], errors="coerce")
+    if not np.isfinite(scores).all():
+        _die(f"[plot-ranked] {score_col} must contain finite numeric scores for every row.")
+    out["score"] = scores.clip(lower=0.0)
 
     if dec_col:
         out["decision"] = _col_series(df, dec_col, default="NA").replace({"": "NA"})
@@ -529,7 +535,7 @@ def _normalize_audit_log(df: pd.DataFrame, drop_hallmark_prefix: bool) -> tuple[
     Notes
     -----
     - Score is computed as `stability * context_fit` using auto-detected columns.
-    - If stability/context columns are missing, the corresponding factor defaults to 1.0.
+    - Both factors must be present and finite; missing evidence is never assigned 1.0.
     - Direction is not inferred from audit_log here and defaults to 'na' (plotting mode
       can still color by module or score).
     """
@@ -555,12 +561,11 @@ def _normalize_audit_log(df: pd.DataFrame, drop_hallmark_prefix: bool) -> tuple[
         or ""
     )
 
-    if not stab_col:
-        df["_stab"] = 1.0
-        stab_col = "_stab"
-    if not ctx_col:
-        df["_ctx"] = 1.0
-        ctx_col = "_ctx"
+    if not stab_col or not ctx_col:
+        _die(
+            "[plot-ranked] Historical audit plotting requires both stability and context "
+            "scores. For a current source report, use plot-source --run-dir ... --outdir ..."
+        )
 
     out = pd.DataFrame(index=df.index)
     out["module_id"] = _col_series(df, module_col, default="NA").replace({"": "NA"})
@@ -583,8 +588,11 @@ def _normalize_audit_log(df: pd.DataFrame, drop_hallmark_prefix: bool) -> tuple[
         lambda x: _simplify_term_label(x, drop_hallmark_prefix)
     )
 
-    stab = pd.to_numeric(df[stab_col], errors="coerce").fillna(1.0).clip(lower=0.0)
-    ctx = pd.to_numeric(df[ctx_col], errors="coerce").fillna(1.0).clip(lower=0.0)
+    stab = pd.to_numeric(df[stab_col], errors="coerce")
+    ctx = pd.to_numeric(df[ctx_col], errors="coerce")
+    if not np.isfinite(stab).all() or not np.isfinite(ctx).all():
+        _die("[plot-ranked] Missing or nonfinite stability/context scores; no values imputed.")
+    stab, ctx = stab.clip(lower=0.0), ctx.clip(lower=0.0)
     out["score"] = (stab * ctx).clip(lower=0.0)
 
     out["decision"] = _col_series(df, dec_col, default="NA").replace({"": "NA"})
@@ -621,6 +629,9 @@ def _load_tbl(in_tsv: Path, drop_hallmark_prefix: bool) -> tuple[pd.DataFrame, s
     df = pd.read_csv(in_tsv, sep="\t")
     if df.empty:
         _die(f"[plot-ranked] Empty TSV: {in_tsv}")
+
+    if "decision_scope" in df and df["decision_scope"].eq("SOURCE_STATISTICAL_STATEMENT").any():
+        _die("[plot-ranked] Source report detected. Use plot-source --run-dir ... --outdir ...")
 
     name = in_tsv.name.lower()
     audit_name = name in {"audit_log.tsv", "audit.tsv", "audit_results.tsv"}
@@ -668,8 +679,9 @@ def _size_transform(scores: np.ndarray, gamma: float, min_norm: float) -> np.nda
     -----
     - Normalization is performed by dividing by the maximum finite score.
     - If max <= 0, returns an array of ones to avoid degenerate circles.
+    - Work on a copy: pandas/NumPy inputs may be read-only or share source memory.
     """
-    s = np.asarray(scores, dtype=float)
+    s = np.array(scores, dtype=float, copy=True)
     s[s < 0] = 0.0
     mx = float(np.nanmax(s)) if np.isfinite(np.nanmax(s)) else 0.0
     if mx <= 0:
@@ -1696,7 +1708,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bar-cmap", type=str, default="coolwarm")
     p.add_argument("--bar-vmin", type=float, default=float("nan"))
     p.add_argument("--bar-vmax", type=float, default=float("nan"))
-    p.add_argument("--fontsize", type=int, default=16, help="base font size (default 20)")
+    p.add_argument("--fontsize", type=int, default=16, help="base font size (default 16)")
     p.add_argument(
         "--hide-module-labels", action="store_true", help="Hide module M## labels (packed)"
     )

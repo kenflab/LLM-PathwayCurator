@@ -1,5 +1,10 @@
 # CRM R1 research workspace
 
+For current manuscript Figures 1–3 and Supplementary Data 1–4, see the
+[figure reproduction guide](FIGURE_REPRODUCTION.md). Existing runners and
+historical outputs remain available; old plotting filenames retain old figure numbers.
+
+
 This is the single entry point for revision analyses. The public tool is described
 in the [repository README](../../../README.md). Keep using the existing checkout
 and the existing external data root; no additional checkout is needed.
