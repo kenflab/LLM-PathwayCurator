@@ -1,11 +1,11 @@
 <!-- paper/scripts/README.md -->
-# Figure reproduction scripts (canonical)
+# Upstream and historical figure scripts
 
 For the current Figures 1–3 and Supplementary Data 1–4, start with the
 [figure reproduction guide](../revision/CRM_R1/FIGURE_REPRODUCTION.md) and
 [`paper/FIGURE_MAP.csv`](../FIGURE_MAP.csv). Upstream ranking and enrichment
 scripts in this directory remain in use. Saved-result manuscript renderers live
-under `paper/revision/CRM_R1/figures/` and accept external source-data folders.
+under `paper/revision/CRM_R1/figures/` and use the supplied `paper/revision/CRM_R1/data/` records.
 
 The older figure recipes below retain their **original figure numbering**.
 Their input/script/output mapping is preserved in the

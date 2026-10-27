@@ -1,0 +1,47 @@
+{
+  "fixed_q_cutoff": 0.05,
+  "material_source_error": {
+    "definition": "A definite contradiction that changes a reported source number, group/direction, declared statistical decision, or evidence identity.",
+    "examples": [
+      "wrong NES or adjusted value",
+      "reversed comparison direction",
+      "false literal significance assertion under the declared adjusted-value cutoff",
+      "wrong source identity"
+    ],
+    "rounding": "Ordinary rounding to the displayed precision is allowed; percent units and inequalities retain their meaning.",
+    "missing_numbers": "Missing explicit numbers are recorded as missing coverage, not automatically as false numbers.",
+    "missing_or_ambiguous_source": "Uncertain and retained in the case census; not treated as a proven falsehood."
+  },
+  "statistical_language": {
+    "literal_significance": "Record a mismatch only for an unambiguous significant/non-significant assertion contradicted by the declared source cutoff.",
+    "qualitative_strength": "Moderate/strong/suggestive wording is evaluated separately; it does not become a literal significance claim solely because q is above or below 0.05.",
+    "biological_effect": "Statistical significance does not establish a causal effect or the occurrence/activity of the named biological event."
+  },
+  "biological_interpretation": {
+    "hypotheses_permitted": true,
+    "presentation_categories": [
+      "SOURCE_OBSERVATION",
+      "EXPLICIT_CANDIDATE_HYPOTHESIS",
+      "PRESENTED_AS_ESTABLISHED_BIOLOGICAL_FINDING",
+      "AMBIGUOUS"
+    ],
+    "support_categories": [
+      "SUPPORTED_BY_PROVIDED_RECORD",
+      "SUPPORTED_BY_SEPARATELY_CHECKED_EXTERNAL_EVIDENCE",
+      "NOT_ESTABLISHED_BY_PROVIDED_EVIDENCE",
+      "UNASSESSABLE"
+    ],
+    "separate_questions": [
+      "How is the statement presented?",
+      "What provided or independently checked evidence supports it?"
+    ],
+    "hypothesis_rule": "A useful, explicitly qualified hypothesis may be retained with its evidence limits. It is not automatically counted as a material source error or as biologically validated.",
+    "assertion_rule": "Claims of measured activity, mechanism, causality, functional loss or phenotype require corresponding evidence. Evaluate unsupported established assertions separately from qualified hypotheses.",
+    "plausibility": "Expert plausibility judgments and external biological support remain separate; a pathway name or tool warning is not their gold standard."
+  },
+  "reference_rating_rule": "Reference judges use source records and the rubric, without treating tool flags as truth.",
+  "provenance": {
+    "source_rubric_sha256": "0a95b9343ba5212169b0bd209f43ce98a493e7fab7008224f57986368af31127",
+    "export_scope": "Definitions reproduced from the supplied rubric; internal status and calibration identifiers omitted. Japanese instructions accompanied unchanged English source texts. No labels recoded."
+  }
+}

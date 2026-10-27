@@ -1,68 +1,38 @@
-<!-- paper/README.md -->
-# Paper artifacts (reproducible figures)
+# Manuscript analyses and figures
 
-These are historical manuscript artifacts. The [revision workspace](revision/CRM_R1/README.md)
-is the current research entry point; the [repository README](../README.md)
-describes the updated public tool. Exact historical reproduction uses pinned
-commit `b069e8ad3d916618adcf26af0202748790c3ca20`. Historical outcomes are preserved;
-they are not performance estimates for the updated source workflow.
+Start from the repository root after installing the project:
 
-For current Figures 1–3 and Supplementary Data 1–4, use the
-[figure reproduction guide](revision/CRM_R1/FIGURE_REPRODUCTION.md) and
-[current figure map](FIGURE_MAP.csv). The layout described below is historical;
-its [original map](revision/CRM_R1/archive/FIGURE_MAP_original.csv) remains available.
-The new map does not discard the upstream scripts or the saved adverse results.
+```bash
+python paper/revision/CRM_R1/reproduce.py --outdir out/manuscript_reproduction
+```
 
-This folder contains the scripts and (when redistributable) frozen/derived artifacts used to reproduce the manuscript figures.
+The [reproduction guide](revision/CRM_R1/FIGURE_REPRODUCTION.md) describes the
+checks and outputs. The [figure map](FIGURE_MAP.csv) links every main figure,
+supplementary figure, table and data set to its inputs and code.
 
-**Canonical reproduction is script-based.**
-- How to run: [`paper/scripts/README.md`](./scripts/README.md)
-- Figure ↔ inputs ↔ scripts ↔ outputs (source of truth): [`paper/FIGURE_MAP.csv`](./FIGURE_MAP.csv)
+| Resource | Contents |
+| --- | --- |
+| [Source data](revision/CRM_R1/data/README.md) | Enrichment records, original model text, anonymous returned categories and saved comparison results |
+| [Reproduction runner](revision/CRM_R1/reproduce.py) | Source checks, rating summaries, cohort bootstrap summaries and manuscript figures |
+| [Figure scripts](revision/CRM_R1/figures/) | Figures 2–3, S1–S4 and numerical table exports |
+| [TCGA rebuild](scripts/tcga_rebuild/README.md) | Recorded input snapshot and expression/enrichment rerun instructions |
+| [Split-replication code](revision/CRM_R1/archive/split_replication/README.md) | Verified discovery, membership and validation code for the 22-cohort comparison |
+| [Research scripts](revision/CRM_R1/scripts/README.md) | Retained experiment-specific runners and protocols |
 
-This repository includes pipelines for **Fig. 2** and supplementary/extended figures (**ED Fig. 2–4**). BioRender panels are provided as PDFs only.
+Figure 1 is author-supplied artwork. Tables describing software contracts are
+maintained in the manuscript and supplement. Rendering from saved records does
+not refit expression models. The guide identifies the upstream data, environments
+needed to repeat the upstream study fits.
 
+## Historical analyses
 
-## What is (and is not) redistributed
-- **Redistributed (when allowed):** derived tables, plotting exports, and rendered PDFs under [`paper/source_data/*/fig/`](./source_data/PANCAN_TP53_v1/fig) and [`paper/journal_source_data/`](./journal_source_data).
-- **Not redistributed:** controlled-access raw inputs (when applicable) and internal human-label files. When labels cannot be shared, we provide **templates/schemas** and deterministic merge/validation helpers in [`paper/scripts/`](./scripts/).
+Earlier outputs and scripts retain their original figure numbers. Use the
+[original figure map](revision/CRM_R1/archive/FIGURE_MAP_original.csv) and
+[historical recipes](scripts/README.md) for those analyses. `viz_ranked.py` supplied
+the original Figure 2e–f ranked visualizations; it remains available as the
+`plot-ranked` tool feature. Current manuscript figures use the dedicated scripts
+listed above.
 
-## Layout (by benchmark)
-Artifacts are organized by benchmark under [`paper/source_data/`](./source_data).
-
-
-### PANCAN_TP53_v1 (TCGA PanCan; Fig. 2 / ED Fig. 2–3)
-Root: [`paper/source_data/PANCAN_TP53_v1/`](./source_data/PANCAN_TP53_v1)
-- `raw/` public upstream inputs (fetched by scripts when missing)
-- [`derived/`](./source_data/PANCAN_TP53_v1/derived) intermediate cohort/ranking products
-- [`sample_cards/`](./source_data/PANCAN_TP53_v1/sample_cards) normalized Sample Cards used by runs
-- [`evidence_tables/`](./source_data/PANCAN_TP53_v1/evidence_tables) normalized EvidenceTables used by runs
-- [`out_fig2/`](./source_data/PANCAN_TP53_v1/out_fig2) run outputs for Fig. 2 (audit logs, reports, run metadata)
-- [`out_figS2/`](./source_data/PANCAN_TP53_v1/out_figS2) run outputs for ED Fig. 2 (collection analyses)
-- [`out_figS3/`](./source_data/PANCAN_TP53_v1/out_figS3) run outputs for ED Fig. 3 (LLM-assisted slice)
-- [`fig/`](./source_data/PANCAN_TP53_v1/fig) rendered figure PDFs
-
-
-### BEATAML_TP53_v1 (BeatAML2; ED Fig. 4)
-Root: [`paper/source_data/BEATAML_TP53_v1/`](./source_data/BEATAML_TP53_v1)
-- `raw/` BeatAML2 *processed/harmonized* tables used by the pipeline (fetched by scripts when missing)
-- [`derived/`](./source_data/BEATAML_TP53_v1/derived), [`sample_cards/`](./source_data/BEATAML_TP53_v1/sample_cards), [`evidence_tables/`](./source_data/BEATAML_TP53_v1/evidence_tables) as above
-- [`out_figS4/`](./source_data/BEATAML_TP53_v1/out_figS4) run outputs for ED Fig. 4
-- [`fig/`](./source_data/BEATAML_TP53_v1/fig) rendered figure PDFs
-
-
-## Publication Source Data (Excel/CSV exports)
-[`paper/journal_source_data/`](./journal_source_data) contains “Source Data” workbooks (e.g., [`SourceData_Fig2.xlsx`](./journal_source_data/SourceData_EDFig2.xlsx) and any exported CSVs used to populate them. Each historical workbook’s sheet mapping is documented inside the workbook and in the [original figure map](revision/CRM_R1/archive/FIGURE_MAP_original.csv).
-
-## Risk–coverage definition (Fig. 2; reused in ED figures)
-- **Coverage (PASS rate):** `n_pass / n_total` under a given stability threshold τ.
-- **Human risk (optional):** fraction of **human non-acceptable** labels among audit-PASS claims  
-  (`(SHOULD_ABSTAIN + REJECT) / audit-PASS among labeled`; Supplementary Table 5).
-
-Human labels are optional and only required for human-risk panels. Templates and deterministic merge/validation helpers are provided in [`paper/scripts/`](./scripts).
-
-
-## Provenance (recommended)
-Each run directory persists machine-readable metadata (e.g., `run_meta.json`, `run_meta.runner.json`) alongside audit logs and reports. Upstream fetch scripts may additionally record input identifiers/checksums for traceability (see [`paper/FIGURE_MAP.csv`](./FIGURE_MAP.csv)).
-
-
-> Sanity check (recommended): run the deterministic, LLM-free demo first: [`examples/demo/`](../examples/demo/).
+For exact pre-reorganization paths, use commit
+[`b069e8a`](https://github.com/kenflab/LLM-PathwayCurator/tree/b069e8ad3d916618adcf26af0202748790c3ca20).
+Original locks, null results and adverse comparisons remain unchanged.

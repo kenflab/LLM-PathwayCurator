@@ -1,0 +1,91 @@
+{
+  "schema": "split-membership-execution-record/public-1",
+  "source_record_hashes": {
+    "membership_manifest.json": "839d0921cd0e54abe6915736cb4d0b48bf42eda9aa3ae24d7c0ce3aeaf2dbe6a",
+    "membership_export_manifest.json": "8abe03b1df8fb74097e99a4a07d1944782233918d543af5b989c860bf5a31209",
+    "audit_run_signature.json": "c02f23265085f1cb09c2883b4fea5c2040b6fb94e6094d00fc907cc127a979cc"
+  },
+  "hash_reference_chain_verified": true,
+  "audit_run_signature": {
+    "context_backend": "ollama",
+    "context_model": "llama3.1:8b",
+    "context_temperature": 0,
+    "git_head": "e4698b836986b10550c626763480678b6766897a",
+    "hallmark_manifest_sha256": "74bb7079f0723fad123335546f8fae6b66fbc7dea89f3e5777bce75545ee0721",
+    "numerical_manifest_sha256": "04d0724d6ed3c6ae3598bab30e8407dbb1ccaf97df61fa22dca21893e4572985",
+    "ollama": {
+      "model": "llama3.1:8b",
+      "model_id": "46e0c10c039e",
+      "version": "ollama version is 0.33.3"
+    },
+    "package_source_sha256": "44ba5bba30e69c6a60e40e7a4183787fa33046119f9003457e9d37874197a22c",
+    "protocol_sha256": "2d51e90aa49c5c4d07557122d9b90ed87cba543b9631938a93072624bff94f5a",
+    "python": "3.11.9 (v3.11.9:de54cf5be3, Apr  2 2024, 07:12:50) [Clang 13.0.0 (clang-1300.0.29.30)]",
+    "schema_version": "CRM_R1_P2B_AUDIT_RUN_SIGNATURE_v14_1_3",
+    "script_sha256": "6bb63f6932872c0caa7d8a39eabeab2dfacf26e79b28ee416d07db31228c5794",
+    "statistics_manifest_sha256": "9c17aad60aca94b1af28457000aa9e2f67901bce1a457a6f92c353f6368e50e8"
+  },
+  "membership_export": {
+    "cohort_split_pairs": 440,
+    "context_review": {
+      "backend": "ollama",
+      "fallback_allowed": false,
+      "mode": "llm",
+      "model": "llama3.1:8b",
+      "ollama": {
+        "model": "llama3.1:8b",
+        "model_id": "46e0c10c039e",
+        "version": "ollama version is 0.33.3"
+      }
+    },
+    "created_at_utc": "2026-09-06T17:29:57.229492+00:00",
+    "human_ratings_read": false,
+    "methods": [
+      "raw_pool",
+      "q_value_matched",
+      "stability_matched",
+      "full_audit"
+    ],
+    "rows": 88000,
+    "schema_version": "CRM_R1_P2B_DISCOVERY_MEMBERSHIP_EXPORT_v14_1_3",
+    "software_versions": {
+      "matplotlib": "3.11.1",
+      "numpy": "2.4.6",
+      "pandas": "3.0.5",
+      "platform": "macOS-26.6.1-arm64-arm-64bit",
+      "python": "3.11.9"
+    },
+    "status": "DISCOVERY_MEMBERSHIP_EXPORT_COMPLETE_NOT_YET_LOCKED",
+    "terms_per_pair": 50,
+    "validation_outcomes_read": false,
+    "inputs": {
+      "audit_run_signature": {
+        "filename": "audit_run_signature.json",
+        "sha256": "c02f23265085f1cb09c2883b4fea5c2040b6fb94e6094d00fc907cc127a979cc"
+      },
+      "hallmark_manifest": {
+        "filename": "hallmark_manifest.json",
+        "sha256": "74bb7079f0723fad123335546f8fae6b66fbc7dea89f3e5777bce75545ee0721"
+      },
+      "numerical_manifest": {
+        "filename": "fgsea_numerical_manifest.json",
+        "sha256": "04d0724d6ed3c6ae3598bab30e8407dbb1ccaf97df61fa22dca21893e4572985"
+      },
+      "statistics_manifest": {
+        "filename": "discovery_statistics_manifest.json",
+        "sha256": "9c17aad60aca94b1af28457000aa9e2f67901bce1a457a6f92c353f6368e50e8"
+      }
+    },
+    "outputs": {
+      "counts": {
+        "filename": "discovery_membership_counts.tsv",
+        "sha256": "ca3e9ab83862e1b65aae9c653dbcc892a139556436613a146efbee646292208a"
+      },
+      "memberships": {
+        "filename": "discovery_memberships_v14_1_3_1.tsv",
+        "sha256": "6aeb3466da660d076b8407b03a55ef48a8cce117b4b1fa466d682df3e2353706"
+      }
+    }
+  },
+  "transformation": "Public derivative: package_root omitted and absolute file paths replaced by filenames. Source-record hashes refer to the original records, not this derivative."
+}

@@ -1,0 +1,8 @@
+cancer	n_mut	n_call_negative	n_candidates	q_baseline_selected	source_selected	selection_difference_count	all_source_candidates_retained	n_modules_all_candidates	n_overlap_edges	submitted_text_count	biological_accuracy_evaluated
+BRCA	260	502	50	27	27	0	True	38	14	0	False
+HNSC	348	145	50	21	21	0	True	37	16	0	False
+LUAD	216	235	50	25	25	0	True	39	14	0	False
+LUSC	389	73	50	32	32	0	True	37	15	0	False
+OV	164	7	50	16	16	0	True	38	14	0	False
+SKCM	9	94	50	9	9	0	True	42	8	0	False
+UCEC	168	263	50	29	29	0	True	36	14	0	False

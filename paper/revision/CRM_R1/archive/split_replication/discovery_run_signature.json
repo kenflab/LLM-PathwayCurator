@@ -1,0 +1,14 @@
+{
+  "schema_version": "CRM_R1_P2B_DISCOVERY_RUN_SIGNATURE_v14_1_3",
+  "script_sha256": "a6815d2bc41c4a7b172f23d5453753c6ab035d462234ee90fe81fe45751ec319",
+  "design_manifest_sha256": "f88017ae625e45ba135f519227a6159df77b302626bc58898892fe987bfe6e78",
+  "assignments_sha256": "bb7615eb6d7d3b9c522364ab825722cc39677e59109ababcd9043341162beec8",
+  "hallmark_manifest_sha256": "74bb7079f0723fad123335546f8fae6b66fbc7dea89f3e5777bce75545ee0721",
+  "gene_sets_sha256": "fe654c809d2eccc51601d48dcbda603dcbc110413aec93119bb63d4719aa8fb9",
+  "protocol_sha256": "2d51e90aa49c5c4d07557122d9b90ed87cba543b9631938a93072624bff94f5a",
+  "numerical_manifest_sha256": "04d0724d6ed3c6ae3598bab30e8407dbb1ccaf97df61fa22dca21893e4572985",
+  "numerical_amendment_sha256": "22911119dc810fd9b018523d9e3dcc9bc3aaf4db3b7a0502f0cf030205c2d2a2",
+  "expression_sha256": "a00532ec86af8c07630c618f10f6277f09c484d0a9c17db5901edf95c7714b38",
+  "nPermSimple": 10000,
+  "expression_feature_policy": "trim_labels; exclude_blank; exclude_all_numeric_unresolved; exclude_all_rows_for_every_duplicated_symbol"
+}

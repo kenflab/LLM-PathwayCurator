@@ -28,7 +28,7 @@ R07_PATH = "output/revision_v17/r07_20261005T190838308028Z.zip"
 R07_SHA = "f66c9a355083ca725e4783ff10f7465ff63b3e45a2d7044e46f40712052fd28b"
 DEX_SHA = "07a18f1618a802ed953d11f5153a6f42b73d178246bbc8a908c8f20841be9222"
 P3_FIELDS = ("eligible", "exclusion_reason", "evidence_grade", "direction_match", "context_match", "study_design", "data_overlap", "contradiction", "supporting_note", "curator_id")
-GUIDES = ("README.md", "manuscript/MANUSCRIPT_METHODS_RESULTS_DRAFT.md", "manuscript/REBUTTAL_RESPONSE_MATRIX.md", "manuscript/FIGURE2_LAYOUT_AND_LEGEND.md")
+GUIDES = ("README.md", "FIGURE_REPRODUCTION.md", "data/README.md")
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 

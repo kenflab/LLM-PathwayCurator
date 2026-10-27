@@ -1,0 +1,151 @@
+rater_id	claim_uid	claim_text	q1_statistical_support	q2_external_evidence	q3_overstatement
+P4_R1	claim_72962c408253e048	In HNSC tumors, Interferon Gamma Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_3365235f9b120db7	In HNSC tumors, Apical Surface is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R1	claim_a171add60bf459e3	In HNSC tumors, Notch Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_f11855d71e08f225	In HNSC tumors, Uv Response Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_f2d4915e283c5c2a	In HNSC tumors, Adipogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_eca56ff225727933	In HNSC tumors, Kras Signaling Up is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_493ccfee59d057ab	In HNSC tumors, Bile Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_d60046125f634dbc	In HNSC tumors, Mtorc1 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_c811a2346255cb4a	In HNSC tumors, Interferon Alpha Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_5e5f9b19dbdff870	In HNSC tumors, Cholesterol Homeostasis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_da36cafe4fe29b30	In HNSC tumors, Fatty Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_03b1ba5777f38e99	In HNSC tumors, Myc Targets V1 is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_3906e3bedb092604	In HNSC tumors, Allograft Rejection is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_b32362b085e0cada	In HNSC tumors, Il6 Jak Stat3 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_d2246ea537f61e30	In HNSC tumors, Androgen Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_a242564a3064e67c	In HNSC tumors, E2F Targets is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_c8c4ae9b27dd7c58	In HNSC tumors, Protein Secretion is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_a344e7d15c08c6e9	In HNSC tumors, Myc Targets V2 is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_1df255718bdd1b42	In HNSC tumors, Il2 Stat5 Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_4e337caa7de5c595	In HNSC tumors, Estrogen Response Late is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_6a150b52308b5e9f	In HNSC tumors, Coagulation is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_7f96d32248cab7c4	In HNSC tumors, Apical Junction is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_b9c353b3824bf2dd	In HNSC tumors, Glycolysis is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_34717972ea9a7680	In HNSC tumors, Kras Signaling Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_6162baa11859a079	In HNSC tumors, Inflammatory Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_c947cf81ef626ea0	In HNSC tumors, Heme Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_9071f62097a19b7a	In HNSC tumors, Dna Repair is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_8e8ce4996225c7e9	In HNSC tumors, Pi3K Akt Mtor Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_966557d4ca83f076	In HNSC tumors, Reactive Oxygen Species Pathway is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_508eee8ce8e559d7	In HNSC tumors, Unfolded Protein Response is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_4c25090852be8c18	In HNSC tumors, Peroxisome is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_2de9fb7c203d2d20	In HNSC tumors, Oxidative Phosphorylation is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_233020a313e3340a	In HNSC tumors, Tnfa Signaling Via Nfkb is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_06d555334fd8f8e2	In HNSC tumors, Wnt Beta Catenin Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_00c37c118195556a	In HNSC tumors, Spermatogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_c1ea09bb4e1aa578	In HNSC tumors, Uv Response Up is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_42d8b6de1a302a90	In HNSC tumors, Epithelial Mesenchymal Transition is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_08b35524261d0484	In HNSC tumors, P53 Pathway is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_aadc04d750e2f1a0	In HNSC tumors, G2M Checkpoint is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_d22f5704fb2920f1	In HNSC tumors, Mitotic Spindle is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_ef98a65760a25dbc	In HNSC tumors, Estrogen Response Early is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_70e480d6dfae7993	In HNSC tumors, Myogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_808d9bce26366f4c	In HNSC tumors, Complement is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	MAJOR_OVERSTATEMENT
+P4_R1	claim_bb5939a02bafd8cc	In HNSC tumors, Apoptosis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	MAJOR_OVERSTATEMENT
+P4_R1	claim_313afa6ddd813a37	In HNSC tumors, Angiogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_8192685c48c4ab86	In HNSC tumors, Pancreas Beta Cells is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_bfc5fd84eeb0c1a8	In HNSC tumors, Hypoxia is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_dc629b789c653c46	In HNSC tumors, Xenobiotic Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_b2d76cd8f5ca6ed1	In HNSC tumors, Tgf Beta Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R1	claim_50d3778c284c950e	In HNSC tumors, Hedgehog Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	INDIRECT	MAJOR_OVERSTATEMENT
+P4_R2	claim_72962c408253e048	In HNSC tumors, Interferon Gamma Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_3365235f9b120db7	In HNSC tumors, Apical Surface is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_a171add60bf459e3	In HNSC tumors, Notch Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_f11855d71e08f225	In HNSC tumors, Uv Response Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_f2d4915e283c5c2a	In HNSC tumors, Adipogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_eca56ff225727933	In HNSC tumors, Kras Signaling Up is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_493ccfee59d057ab	In HNSC tumors, Bile Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_d60046125f634dbc	In HNSC tumors, Mtorc1 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_c811a2346255cb4a	In HNSC tumors, Interferon Alpha Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_5e5f9b19dbdff870	In HNSC tumors, Cholesterol Homeostasis is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_da36cafe4fe29b30	In HNSC tumors, Fatty Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_03b1ba5777f38e99	In HNSC tumors, Myc Targets V1 is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_3906e3bedb092604	In HNSC tumors, Allograft Rejection is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_b32362b085e0cada	In HNSC tumors, Il6 Jak Stat3 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_d2246ea537f61e30	In HNSC tumors, Androgen Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_a242564a3064e67c	In HNSC tumors, E2F Targets is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_c8c4ae9b27dd7c58	In HNSC tumors, Protein Secretion is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_a344e7d15c08c6e9	In HNSC tumors, Myc Targets V2 is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_1df255718bdd1b42	In HNSC tumors, Il2 Stat5 Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_4e337caa7de5c595	In HNSC tumors, Estrogen Response Late is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_6a150b52308b5e9f	In HNSC tumors, Coagulation is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_7f96d32248cab7c4	In HNSC tumors, Apical Junction is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_b9c353b3824bf2dd	In HNSC tumors, Glycolysis is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_34717972ea9a7680	In HNSC tumors, Kras Signaling Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_6162baa11859a079	In HNSC tumors, Inflammatory Response is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_c947cf81ef626ea0	In HNSC tumors, Heme Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_9071f62097a19b7a	In HNSC tumors, Dna Repair is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	CONTRADICTED	NO_OVERSTATEMENT
+P4_R2	claim_8e8ce4996225c7e9	In HNSC tumors, Pi3K Akt Mtor Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_966557d4ca83f076	In HNSC tumors, Reactive Oxygen Species Pathway is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_508eee8ce8e559d7	In HNSC tumors, Unfolded Protein Response is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_4c25090852be8c18	In HNSC tumors, Peroxisome is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_2de9fb7c203d2d20	In HNSC tumors, Oxidative Phosphorylation is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_233020a313e3340a	In HNSC tumors, Tnfa Signaling Via Nfkb is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_06d555334fd8f8e2	In HNSC tumors, Wnt Beta Catenin Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_00c37c118195556a	In HNSC tumors, Spermatogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_c1ea09bb4e1aa578	In HNSC tumors, Uv Response Up is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_42d8b6de1a302a90	In HNSC tumors, Epithelial Mesenchymal Transition is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_08b35524261d0484	In HNSC tumors, P53 Pathway is enriched in TP53-mutant samples relative to the other TP53 group.	SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R2	claim_aadc04d750e2f1a0	In HNSC tumors, G2M Checkpoint is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R2	claim_d22f5704fb2920f1	In HNSC tumors, Mitotic Spindle is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_ef98a65760a25dbc	In HNSC tumors, Estrogen Response Early is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_70e480d6dfae7993	In HNSC tumors, Myogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_808d9bce26366f4c	In HNSC tumors, Complement is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_bb5939a02bafd8cc	In HNSC tumors, Apoptosis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_313afa6ddd813a37	In HNSC tumors, Angiogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_8192685c48c4ab86	In HNSC tumors, Pancreas Beta Cells is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_bfc5fd84eeb0c1a8	In HNSC tumors, Hypoxia is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_dc629b789c653c46	In HNSC tumors, Xenobiotic Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_b2d76cd8f5ca6ed1	In HNSC tumors, Tgf Beta Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	NOT_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R2	claim_50d3778c284c950e	In HNSC tumors, Hedgehog Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R3	claim_72962c408253e048	In HNSC tumors, Interferon Gamma Response is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_3365235f9b120db7	In HNSC tumors, Apical Surface is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_a171add60bf459e3	In HNSC tumors, Notch Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_f11855d71e08f225	In HNSC tumors, Uv Response Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_f2d4915e283c5c2a	In HNSC tumors, Adipogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_eca56ff225727933	In HNSC tumors, Kras Signaling Up is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_493ccfee59d057ab	In HNSC tumors, Bile Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	NO_SUPPORT	UNCERTAIN
+P4_R3	claim_d60046125f634dbc	In HNSC tumors, Mtorc1 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_c811a2346255cb4a	In HNSC tumors, Interferon Alpha Response is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_5e5f9b19dbdff870	In HNSC tumors, Cholesterol Homeostasis is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_da36cafe4fe29b30	In HNSC tumors, Fatty Acid Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_03b1ba5777f38e99	In HNSC tumors, Myc Targets V1 is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_3906e3bedb092604	In HNSC tumors, Allograft Rejection is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_b32362b085e0cada	In HNSC tumors, Il6 Jak Stat3 Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	NO_SUPPORT	NO_OVERSTATEMENT
+P4_R3	claim_d2246ea537f61e30	In HNSC tumors, Androgen Response is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_a242564a3064e67c	In HNSC tumors, E2F Targets is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_c8c4ae9b27dd7c58	In HNSC tumors, Protein Secretion is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_a344e7d15c08c6e9	In HNSC tumors, Myc Targets V2 is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_1df255718bdd1b42	In HNSC tumors, Il2 Stat5 Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	NO_SUPPORT	MINOR_OVERSTATEMENT
+P4_R3	claim_4e337caa7de5c595	In HNSC tumors, Estrogen Response Late is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_6a150b52308b5e9f	In HNSC tumors, Coagulation is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_7f96d32248cab7c4	In HNSC tumors, Apical Junction is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_b9c353b3824bf2dd	In HNSC tumors, Glycolysis is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_34717972ea9a7680	In HNSC tumors, Kras Signaling Dn is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_6162baa11859a079	In HNSC tumors, Inflammatory Response is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_c947cf81ef626ea0	In HNSC tumors, Heme Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_9071f62097a19b7a	In HNSC tumors, Dna Repair is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_8e8ce4996225c7e9	In HNSC tumors, Pi3K Akt Mtor Signaling is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_966557d4ca83f076	In HNSC tumors, Reactive Oxygen Species Pathway is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_508eee8ce8e559d7	In HNSC tumors, Unfolded Protein Response is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_4c25090852be8c18	In HNSC tumors, Peroxisome is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	UNCERTAIN	UNCERTAIN
+P4_R3	claim_2de9fb7c203d2d20	In HNSC tumors, Oxidative Phosphorylation is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_233020a313e3340a	In HNSC tumors, Tnfa Signaling Via Nfkb is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_06d555334fd8f8e2	In HNSC tumors, Wnt Beta Catenin Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_00c37c118195556a	In HNSC tumors, Spermatogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	UNCERTAIN
+P4_R3	claim_c1ea09bb4e1aa578	In HNSC tumors, Uv Response Up is enriched in TP53-wild-type samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	MINOR_OVERSTATEMENT
+P4_R3	claim_42d8b6de1a302a90	In HNSC tumors, Epithelial Mesenchymal Transition is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_08b35524261d0484	In HNSC tumors, P53 Pathway is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_aadc04d750e2f1a0	In HNSC tumors, G2M Checkpoint is enriched in TP53-wild-type samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	MINOR_OVERSTATEMENT
+P4_R3	claim_d22f5704fb2920f1	In HNSC tumors, Mitotic Spindle is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R3	claim_ef98a65760a25dbc	In HNSC tumors, Estrogen Response Early is enriched in TP53-wild-type samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	UNCERTAIN
+P4_R3	claim_70e480d6dfae7993	In HNSC tumors, Myogenesis is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R3	claim_808d9bce26366f4c	In HNSC tumors, Complement is enriched in TP53-wild-type samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	UNCERTAIN
+P4_R3	claim_bb5939a02bafd8cc	In HNSC tumors, Apoptosis is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_313afa6ddd813a37	In HNSC tumors, Angiogenesis is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R3	claim_8192685c48c4ab86	In HNSC tumors, Pancreas Beta Cells is enriched in TP53-mutant samples relative to the other TP53 group.	UNCERTAIN	UNCERTAIN	UNCERTAIN
+P4_R3	claim_bfc5fd84eeb0c1a8	In HNSC tumors, Hypoxia is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	DIRECT	NO_OVERSTATEMENT
+P4_R3	claim_dc629b789c653c46	In HNSC tumors, Xenobiotic Metabolism is enriched in TP53-wild-type samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	MINOR_OVERSTATEMENT
+P4_R3	claim_b2d76cd8f5ca6ed1	In HNSC tumors, Tgf Beta Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT
+P4_R3	claim_50d3778c284c950e	In HNSC tumors, Hedgehog Signaling is enriched in TP53-mutant samples relative to the other TP53 group.	PARTIALLY_SUPPORTED	INDIRECT	NO_OVERSTATEMENT

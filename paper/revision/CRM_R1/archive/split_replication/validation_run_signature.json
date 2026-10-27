@@ -1,0 +1,19 @@
+{
+  "schema_version": "CRM_R1_P2B_VALIDATION_RUN_SIGNATURE_v14_1_3",
+  "script_sha256": "8940977aaecd7ab304dcd2aaa2261867d86f3766d725904fb838bb24e973039e",
+  "validation_design_manifest_sha256": "e1058565b352238cdb50e4ad5d4600cdeb3a4d5d558d8660d9799c686b76a8c9",
+  "design_manifest_sha256": "f88017ae625e45ba135f519227a6159df77b302626bc58898892fe987bfe6e78",
+  "assignments_sha256": "bb7615eb6d7d3b9c522364ab825722cc39677e59109ababcd9043341162beec8",
+  "hallmark_manifest_sha256": "74bb7079f0723fad123335546f8fae6b66fbc7dea89f3e5777bce75545ee0721",
+  "gene_sets_sha256": "fe654c809d2eccc51601d48dcbda603dcbc110413aec93119bb63d4719aa8fb9",
+  "numerical_manifest_sha256": "04d0724d6ed3c6ae3598bab30e8407dbb1ccaf97df61fa22dca21893e4572985",
+  "membership_manifest_sha256": "839d0921cd0e54abe6915736cb4d0b48bf42eda9aa3ae24d7c0ce3aeaf2dbe6a",
+  "expression_sha256": "a00532ec86af8c07630c618f10f6277f09c484d0a9c17db5901edf95c7714b38",
+  "nPermSimple": 10000,
+  "validation_seed_base": 30260902,
+  "partition": "validation",
+  "method_membership_rows_read": false,
+  "discovery_statistics_read": false,
+  "human_ratings_read": false,
+  "expression_feature_policy": "trim_labels; exclude_blank; exclude_all_numeric_unresolved; exclude_all_rows_for_every_duplicated_symbol"
+}

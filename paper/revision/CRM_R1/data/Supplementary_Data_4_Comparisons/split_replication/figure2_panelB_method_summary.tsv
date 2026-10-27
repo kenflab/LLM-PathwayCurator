@@ -1,0 +1,5 @@
+analysis_scope	method_id	method_label	color	comparison_role	n_cohorts	mean_cohort_replication_fraction	cohort_bootstrap_ci_low	cohort_bootstrap_ci_high	bootstrap_draws	bootstrap_seed
+primary_all_eligible_cohorts	raw_pool	Raw candidate pool (descriptive)	#6B7280	descriptive_only	22	0.3950000000000001	0.3435000000000001	0.44682159090909085	10000	20260902
+primary_all_eligible_cohorts	q_value_matched	q-value matched	#D55E00	matched_k	22	0.6127105572104322	0.5215167833840052	0.7034950786010583	10000	20260903
+primary_all_eligible_cohorts	stability_matched	Stability matched	#009E73	matched_k	22	0.504334780903071	0.4286611394220455	0.5809516890496119	10000	20260904
+primary_all_eligible_cohorts	full_audit	Full audit	#0072B2	matched_k	22	0.431279973142868	0.3705245054626781	0.4927258346833094	10000	20260905

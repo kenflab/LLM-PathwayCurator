@@ -29,7 +29,7 @@ def finish(data, out, inputs, script):
         "schema": "manuscript-figure-render/1",
         "inputs_sha256": {name: sha(data / name) for name in inputs},
         "code_sha256": {script.name: sha(script), "_figure_io.py": sha(Path(__file__))},
-        "outputs_sha256": {p.name: sha(p) for p in sorted(out.iterdir()) if p.is_file()},
+        "outputs_sha256": {str(p.relative_to(out)): sha(p) for p in sorted(out.rglob("*")) if p.is_file()},
         "model_calls": 0,
         "analysis_refitted": False,
         "human_labels_changed": False,

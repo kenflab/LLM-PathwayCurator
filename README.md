@@ -17,14 +17,15 @@ context scores or simulated gene survival to select statements. You can inspect
 drafts written by a person or any language model without calling that model again.
 The historical LLM pipeline remains available through an explicit legacy mode.
 
-For TCGA figure reproduction, read the [upstream input correction](paper/scripts/README.md#corrected-tcga-inputs).
-Archived TCGA rankings and dependent results require regeneration after gene-ID
-and mutation-assessment fixes; the source-report tool cannot repair those inputs.
+The manuscript source tables contain the seven-cohort TCGA analysis using the
+corrected gene identities and mutation-group policy. See the
+[reproduction guide](paper/revision/CRM_R1/FIGURE_REPRODUCTION.md). Earlier TCGA
+outputs are retained as historical records; they are not the manuscript inputs.
 
 The optional [structured curation workflow](docs/structured-curation.md) adds
 supporting-gene modules, typed source observations and a proposal packet. Import
 saved model- or human-authored JSONL with `--proposals` to review proposed
-interpretations beside their exact sources. This candidate feature makes no
+interpretations beside their exact sources. This workflow makes no
 model calls and never automatically approves free prose.
 
 ## Install the current source
@@ -125,7 +126,25 @@ print(result.artifacts["report_html"])
 
 `run_pipeline(RunConfig(...))` uses the same source workflow by default.
 
-## Historical pipeline and paper reproduction
+## Reproduce manuscript figures and summaries
+
+After installing this checkout, run:
+
+```bash
+python paper/revision/CRM_R1/reproduce.py --outdir out/manuscript_reproduction
+```
+
+This verifies 64 supplied source files, repeats the 50 DEX text checks, recomputes
+human-rating and split-replication summaries, creates seven TCGA source reports,
+and renders Figures 2–3 and S1–S4 with numerical table exports and hash receipts.
+Use a new output directory. The command starts from saved enrichment records,
+texts, ratings and split results; expression-model fits are a separate step.
+Figure 1 is author-supplied artwork. The
+[guide](paper/revision/CRM_R1/FIGURE_REPRODUCTION.md) and
+[figure map](paper/FIGURE_MAP.csv) list each input, script and output, including
+upstream dependencies that are needed for a complete study rerun.
+
+## Historical pipeline
 
 Use `--workflow legacy`, or `RunConfig(workflow="legacy", ...)`, to request the
 historical distill/module/proposal pipeline. Its proxy context scores and
@@ -157,5 +176,7 @@ Software tests establish implementation behavior. They do not estimate expert
 agreement, interpretive utility, or biological accuracy. The revised implementation
 requires a separately specified evaluation before those performance claims.
 
-[CITATION.cff](CITATION.cff) describes the existing preprint and release. This source
-update does not change that historical publication or its archived results.
+[CITATION.cff](CITATION.cff) describes the software. Cite the exact commit or
+release used. The v0.1.0 archive (DOI: 10.5281/zenodo.18625777) identifies the
+historical implementation, not the current source; its original citation is
+preserved in [the archive](paper/revision/CRM_R1/archive/CITATION_v0.1.0.cff).

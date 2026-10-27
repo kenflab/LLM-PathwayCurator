@@ -1,0 +1,3 @@
+External review of HNSC pathway statements
+
+Each of three evaluators assessed the same 50 standardized statements. The three questions concern statistical support, external evidence, and overstatement. Uncertain is retained as a category. Fleiss kappa and statement-bootstrap intervals are descriptive and conditional on these evaluators; they do not estimate biological accuracy. This reporting corpus is distinct from the source records in Figure 2 and the DEX texts in Figure 3. Per-statement ratings preserve the returned categories; free-text rationales and private linkage records are retained separately.

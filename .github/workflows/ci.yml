@@ -65,8 +65,8 @@ jobs:
 
       - name: Ruff
         run: |
-          ruff check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py
-          ruff format --check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py
+          ruff check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py paper/revision/CRM_R1/reproduce.py paper/revision/CRM_R1/collect_split_provenance.py paper/revision/CRM_R1/collect_remaining_split_provenance.py paper/revision/CRM_R1/figures/plot_supplement.py paper/revision/CRM_R1/archive/split_replication/verify_code.py
+          ruff format --check src tests paper/revision/CRM_R1/experiments/reassessment paper/revision/CRM_R1/tests/test_tool_reassessment.py paper/revision/CRM_R1/reproduce.py paper/revision/CRM_R1/collect_split_provenance.py paper/revision/CRM_R1/collect_remaining_split_provenance.py paper/revision/CRM_R1/figures/plot_supplement.py paper/revision/CRM_R1/archive/split_replication/verify_code.py
 
       - name: Import smoke
         run: python -c "import llm_pathway_curator; print('import ok')"

@@ -1,0 +1,95 @@
+{
+  "analysis_scope": "frozen Priority 1 held-out 72 h replication evaluation",
+  "benchmark_id": "GSE146225_TP53_v1",
+  "code": {
+    "branch": "feat/crm-r1-scaffold",
+    "commit": "6e86b8df359a3671dac808729c5f193d32a5c770",
+    "tracked_worktree_clean": true
+  },
+  "created_at_utc": "2026-08-09T00:46:19.188063+00:00",
+  "freeze_gate_output": [
+    "[PASS] Priority 1 freeze bundle is complete and hash-consistent",
+    "[INFO] tau=0.80; K=23; label=KF_20260808",
+    "[INFO] Freeze commit: 1a094cd71c8afeb7d42201881fdd65df102f5b9b",
+    "[INFO] Post-validation provenance check; existing 72 h outputs were allowed."
+  ],
+  "inputs": {
+    "config": {
+      "path": "{REPOSITORY}/paper/revision/CRM_R1/config/priority1_protocol.json",
+      "sha256": "9344b3f1f9f0ec5ac3b409d085e29872457b1e84342ec969e06280799425198c"
+    },
+    "freeze_manifest": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/priority1_freeze_manifest.json",
+      "sha256": "c4d1ef711e866e800164afd8038f61fbe73bdb83fe15e1102f853cb2f62428a3"
+    },
+    "freeze_sidecar": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/priority1_freeze_manifest.sha256",
+      "sha256": "c5a8be5c01b54d475a42c83481dba3a11c333dcebb9496fb5b86a7bdef2fb966"
+    },
+    "frozen_membership": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/selection_membership_frozen_tau0p80.tsv",
+      "sha256": "e82066b2f1ffa6122305c7a85275220207daf3d6020edff1367e46d427422953"
+    },
+    "frozen_tau_grid": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/selection_membership_tau_grid_frozen.tsv",
+      "sha256": "6807d21b97e88e73906dedd4b5ecf783e2d267588fb614c86a05b6743b63d9c1"
+    },
+    "validation_72h": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/validation/pathway_statistics_72h.tsv",
+      "sha256": "94b49e0eb4bd5fd3524dbad823ef216378878f33591cbd303b07e60755b239e3"
+    },
+    "validation_72h_meta": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/validation/validation_72h.run_meta.json",
+      "sha256": "1719bb29b1bf2c04b73e2dd1b1fc04f1b8ce4a38327b7db5efa7a09b8e01129d"
+    }
+  },
+  "outputs": {
+    "continuous": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_continuous.tsv",
+      "sha256": "eb319f92e705129201752c906caf0d9c0d7f033f0bf53166febb784788715ade"
+    },
+    "exact_null": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_overlap_exact_null.tsv",
+      "sha256": "5c9272280954c2d1def40b4ddea96f30ddefe9e3ea2b6fe6edffb188f6152539"
+    },
+    "figure4": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/source_data/figure4.tsv",
+      "sha256": "57c4a4909d20c6306ac5e1a6964063cb45b8abb4ee1a4595a0c6f967f1bd472f"
+    },
+    "logistic": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_logistic_sensitivity.tsv",
+      "sha256": "0a7ba162a9956f11733a5d373c9c5034c2f68337ecf79adae80c6fde9ed35927"
+    },
+    "method": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_by_method.tsv",
+      "sha256": "b3c461c771d222f511fbcb93769cbb57a2638394629a95fe8f3415532c4e3260"
+    },
+    "pathway": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_by_pathway.tsv",
+      "sha256": "a39401737a537b8ee4b633a4c9883fda5a1a6437ae012b1438d820636eab45db"
+    },
+    "random_null": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_random_matched_null.tsv",
+      "sha256": "99712271af5c478c397587ed5f465b5e8705acf1a8ad04bfeb4b064f4e5f46bc"
+    },
+    "summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/priority1_replication_summary.json",
+      "sha256": "7d40616173dac9c07e857c64e8909bf00447a36f6600f24be3892566dbe783e9"
+    },
+    "tau_grid": {
+      "path": "{ANALYSIS_ROOT}/output/priority1/GSE146225_TP53_v1/metrics/replication_tau_grid.tsv",
+      "sha256": "b3942a56864d7664fae638c33f7a83824f242e7b32d563f90a2e96cdf9922115"
+    }
+  },
+  "protocol_status": "FROZEN",
+  "protocol_version": "CRM_R1_PRIORITY1_v5",
+  "python": {
+    "implementation": "CPython",
+    "version": "3.11.9 (v3.11.9:de54cf5be3, Apr  2 2024, 07:12:50) [Clang 13.0.0 (clang-1300.0.29.30)]"
+  },
+  "script": {
+    "path": "{REPOSITORY}/paper/revision/CRM_R1/scripts/19_evaluate_replication.py",
+    "sha256": "72f15119f6e30d2b619528b645e0f48d818abe7346c67cc765edcf0d7d086f39"
+  },
+  "stop_gate_p1": "PASS_EMPIRICAL_POINT_ESTIMATE_IMPROVED"
+}
