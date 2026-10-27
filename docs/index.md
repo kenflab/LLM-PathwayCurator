@@ -1,7 +1,17 @@
 # LLM-PathwayCurator
 
-Create source-linked pathway reports and inspect draft wording beside the
-enrichment evidence. The current default runs without a language model.
+<div class="lpc-brand">
+  <img src="assets/LLM-PathwayCurator_logo.png" width="90" height="90" alt="LLM-PathwayCurator logo">
+  <p>Create source-linked pathway reports and inspect draft wording beside the
+  enrichment evidence. The current default runs without a language model.</p>
+</div>
+
+[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathwaycurator.readthedocs.io/)
+[![Historical preprint](https://img.shields.io/badge/bioRxiv-historical_preprint-B31B1B?style=flat)](https://doi.org/10.64898/2026.02.18.706381)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f1c40f?style=flat)](https://github.com/kenflab/LLM-PathwayCurator/blob/main/LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-555555?style=flat&logo=python&logoColor=white)](https://www.python.org/downloads/)
+
+---
 
 Start with [Getting started](getting-started.md). The [User guide](user-guide.md)
 specifies the input tables and decisions. [Concepts](concepts.md) distinguishes

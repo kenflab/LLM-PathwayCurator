@@ -4,6 +4,7 @@ exclude mkdocs.yml
 prune out
 prune dist
 prune build
+exclude .git_archival.txt .gitattributes
 recursive-include examples/source_report *.tsv *.json *.md
 global-exclude *.ipynb
 global-exclude __pycache__ *.py[cod] .DS_Store

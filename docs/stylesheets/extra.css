@@ -23,3 +23,28 @@
 
 /* code blocks padding: slightly tighter */
 .md-typeset pre > code { padding: 0.7em 0.9em; }
+
+/* Home-page branding uses the original project logo. */
+.lpc-brand {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  margin: 0 0 1rem;
+  padding: 0.25rem 0 0.9rem;
+  border-bottom: 3px solid #c66b36;
+}
+.lpc-brand img {
+  width: 90px;
+  height: 90px;
+  flex: 0 0 90px;
+  object-fit: contain;
+}
+.lpc-brand p {
+  margin: 0;
+  font-size: 1.05em;
+  line-height: 1.6;
+}
+@media (max-width: 480px) {
+  .lpc-brand { align-items: flex-start; gap: 0.75rem; }
+  .lpc-brand img { width: 72px; height: 72px; flex-basis: 72px; }
+}

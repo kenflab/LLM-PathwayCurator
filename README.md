@@ -1,10 +1,18 @@
 # LLM-PathwayCurator
 
+<p align="left">
+  <img src="https://raw.githubusercontent.com/kenflab/LLM-PathwayCurator/main/docs/assets/LLM-PathwayCurator_logo.png"
+       width="90" alt="LLM-PathwayCurator logo">
+</p>
+
 **Source-linked enrichment reports and checks of pathway draft wording.**
 
-[Documentation](https://llm-pathwaycurator.readthedocs.io/) ·
-[Historical preprint](https://doi.org/10.64898/2026.02.18.706381) ·
-[MIT license](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat&logo=readthedocs&logoColor=white)](https://llm-pathwaycurator.readthedocs.io/)
+[![Historical preprint](https://img.shields.io/badge/bioRxiv-historical_preprint-B31B1B?style=flat)](https://doi.org/10.64898/2026.02.18.706381)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f1c40f?style=flat)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-555555?style=flat&logo=python&logoColor=white)](https://www.python.org/downloads/)
+
+---
 
 Enrichment output and an interpretation are different records. LLM-PathwayCurator
 keeps the complete enrichment table, writes statistical statements tied to that
@@ -28,21 +36,27 @@ saved model- or human-authored JSONL with `--proposals` to review proposed
 interpretations beside their exact sources. This workflow makes no
 model calls and never automatically approves free prose.
 
-## Install the current source
+## 📦 Install the current source
+[![PyPI version](https://img.shields.io/pypi/v/llm-pathway-curator.svg)](https://pypi.org/project/llm-pathway-curator/)
 
-The workflow below is available from this repository. Earlier PyPI releases and
-the archived preprint release describe the historical pipeline.
+- #### Option A (recommended): Install from PyPI
+  ```bash
+  pip install llm-pathway-curator
 
-```bash
-git clone https://github.com/kenflab/LLM-PathwayCurator.git
-cd LLM-PathwayCurator
-python -m pip install -e .
-```
+  ```
+  (See PyPI project page: [https://pypi.org/project/llm-sc-curator/](https://pypi.org/project/llm-pathway-curator/))
+
+- #### Option B: Install from GitHub (development)
+  ```bash
+  git clone https://github.com/kenflab/LLM-PathwayCurator.git
+  cd LLM-PathwayCurator
+  python -m pip install -e .
+  ```
 
 Python 3.11 or later is required. Existing users can update their checkout and
 reinstall it; a second checkout is unnecessary.
 
-## Try a source report
+## ⚡ Try a source report
 
 ```bash
 llm-pathway-curator run \
@@ -59,7 +73,7 @@ Omit `--claims` to create a report from the enrichment table alone.
 Supply a new or empty output directory for each run. Previous reports and input
 files are preserved.
 
-## Visualize saved results
+## 📊 Visualize saved results
 
 ```bash
 llm-pathway-curator plot-source --run-dir out/source_report --outdir out/source_plot
@@ -70,7 +84,10 @@ Source statistics, statistical selection and draft-check counts remain distinct.
 The [visualization guide](docs/visualization.md) explains the display and the
 retained `plot-ranked` packed-circle and bar plots for historical ranked inputs.
 
-## Inputs
+See the [examples index](examples/README.md) for the source report, structured
+curation and retained historical demo.
+
+## 🧩 Inputs
 
 The EvidenceTable TSV requires `term_id`, `term_name`, `source`, `stat`, `qval`,
 `direction` (`up`, `down`, or `na`), and `evidence_genes` (semicolon-separated).
@@ -87,7 +104,7 @@ unambiguous `term_id`. Optional `claim_id`, study context fields, and
 `evidence_sha256` allow explicit identity checks. Submitted wording is preserved.
 See the [input guide](docs/user-guide.md) and [adapters](src/llm_pathway_curator/adapters/README.md).
 
-## Outputs and decisions
+## 🛡️ Outputs and decisions
 
 | Artifact | Purpose |
 | --- | --- |
@@ -110,7 +127,7 @@ Absence of a flag never establishes semantic or biological correctness.
 The limited wording rules currently cover specified English expressions, not a
 general language understanding system. See [scope and limitations](docs/concepts.md).
 
-## Python API
+## 🐍 Python API
 
 ```python
 from llm_pathway_curator import ReviewConfig, review_enrichment
@@ -126,7 +143,7 @@ print(result.artifacts["report_html"])
 
 `run_pipeline(RunConfig(...))` uses the same source workflow by default.
 
-## Reproduce manuscript figures and summaries
+## 📄 Reproduce manuscript figures and summaries
 
 After installing this checkout, run:
 
@@ -164,7 +181,7 @@ Development prototypes, study-specific registries and revision tests live under
 `paper/revision/CRM_R1/`; they are excluded from the installed package.
 Earlier versioned notes are retained in its `archive/` for provenance.
 
-## Development and citation
+## 🧾 Development and citation
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -176,7 +193,12 @@ Software tests establish implementation behavior. They do not estimate expert
 agreement, interpretive utility, or biological accuracy. The revised implementation
 requires a separately specified evaluation before those performance claims.
 
-[CITATION.cff](CITATION.cff) describes the software. Cite the exact commit or
-release used. The v0.1.0 archive (DOI: 10.5281/zenodo.18625777) identifies the
-historical implementation, not the current source; its original citation is
-preserved in [the archive](paper/revision/CRM_R1/archive/CITATION_v0.1.0.cff).
+[CITATION.cff](CITATION.cff) describes the software. Cite the release-specific
+DOI and commit used. Two separate records preserve v0.1.0:
+
+- [GitHub release archive](https://doi.org/10.5281/zenodo.18675487).
+- [Code, benchmarks and manuscript source-data archive](https://doi.org/10.5281/zenodo.18625777).
+
+These identify the historical implementation. The original citation is preserved
+in [the archive](paper/revision/CRM_R1/archive/CITATION_v0.1.0.cff).
+The [release guide](docs/releases.md) explains versioned code and data archives.

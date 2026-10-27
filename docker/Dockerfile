@@ -150,8 +150,9 @@ RUN micromamba run -n py python -m pip install -U pip \
  && micromamba run -n py python -m pip install -r docker/requirements.txt
 
 # Install your package (core deps come from pyproject.toml)
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-RUN micromamba run -n py python -m pip install -vvv -e "."
+ARG LLMPATH_VERSION=0.0.0.dev0
+RUN micromamba run -n py env SETUPTOOLS_SCM_PRETEND_VERSION="${LLMPATH_VERSION}" \
+    python -m pip install -vvv -e "."
 
 # -----------------------------
 # 4) Sanity checks (light)
