@@ -37,15 +37,21 @@ interpretations beside their exact sources. This workflow makes no
 model calls and never automatically approves free prose.
 
 ## 📦 Install the current source
+[![PyPI version](https://img.shields.io/pypi/v/llm-pathway-curator.svg)](https://pypi.org/project/llm-pathway-curator/)
 
-The workflow below is available from this repository. Earlier PyPI releases and
-the archived preprint release describe the historical pipeline.
+- #### Option A (recommended): Install from PyPI
+  ```bash
+  pip install llm-pathway-curator
 
-```bash
-git clone https://github.com/kenflab/LLM-PathwayCurator.git
-cd LLM-PathwayCurator
-python -m pip install -e .
-```
+  ```
+  (See PyPI project page: [https://pypi.org/project/llm-sc-curator/](https://pypi.org/project/llm-pathway-curator/))
+
+- #### Option B: Install from GitHub (development)
+  ```bash
+  git clone https://github.com/kenflab/LLM-PathwayCurator.git
+  cd LLM-PathwayCurator
+  python -m pip install -e .
+  ```
 
 Python 3.11 or later is required. Existing users can update their checkout and
 reinstall it; a second checkout is unnecessary.
