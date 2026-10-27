@@ -91,3 +91,14 @@ For pixel-level historical reproduction, use the original pinned code and data.
 The source and historical routes remain explicit; public imports are retained.
 Manuscript panels have their own data-to-code map in `paper/FIGURE_MAP.csv`.
 An exploratory visualization is a tool feature, not a new evaluation result.
+
+## Manuscript figures
+
+The manuscript uses `paper/revision/CRM_R1/figures/plot_figure2.py`,
+`plot_figure3.py` and `plot_supplement.py`. Run all renderers and source-data checks
+with `python paper/revision/CRM_R1/reproduce.py --outdir out/manuscript_reproduction`.
+See the [reproduction guide](https://github.com/kenflab/LLM-PathwayCurator/blob/main/paper/revision/CRM_R1/FIGURE_REPRODUCTION.md).
+
+`viz_ranked.py` supplied the original Figure 2e–f ranked visualizations and remains
+available through `plot-ranked`. The current manuscript has a different panel
+layout. `plot-source` is the general visualization of saved source reports.

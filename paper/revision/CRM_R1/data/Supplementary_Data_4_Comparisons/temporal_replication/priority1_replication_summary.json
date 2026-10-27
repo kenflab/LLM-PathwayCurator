@@ -1,0 +1,57 @@
+{
+  "benchmark_id": "GSE146225_TP53_v1",
+  "continuous_secondary": {
+    "auroc": 0.7130730050933786,
+    "bootstrap_ci_high": 0.8573853989813243,
+    "bootstrap_ci_low": 0.5577249575551783,
+    "bootstrap_draws": 10000,
+    "bootstrap_seed": 20260808,
+    "bootstrap_type": "stratified percentile bootstrap within outcome class",
+    "n_pathways": 50,
+    "n_replicated": 31,
+    "permutation_draws": 10000,
+    "permutation_p_one_sided": 0.005499450054994501,
+    "permutation_seed": 20260809,
+    "spearman_nes_p_two_sided": 1.407243445257748e-08,
+    "spearman_nes_rho": 0.7013205282112844,
+    "status": "ESTIMABLE"
+  },
+  "empirical_replication_fraction": 0.782608695652174,
+  "endpoint": "same 48 h and 72 h NES sign and 72 h BH FDR < 0.05",
+  "interpretation_boundary": "held-out temporal replication of one objective audit component; not an independent cohort, full semantic-audit validation, mechanism, causality, or clinical utility",
+  "logistic_sensitivity": {
+    "events": 31,
+    "hessian_condition_number": 8.345108704207549,
+    "model_auroc_apparent": 0.7470288624787776,
+    "n": 50,
+    "optimizer_message": "Optimization terminated successfully.",
+    "optimizer_success": true,
+    "role": "exploratory adjusted sensitivity; no model repair permitted",
+    "status": "ESTIMABLE_EXPLORATORY"
+  },
+  "overlap_exact_reference": {
+    "assignments": 3432,
+    "common_claims": 16,
+    "empirical_only_claims": 7,
+    "interpretation": "descriptive conditional exact reference; pathways are biologically dependent",
+    "observed_replication_fraction_difference": 0.0434782608695653,
+    "p_one_sided_empirical_greater": 0.5,
+    "p_two_sided": 1.0,
+    "q_value_only_claims": 7
+  },
+  "primary_replication_fraction_difference_empirical_minus_q_value": 0.0434782608695653,
+  "q_value_matched_replication_fraction": 0.7391304347826086,
+  "random_matched_secondary": {
+    "draws": 10000,
+    "k": 23,
+    "mean_replication_fraction": 0.6190478260869565,
+    "quantile_0_025": 0.4782608695652174,
+    "quantile_0_975": 0.782608695652174,
+    "role": "secondary random matched reference",
+    "seed": 20260808
+  },
+  "size_matched_replication_fraction": 0.6956521739130435,
+  "size_sensitivity_difference_empirical_minus_size_matched": 0.08695652173913049,
+  "stop_gate_basis": "frozen point-estimate direction only",
+  "stop_gate_p1": "PASS_EMPIRICAL_POINT_ESTIMATE_IMPROVED"
+}

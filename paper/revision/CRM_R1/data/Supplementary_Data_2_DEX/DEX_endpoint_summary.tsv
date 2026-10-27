@@ -1,0 +1,3 @@
+endpoint	J1_positive	J1_n	J2_positive	J2_n	n	agree	observed_agreement	expected_marginal_agreement	cohen_kappa	constant_rater_A	constant_rater_B
+material source contradiction	0	24	15	24	24	9	0.375	0.375	0.0	True	False
+qualitative overstatement	11	24	0	24	24	13	0.5416666666666666	0.5416666666666666	0.0	False	True

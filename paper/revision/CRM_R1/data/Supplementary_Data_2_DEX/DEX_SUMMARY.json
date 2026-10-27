@@ -1,0 +1,62 @@
+{
+  "case_count": 24,
+  "roles": [
+    "author",
+    "external reviewer"
+  ],
+  "endpoint_agreement": {
+    "material_source_status": {
+      "n": 24,
+      "agree": 9,
+      "observed_agreement": 0.375,
+      "expected_marginal_agreement": 0.375,
+      "cohen_kappa": 0.0,
+      "constant_rater_A": true,
+      "constant_rater_B": false
+    },
+    "qualitative_support_status": {
+      "n": 24,
+      "agree": 13,
+      "observed_agreement": 0.5416666666666666,
+      "expected_marginal_agreement": 0.5416666666666666,
+      "cohen_kappa": 0.0,
+      "constant_rater_A": false,
+      "constant_rater_B": true
+    }
+  },
+  "complete_cases": {
+    "AUTHOR_J1": 24,
+    "AUTHOR_J2": 24
+  },
+  "counts_50": {
+    "REVIEW_FLAGGED": 30,
+    "VIOLATION_DETECTED": 12,
+    "NO_LIMITED_FLAG": 8
+  },
+  "counts_24": {
+    "REVIEW_FLAGGED": 18,
+    "VIOLATION_DETECTED": 4,
+    "NO_LIMITED_FLAG": 2
+  },
+  "biology_quote_matching": {
+    "exact": 19,
+    "equal_after_outer_whitespace_only": 23,
+    "denominator": 24,
+    "pooled_support_agreement_not_estimated": true
+  },
+  "accuracy_estimated": false,
+  "confidence_intervals_estimated": false,
+  "statistical_scope": "Fixed selected development cases; observed agreement and nominal kappa describe returned categories. Constant margins yield kappa zero here, not undefined. No population accuracy or consensus truth is inferred.",
+  "code_identity": {
+    "commit": "674edd05dca863bd424106df4baa07efd2ed911a",
+    "grounding_git_blob": "a7d550ee95940fe884b0ea319316bf947b6db91e",
+    "grounding_sha256": "a7b236e00c336e32f56a6bb374b79f44f4a1dc11605ff5b377622f3800799333",
+    "ruleset": "enrichment-source-checks/1.3",
+    "retrieved_date_utc": "2026-10-21",
+    "exact_match_to_20261010_proposed_module": true,
+    "new_model_calls": 0,
+    "public_main_verified": "674edd05dca863bd424106df4baa07efd2ed911a",
+    "url": "https://github.com/kenflab/LLM-PathwayCurator/commit/674edd05dca863bd424106df4baa07efd2ed911a",
+    "scope": "Exact public grounding.py bytes rerun on saved texts. TCGA and cross-study results are retained saved results; no new fit or model call."
+  }
+}

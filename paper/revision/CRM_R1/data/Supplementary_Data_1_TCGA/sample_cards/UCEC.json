@@ -1,0 +1,13 @@
+{
+  "condition": "UCEC",
+  "tissue": "tumor",
+  "perturbation": "genotype",
+  "comparison": "TP53_MUT_vs_MC3_call_negative",
+  "k_claims": 50,
+  "notes": "Diagnostic MC3 comparison; OV additionally accepts exact wga-only calls and excludes known GDC-positive/MC3-negative cases. WT is operationally call-negative, not biological WT.",
+  "extra": {
+    "benchmark_id": "TCGA_MC3_OV_WGA_with_GDC_discordance_guard_20261009_OVFIX1",
+    "n_mut": 168,
+    "n_wt": 263
+  }
+}

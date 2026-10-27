@@ -1,0 +1,92 @@
+{
+  "schema": "CRM_R1_EXTERNAL_DEX_RESULTS_R08",
+  "status": "COMPLETE_LIMITED_CROSS_STUDY_CASE",
+  "scope": "Exploratory non-cancer application and limited cross-study culture-level replication; not independent-donor validation or full-audit superiority",
+  "candidate_count": 50,
+  "candidate_retained_count": 50,
+  "discovery_donor_count": 4,
+  "validation_cell_line_count": 1,
+  "validation_primary_cultures": {
+    "dex24": 3,
+    "control": 4
+  },
+  "model_calls": 0,
+  "new_expert_ratings": 0,
+  "full_audit_performance_estimated": false,
+  "semantic_accuracy_estimated": false,
+  "cross_study_donor_disjointness_verified": false,
+  "descriptive_replication_rate_difference_stability_minus_matched_q": 0.0,
+  "comparisons": [
+    {
+      "method": "ALL_50_CANDIDATES",
+      "selected_count": 50,
+      "coverage": 1.0,
+      "validation_estimable_count": 50,
+      "same_direction_count": 29,
+      "replicated_count": 10,
+      "replication_rate": 0.2,
+      "selected_ids": "HALLMARK_ADIPOGENESIS;HALLMARK_ALLOGRAFT_REJECTION;HALLMARK_ANDROGEN_RESPONSE;HALLMARK_ANGIOGENESIS;HALLMARK_APICAL_JUNCTION;HALLMARK_APICAL_SURFACE;HALLMARK_APOPTOSIS;HALLMARK_BILE_ACID_METABOLISM;HALLMARK_CHOLESTEROL_HOMEOSTASIS;HALLMARK_COAGULATION;HALLMARK_COMPLEMENT;HALLMARK_DNA_REPAIR;HALLMARK_E2F_TARGETS;HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION;HALLMARK_ESTROGEN_RESPONSE_EARLY;HALLMARK_ESTROGEN_RESPONSE_LATE;HALLMARK_FATTY_ACID_METABOLISM;HALLMARK_G2M_CHECKPOINT;HALLMARK_GLYCOLYSIS;HALLMARK_HEDGEHOG_SIGNALING;HALLMARK_HEME_METABOLISM;HALLMARK_HYPOXIA;HALLMARK_IL2_STAT5_SIGNALING;HALLMARK_IL6_JAK_STAT3_SIGNALING;HALLMARK_INFLAMMATORY_RESPONSE;HALLMARK_INTERFERON_ALPHA_RESPONSE;HALLMARK_INTERFERON_GAMMA_RESPONSE;HALLMARK_KRAS_SIGNALING_DN;HALLMARK_KRAS_SIGNALING_UP;HALLMARK_MITOTIC_SPINDLE;HALLMARK_MTORC1_SIGNALING;HALLMARK_MYC_TARGETS_V1;HALLMARK_MYC_TARGETS_V2;HALLMARK_MYOGENESIS;HALLMARK_NOTCH_SIGNALING;HALLMARK_OXIDATIVE_PHOSPHORYLATION;HALLMARK_P53_PATHWAY;HALLMARK_PANCREAS_BETA_CELLS;HALLMARK_PEROXISOME;HALLMARK_PI3K_AKT_MTOR_SIGNALING;HALLMARK_PROTEIN_SECRETION;HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY;HALLMARK_SPERMATOGENESIS;HALLMARK_TGF_BETA_SIGNALING;HALLMARK_TNFA_SIGNALING_VIA_NFKB;HALLMARK_UNFOLDED_PROTEIN_RESPONSE;HALLMARK_UV_RESPONSE_DN;HALLMARK_UV_RESPONSE_UP;HALLMARK_WNT_BETA_CATENIN_SIGNALING;HALLMARK_XENOBIOTIC_METABOLISM",
+      "contrast": "24h_PRIMARY"
+    },
+    {
+      "method": "Q_VALUE_0_05",
+      "selected_count": 11,
+      "coverage": 0.22,
+      "validation_estimable_count": 11,
+      "same_direction_count": 7,
+      "replicated_count": 3,
+      "replication_rate": 0.2727272727272727,
+      "selected_ids": "HALLMARK_ADIPOGENESIS;HALLMARK_ANDROGEN_RESPONSE;HALLMARK_COMPLEMENT;HALLMARK_E2F_TARGETS;HALLMARK_FATTY_ACID_METABOLISM;HALLMARK_IL2_STAT5_SIGNALING;HALLMARK_OXIDATIVE_PHOSPHORYLATION;HALLMARK_P53_PATHWAY;HALLMARK_TNFA_SIGNALING_VIA_NFKB;HALLMARK_UV_RESPONSE_DN;HALLMARK_XENOBIOTIC_METABOLISM",
+      "contrast": "24h_PRIMARY"
+    },
+    {
+      "method": "Q_PLUS_DONOR_LOO_3_OF_4",
+      "selected_count": 10,
+      "coverage": 0.2,
+      "validation_estimable_count": 10,
+      "same_direction_count": 7,
+      "replicated_count": 3,
+      "replication_rate": 0.3,
+      "selected_ids": "HALLMARK_ADIPOGENESIS;HALLMARK_ANDROGEN_RESPONSE;HALLMARK_E2F_TARGETS;HALLMARK_FATTY_ACID_METABOLISM;HALLMARK_IL2_STAT5_SIGNALING;HALLMARK_OXIDATIVE_PHOSPHORYLATION;HALLMARK_P53_PATHWAY;HALLMARK_TNFA_SIGNALING_VIA_NFKB;HALLMARK_UV_RESPONSE_DN;HALLMARK_XENOBIOTIC_METABOLISM",
+      "contrast": "24h_PRIMARY"
+    },
+    {
+      "method": "MATCHED_Q_K",
+      "selected_count": 10,
+      "coverage": 0.2,
+      "validation_estimable_count": 10,
+      "same_direction_count": 7,
+      "replicated_count": 3,
+      "replication_rate": 0.3,
+      "selected_ids": "HALLMARK_ADIPOGENESIS;HALLMARK_TNFA_SIGNALING_VIA_NFKB;HALLMARK_ANDROGEN_RESPONSE;HALLMARK_E2F_TARGETS;HALLMARK_P53_PATHWAY;HALLMARK_UV_RESPONSE_DN;HALLMARK_FATTY_ACID_METABOLISM;HALLMARK_IL2_STAT5_SIGNALING;HALLMARK_OXIDATIVE_PHOSPHORYLATION;HALLMARK_XENOBIOTIC_METABOLISM",
+      "contrast": "24h_PRIMARY"
+    }
+  ],
+  "design_sha256": "2c4fdf52091827ae09ec8562cf4f248b6df29dd864621f141fdcba08f787c5d2",
+  "input_manifest_sha256": "acd25c5c31aead904cd5052fc4c9e63cb3b5b2932acb2eee7848abdd97273963",
+  "published_result_exposure": [
+    "The original study abstracts/results and published CRISPLD2 cross-study results were seen during R02 methods review.",
+    "No new Hallmark expression or replication outcomes were computed before preparing this protocol.",
+    "GSE34313 methods metadata and example intensities were inspected. These are not a wholly outcome-naive holdout."
+  ],
+  "interpretation": "Statistical pathway replication in a limited worked case; overlapping pathways do not supply independent trials, and no generalization/superiority CI is computed.",
+  "execution_code_sha256": {
+    "run.py": "26a63a06b3fa215aea71ca6f7ec356236a268a5b5b9fdef6dc8846d868770909",
+    "analysis.R": "187f9a064d2267cebd1df450db90f0d610e4455fa95b5ba8e52082a524c065e7",
+    "protocol.json": "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3"
+  },
+  "technical_amendment_sha256": "8c046e7144318a0d87ee7135533aca40eeb00fa66d91614cf26ddcac8baf4ff1",
+  "probe_filter_diagnostic": {
+    "schema": "CRM_R1_EXTERNAL_DEX_PROBE_FILTER_R08_1",
+    "raw_probe_count": 45015,
+    "frozen_protocol_retained_count": 28376,
+    "legacy_R08_retained_count": 0,
+    "removed_unintended_GPL_gate_excluded_count": 28376,
+    "raw_ControlType_zero_remains_required": true,
+    "minimum_detected_arrays": 3,
+    "array_census": 10,
+    "minimum_retained_probes": 1000,
+    "differential_expression_or_pathway_outcomes_loaded": false,
+    "GPL_numeric_gate_explains_1000_probe_stop": true
+  }
+}

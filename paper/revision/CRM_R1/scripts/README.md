@@ -1,6 +1,6 @@
 # Research script map
 
-For current manuscript Figures 1–3 and Supplementary Data 1–4, see the
+For current manuscript Figures 1–3, Figures S1–S4, Tables S1–S6 and Supplementary Data 1–4, see the
 [figure reproduction guide](../FIGURE_REPRODUCTION.md). Existing runners and
 historical outputs remain available; old plotting filenames retain old figure numbers.
 
@@ -11,7 +11,8 @@ The public installed tool is documented at the repository root.
 | Scope | Runners | Status |
 | --- | --- | --- |
 | P1 perturbation comparison | `10_` through `19_`, plotting `90_` | Historical locked analysis |
-| P2 matched candidate comparison | `20_` through `28_` | Historical locked analysis |
+| P2 frozen claim pool | `20_freeze_claim_pool.py`, `21_check_priority2_freeze.py` | Pool freezing and verification; not the 22-cohort split-fit runner |
+| 22-cohort split comparison | [Archived fit scripts](../archive/split_replication/README.md); `../reproduce.py` for reported summaries | Exact R and Python runners and historical package verified; saved-result summaries reproducible |
 | P3 source retrieval | `30_`, `31_` | Retrieval and ungraded evidence ledger |
 | P4 original rater records | `40_`, `41_`, `65_revision_r06.py` | Original statements and labels only |
 | P5 ontology diagnostics | `49_` through `54_`, plotting `91_` | Diagnostic scope, not biological truth |

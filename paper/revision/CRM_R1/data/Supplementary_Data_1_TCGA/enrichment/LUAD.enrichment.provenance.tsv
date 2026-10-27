@@ -1,0 +1,15 @@
+key	value
+ranking_md5	eb813d41dc83d28692f5acf89accb53e
+memberships_md5	414d11920d65592618cf4d3d2ca7ae43
+gene_id_type	symbol
+msigdbr	26.1.0
+msigdb	2026.1.Hs
+fgsea	1.38.0
+R	R version 4.6.1 (2026-06-24)
+seed	0
+minSize	15
+maxSize	500
+nproc	1
+tie_policy	score_then_gene_no_jitter
+ranking_genes	20160
+genes_in_any_set	4187

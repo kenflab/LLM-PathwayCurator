@@ -1,0 +1,163 @@
+{
+  "schema": "historical-split-code-provenance/2",
+  "files": [
+    {
+      "stage": "discovery",
+      "script": "25c_run_priority2b_discovery_statistics_v14_1_3.R",
+      "script_sha256": "a6815d2bc41c4a7b172f23d5453753c6ab035d462234ee90fe81fe45751ec319",
+      "signature": "discovery_run_signature.json",
+      "signature_sha256": "723dfe3949d581a336f684f32a52b433e6150b70c7c4935db8add1ee5034629b",
+      "script_matches_run_signature": true,
+      "source_bundle": "CRM_R1_V14_1_3_FGSEA_NUMERICAL_STABILITY_20260903.zip"
+    },
+    {
+      "stage": "validation",
+      "script": "74d_run_priority2b_validation_v14_1_3.R",
+      "script_sha256": "8940977aaecd7ab304dcd2aaa2261867d86f3766d725904fb838bb24e973039e",
+      "signature": "validation_run_signature.json",
+      "signature_sha256": "60feea20957d69876812927d0cf4e346f6036be233b2558867f880804b4434b6",
+      "script_matches_run_signature": true,
+      "source_bundle": "CRM_R1_V14_1_3_METHOD_BLIND_VALIDATION_20260907.zip"
+    }
+  ],
+  "original_log_sha256": "e4724fe29daa42fa0e4c0e734acfd4905719d5a215a78733a3d45e8879d284f1",
+  "known_analysis_lock_hashes": {
+    "design": "f88017ae625e45ba135f519227a6159df77b302626bc58898892fe987bfe6e78",
+    "membership": "839d0921cd0e54abe6915736cb4d0b48bf42eda9aa3ae24d7c0ce3aeaf2dbe6a",
+    "validation": "cdbca7e228f787cf52c1dcb30e474f9cd367b979c75af3ba0cd9c93768c602d8"
+  },
+  "membership_runner": {
+    "filename": "28c_run_priority2b_discovery_audit_v14_1_3.py",
+    "sha256": "6bb63f6932872c0caa7d8a39eabeab2dfacf26e79b28ee416d07db31228c5794",
+    "execution_hash_verified": true,
+    "source": "Author-supplied script; matched to the recorded audit signature",
+    "recovered_from_recorded_git_commit": false
+  },
+  "study_rerun": false,
+  "model_calls": 0,
+  "scope": "Discovery and validation R runners, membership Python runner and 24 package Python sources match recorded execution hashes. Source identity verification does not rerun the study or certify the complete execution environment.",
+  "membership_execution_record": {
+    "filename": "membership_execution.public.json",
+    "sha256": "a16ae917ebea5c6f16090a1b1828687a98efd845cd360c4407fe5ba659b99f16",
+    "original_record_hashes": {
+      "membership_manifest.json": "839d0921cd0e54abe6915736cb4d0b48bf42eda9aa3ae24d7c0ce3aeaf2dbe6a",
+      "membership_export_manifest.json": "8abe03b1df8fb74097e99a4a07d1944782233918d543af5b989c860bf5a31209",
+      "audit_run_signature.json": "c02f23265085f1cb09c2883b4fea5c2040b6fb94e6094d00fc907cc127a979cc"
+    },
+    "reference_chain_verified": true,
+    "paths_omitted": true
+  },
+  "membership_package": {
+    "archive": "llm_pathway_curator_e4698b8.zip",
+    "archive_sha256": "f0a1b77fc02da2c660b62ff73fd86a38f6131b688ea52f0a9d49bbd71876a2fa",
+    "git_commit": "e4698b836986b10550c626763480678b6766897a",
+    "package_source_sha256": "44ba5bba30e69c6a60e40e7a4183787fa33046119f9003457e9d37874197a22c",
+    "execution_hash_verified": true,
+    "digest_algorithm": "Sorted package-relative Python paths: UTF-8 path, NUL, original file bytes, NUL; SHA-256 over the concatenation.",
+    "files": {
+      "__init__.py": {
+        "bytes": 399,
+        "sha256": "0604b65dc59bb8f1e81555e0dca01d5e2ed11db21bb5938b92c3fef345b5e0db"
+      },
+      "_shared.py": {
+        "bytes": 30378,
+        "sha256": "b376c1bce4b00a27ac1e3064c6a5b1a88bc53021c79d5e00d20fc77c229c43b9"
+      },
+      "adapters/__init__.py": {
+        "bytes": 89,
+        "sha256": "05b30dac74813d1374b7ec884c81fd8cf4aac8f5d3f9a5e7bfc85d927705a90e"
+      },
+      "adapters/fgsea.py": {
+        "bytes": 13818,
+        "sha256": "6f1b9529c86cca0a4ad8cc6bf0fa38561b439a7fed305f13ebcc52b7703d53ff"
+      },
+      "adapters/metascape.py": {
+        "bytes": 13149,
+        "sha256": "30d652895f7ecda10608637e16a6f124f6f784d8690ea56f2cf8127d0b90ba14"
+      },
+      "audit.py": {
+        "bytes": 91260,
+        "sha256": "f164c26a3769803b4db4e61db7e32cadc3d5bb6aa38fb0a1fca07011405a6a18"
+      },
+      "audit_reasons.py": {
+        "bytes": 3937,
+        "sha256": "b5790104fb02a4de8ce8aecb194722b0dbddb822b6ed33cb5d20777bfa052583"
+      },
+      "backends.py": {
+        "bytes": 38317,
+        "sha256": "760a5fdb0c88773d815af9647aa34c226ca76c0cd368b0a74a466a85f02e22b6"
+      },
+      "calibrate.py": {
+        "bytes": 22758,
+        "sha256": "6497f576fc6324be2a4b8d85a8d7fb972f8a2aab2c3c88e0f97c3a352a843709"
+      },
+      "claim_schema.py": {
+        "bytes": 17729,
+        "sha256": "f9aef68a47d89281dd0b3a56074922ea4e66eec36202a46147d8673a62d45d6d"
+      },
+      "cli.py": {
+        "bytes": 17628,
+        "sha256": "5a06b14655e9e89e6dd70e815e2c1efb2e7e8404a4934eaf6dba358517878079"
+      },
+      "distill.py": {
+        "bytes": 34019,
+        "sha256": "d19ba9ae7aa8aa922f82226cfaa18db2d643e42db4b50bfe562fb1de10415181"
+      },
+      "llm_claims.py": {
+        "bytes": 62544,
+        "sha256": "e31d2f919f35693825a7d6c98d7911594ce83f6e6cf7808519e18e199a5da3e9"
+      },
+      "masking.py": {
+        "bytes": 35245,
+        "sha256": "1be9e0e3f52dbc3f461145f8d8913911ed8b2ae9cb3faeb74e21d13ee8587ec3"
+      },
+      "modules.py": {
+        "bytes": 54774,
+        "sha256": "a76c3d6af9e8b531c49c794c97cf3d8a0abd3c83b07b79aed45b47e6c2fb0657"
+      },
+      "noise_lists.py": {
+        "bytes": 8135,
+        "sha256": "ee0a354497a152cd2970c404c930283464aa0680362ca6b7a59a4d3a910ea6a6"
+      },
+      "pipeline.py": {
+        "bytes": 156453,
+        "sha256": "a8d1db4ca0d0d022a8c6c5cfff0350c8e004094b17236c923e37b80ff33364d3"
+      },
+      "ranked.py": {
+        "bytes": 20127,
+        "sha256": "e41891fa328c5e8e35c9ec6d532466440edc36db680fad11ddd58c4d4ac5617b"
+      },
+      "report.py": {
+        "bytes": 54466,
+        "sha256": "b9e3758ff27e5f48c4e45314bc11b33ae5e1bf4e8b8e74456ed53c2f35537bd1"
+      },
+      "sample_card.py": {
+        "bytes": 40787,
+        "sha256": "76a15a8f7697d2165a18a7b21c5a8669cf5e9f67c6f881f5e50c2e4b63661837"
+      },
+      "schema.py": {
+        "bytes": 32059,
+        "sha256": "727ec0f52fffbfe19b7037693e8c2154242725c4f845e937a4288939ba2b2b8d"
+      },
+      "select.py": {
+        "bytes": 76696,
+        "sha256": "eed5e246349693eb7bf1dec94aa844b6412e7ada89cb2f60c36a454ee42b50d1"
+      },
+      "utils.py": {
+        "bytes": 7366,
+        "sha256": "4822f60caf7a3a80514d96433e28ca25474de78157a2e23dea33a8a13373dc7c"
+      },
+      "viz_ranked.py": {
+        "bytes": 55447,
+        "sha256": "93aa23886b866ef26c59fc992230b86f206a4e8c0beaa43ee436aa5cfc720a54"
+      }
+    }
+  },
+  "distribution_helper": {
+    "filename": "distribution_helpers/v14_1_objective_common.py",
+    "sha256": "bc63d1e67d4be95dcd49dcb15518de00acc04243fa68ff8d82ad5cbcba218d54",
+    "source_bundle": "CRM_R1_V14_1_3_DISCOVERY_AUDIT_MEMBERSHIP_20260903.zip",
+    "execution_hash_verified": false,
+    "scope": "Dependency supplied with the historical runner distribution; not covered by the recorded runner or package digest."
+  }
+}

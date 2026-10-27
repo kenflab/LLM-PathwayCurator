@@ -1,0 +1,34 @@
+{
+  "statement_count": 50,
+  "evaluators": 3,
+  "statement_reviews": 150,
+  "categorical_responses": 450,
+  "scope": "Fixed standardized HNSC reporting corpus; not the Figure 2 source records and not the Figure 3 DEX texts. Ratings were not transferred to regenerated statements.",
+  "analysis": "Retrospective exploratory analysis of unchanged statements and returned ratings.",
+  "external_evaluator_role_source": "Author description in correspondence; identities are not exposed in this supplement.",
+  "analysis_commit": "baf343390dab82dc1ef6759b0d0244ad046004db",
+  "text_origin": "unchanged_frozen_structured_P2_wording_in_original_P4_packet",
+  "input_linkage_verified_in_saved_analysis": true,
+  "source_files_sha256": {
+    "ratings_linked.private.tsv": "ece9b653ff8d93d22c05b67f3d193008853e28660df3c290a0ecc37a173bc35b",
+    "interrater_agreement.tsv": "118f26ea2a29eec89120dcaf12536bfa3f5d7ae8c6914be9e96199ce010a7056",
+    "rater_category_counts.tsv": "f511e4273e0c23dacc69354519215a6ea2d3e473430cef1a33382bce05bdccd5",
+    "linkage_checks.private.tsv": "b42a2b846d1d8c0ea1adabfc0361a325ad9eeba835bd9dea4bda9eba0a2f2eae"
+  },
+  "independent_check": {
+    "q1_statistical_support": {
+      "fleiss_kappa_recomputed": -0.31399897941826843,
+      "unanimous_statements": 0
+    },
+    "q2_external_evidence": {
+      "fleiss_kappa_recomputed": -0.04487732708667238,
+      "unanimous_statements": 7
+    },
+    "q3_overstatement": {
+      "fleiss_kappa_recomputed": -0.3290592133698314,
+      "unanimous_statements": 0
+    }
+  },
+  "labels_changed": false,
+  "accuracy_estimated": false
+}

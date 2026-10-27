@@ -1,0 +1,5 @@
+step	label	detail
+1	Outcome-blind design lock	22 cohorts; 20 repeated stratified 60/40 splits
+2	Discovery-only membership lock	Same 50-term pool and identical K across matched methods
+3	Method-blind held-out outcomes	Direction concordance and held-out FDR <= 0.05
+4	Cohort-level paired inference	Split means within cohort; cohort-bootstrap 95% CI

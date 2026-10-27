@@ -1,0 +1,21 @@
+{
+  "scope": "Portable exports of historical provenance; no result values, labels, source text, or recorded file hashes were changed.",
+  "prefixes": {
+    "{REPOSITORY}": "Public source repository",
+    "{ANALYSIS_ROOT}": "Original analysis working directory; paths record historical provenance and do not imply that every referenced file is included in this package."
+  },
+  "exports": [
+    {
+      "file": "Supplementary_Data_4_Comparisons/temporal_replication/priority1_replication.run_meta.json",
+      "original_sha256": "5daf3c126d1c62c09c05327277843050c43fdcda59a6ced4f12ce08cce8c7731",
+      "export_sha256": "011488bec102035b267b6da3796880601338d3093b4a6e11749d0ca2a205f0c8",
+      "path_prefixes_replaced": 17
+    },
+    {
+      "file": "Supplementary_Data_4_Comparisons/split_replication/figure2_source_manifest.json",
+      "original_sha256": "1ba22585db011feb5a4c6528bd1e3141445ffe9c3c6af6eed62803b572a20b82",
+      "export_sha256": "c5f759ef1e35fde4e080056b1251b9e4365579b84627d336939e696720d373fb",
+      "path_prefixes_replaced": 16
+    }
+  ]
+}

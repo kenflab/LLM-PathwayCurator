@@ -1,0 +1,24 @@
+{
+  "schema": "CRM_R1_EXTERNAL_DEX_DESIGN_LOCK_v1",
+  "created_utc": "20261005T205940189304Z",
+  "code_sha256": {
+    "run.py": "af2c5f38e3fdad126087beb21a759dbe227830872375870712c980d4b2315cdd",
+    "analysis.R": "9ec7da05b7e5c4887ab243aed1c07999e22bf118e9c6e5dd1844b118429e57f1",
+    "protocol.json": "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3"
+  },
+  "candidate_count": 50,
+  "hallmark_source_relative_path": "output/priority2b/hallmark_lock_v14_1_2/hallmark_gene_sets.tsv",
+  "hallmark_source_sha256": "fe654c809d2eccc51601d48dcbda603dcbc110413aec93119bb63d4719aa8fb9",
+  "frozen_file_sha256": {
+    "candidate_census.tsv": "606d163ebca0ba22127712d99acdfcde021a588d409c7fe8104fab09ce4793e2",
+    "hallmark_gene_symbols.tsv": "7461bf519d3a22fc8babc72f9e85e17159b528462a77dc5c3de5eee07e3e0fd2",
+    "protocol.json": "0fd8789ae1a94fc493b84d0fe8c57e0113a1b5796f3cb68eb1dfc61f89fe0af3"
+  },
+  "model_calls": 0,
+  "expression_outcomes_loaded_by_freeze": false,
+  "published_result_exposure": [
+    "The original study abstracts/results and published CRISPLD2 cross-study results were seen during R02 methods review.",
+    "No new Hallmark expression or replication outcomes were computed before preparing this protocol.",
+    "GSE34313 methods metadata and example intensities were inspected. These are not a wholly outcome-naive holdout."
+  ]
+}

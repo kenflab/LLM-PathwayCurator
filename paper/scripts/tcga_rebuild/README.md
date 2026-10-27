@@ -7,20 +7,29 @@ it is not an fgsea adapter rule or a general-purpose genotype classifier.
 
 ## Inputs and execution
 
-Python 3.11+ and the installed project dependencies are required. R dependencies
-are checked by `CHECK_R.R`. Supply the OVFIX1 snapshot directory containing
-`public_inputs/`; `INPUT_MANIFEST.json` records the exact files, hashes, source
-URLs, and expression checksum. Large source files and mutable GDC snapshots are
-external inputs, not downloaded from the latest GDC state during classification.
-The snapshot must accompany the eventual study data archive; this code-only PR
-is not a substitute for that archive.
+Python 3.11+ and the installed project dependencies are required. The recorded
+snapshot is included in [CRM_R1_TCGA_inputs.zip](../../source_data/CRM_R1_TCGA_inputs.zip),
+with an adjacent SHA-256 file. It contains the 11 original public input files and
+`INPUT_MANIFEST.json`, including source URLs and the expression checksum.
+The 331 MB expression matrix is downloaded and verified by the runner if absent.
+The recorded GDC snapshot is retained; no current query replaces it.
 
 ```bash
+python -m zipfile -e paper/source_data/CRM_R1_TCGA_inputs.zip out/tcga_inputs
 python paper/scripts/tcga_rebuild/RUN.py \
   --repo /path/to/LLM-PathwayCurator \
-  --inputs /path/to/LLM_PathwayCurator_TCGA_Rebuild_20261009_OVFIX1 \
+  --inputs /path/to/LLM-PathwayCurator/out/tcga_inputs \
   --data-root /path/to/CRM_R1
 ```
+
+The manuscript enrichment/ranking provenance records R 4.6.1, limma 3.68.4,
+fgsea 1.38.0 and msigdbr 26.1.0. See the exact per-cohort files in
+[Supplementary Data 1](../../revision/CRM_R1/data/Supplementary_Data_1_TCGA/enrichment/).
+The original input bundle also contains a separate
+[verification environment log](BUNDLE_VERIFICATION_R_ENVIRONMENT.txt) using
+R 4.3.3, limma 3.58.1 and msigdbr 26.1.1. That log does not describe the
+manuscript fits. `CHECK_R.R` checks installed dependencies; it does not install
+or recreate either historical environment.
 
 Without `--run`, this checks inputs and writes a new sample ledger and group
 files. Add `--run` to execute ranking, enrichment, source reports, verification,

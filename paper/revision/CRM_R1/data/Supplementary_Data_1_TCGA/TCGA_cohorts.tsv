@@ -1,0 +1,8 @@
+cohort	expression_samples	MUT	call_negative	excluded	Hallmark_terms	q_le_0_05	small_arm
+BRCA	1097	260	502	335	50	27	False
+HNSC	520	348	145	27	50	21	False
+LUAD	515	216	235	64	50	25	False
+LUSC	502	389	73	40	50	32	False
+OV	303	164	7	132	50	16	True
+SKCM	103	9	94	0	50	9	True
+UCEC	532	168	263	101	50	29	False

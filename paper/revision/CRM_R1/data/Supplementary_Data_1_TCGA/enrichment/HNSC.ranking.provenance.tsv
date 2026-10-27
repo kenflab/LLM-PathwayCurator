@@ -1,0 +1,16 @@
+key	value
+expression_md5	597ce9a5efd103cfd70f75c3c2dd410b
+groups_md5	7a3fee7c1db45d5261862983e428395f
+gene_map_md5	e662170d8cff0c67db4420d852f57365
+gene_id_type	symbol
+duplicate_policy	mean_log_expression_before_fit
+duplicate_rows_collapsed	1
+input_gene_rows	20531
+mapped_genes	20518
+variable_genes	20249
+non_estimable_genes	0
+n_mut	348
+n_wt	145
+n_unknown_excluded	27
+R	R version 4.6.1 (2026-06-24)
+limma	3.68.4

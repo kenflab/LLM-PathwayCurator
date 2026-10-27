@@ -1,0 +1,43 @@
+{
+  "run_status_sha256": "e19ae7a0da5fd0c1f1d7f18d1d0070e8d4fa00bc6e13418a0fdc593f76e67cdd",
+  "code_commit": "764b18ec0140d9c878bf7866f129e6513ac751d4",
+  "model_calls": 0,
+  "inputs": {
+    "BRCA": {
+      "evidence_sha256": "c353016ca5dc70d4b508e55822ae98da6f380ba197e735a53081ff03c885fb0a",
+      "report_sha256": "2be3e13e9872abef3e0cf9e7ddb47cc5bd26e3209aa858b9fac1d2bc44b323d4",
+      "modules_sha256": "0242758731e2a378e44ab6f50ead74174056311099afe439b3e6cb5edbff5e28"
+    },
+    "HNSC": {
+      "evidence_sha256": "4809c3953f71a71862d92772dda47088cf6aba73af42be5288d2237e224679d2",
+      "report_sha256": "77fcf13137196a271ec6a493ca81564d5981f1fd715362fc0a3406246e545f60",
+      "modules_sha256": "9d8a0ff4e60da51d62b4c5cb9060ec4b105f05af72286ddfc7c2e93c89f6d65f"
+    },
+    "LUAD": {
+      "evidence_sha256": "64fb9eb7bf3ca3e2dcb3541e50fad4c5916ba86c8af42acac0c1c182cc6ba53e",
+      "report_sha256": "30dd9dece806f5c6ec6cfdb56d9ed67e8cc8f09b1587600bb161a8e3c89c95cd",
+      "modules_sha256": "74a2ea91b2f15634655afb964ff75d4f4cb9fe8a5b304594560705d0642f0cda"
+    },
+    "LUSC": {
+      "evidence_sha256": "b8305f7c0be2370b5cb3a42232451b347b76ef2fae1fe0813f6e7d5f01943913",
+      "report_sha256": "e6b767146c6cb0dae987fb3db5850c9cff99386e763877b3da0549da81bfc1f8",
+      "modules_sha256": "7dae2499f627bfaf2c23c7d48114b41ba93b33b040e51c7841b65aaae270a58e"
+    },
+    "OV": {
+      "evidence_sha256": "7e6691112ca7f77403c1cf457905c1206430d3ffb30388b8f262755d0a725f5e",
+      "report_sha256": "29135ed7a1caed2bdfe3ca220ab5bbfd7e099fb24f5a192482850aa8f4dc779f",
+      "modules_sha256": "dfaa469d56c3dbdcb9dd8e894da0b05988a0ece30c1f800c489a6b55e7728ee1"
+    },
+    "SKCM": {
+      "evidence_sha256": "d6d66c83789b8fd834fad35ea3fb110fde6cdc13f700fea94235060e9120569c",
+      "report_sha256": "e88710488943dbdddc18ab5dcfab11bc94ee218825902dec62dc621f4bbe0f28",
+      "modules_sha256": "6c44aadee69ec2b2187abe323012676d656871bd8830866d990c4e4bf9f00f15"
+    },
+    "UCEC": {
+      "evidence_sha256": "58327fef0f6c6363e16d46f59fc54655d2950ccc66eed0a5b2f209c5058a5b22",
+      "report_sha256": "8b2fa9a847cb3d775fb4673395e125329c7e37494619df67ebe106c03508269b",
+      "modules_sha256": "fe621c8d46fbb4515fa1ae344897e4b976e47279d1e87b465164803a53f139fa"
+    }
+  },
+  "interpretation": "Source selection at q<=0.05 is compared with the same q-value rule. Equal selection is expected and is not biological or LLM superiority. Modules describe supporting-gene overlap across all candidates. No submitted prose was independently evaluated by this audit."
+}

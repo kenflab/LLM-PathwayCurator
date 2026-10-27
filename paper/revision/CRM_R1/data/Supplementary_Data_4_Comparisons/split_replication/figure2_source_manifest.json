@@ -1,0 +1,115 @@
+{
+  "cohorts": 22,
+  "created_at_utc": "2026-09-07T19:35:25.357677+00:00",
+  "endpoint": {
+    "definition": "A discovery claim replicates when the held-out enrichment direction agrees and the held-out Benjamini-Hochberg q-value is at most 0.05.",
+    "name": "heldout_direction_and_fdr_replication",
+    "require_direction_concordance": true,
+    "validation_q_value_threshold": 0.05
+  },
+  "freeze_label": "KF_20260907_P2B_V14_1_3_OBJECTIVE_FIG2",
+  "human_ratings_used": false,
+  "inference": {
+    "bootstrap_draws": 10000,
+    "bootstrap_seed": 20260902,
+    "confidence_interval": "two-sided percentile 95%",
+    "pathways_are_independent_units": false,
+    "split_summary_within_cohort": "mean",
+    "unit": "cohort"
+  },
+  "inputs": {
+    "design_manifest": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/design_lock_v14_1/design_manifest.json",
+      "sha256": "f88017ae625e45ba135f519227a6159df77b302626bc58898892fe987bfe6e78"
+    },
+    "membership_manifest": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/membership_lock_v14_1_3/membership_manifest.json",
+      "sha256": "839d0921cd0e54abe6915736cb4d0b48bf42eda9aa3ae24d7c0ce3aeaf2dbe6a"
+    },
+    "validation_manifest": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/validation_lock_v14_1_3/validation_manifest.json",
+      "sha256": "cdbca7e228f787cf52c1dcb30e474f9cd367b979c75af3ba0cd9c93768c602d8"
+    }
+  },
+  "membership_validation_join_count": 1,
+  "outputs": {
+    "claim_source_private": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_claim_source.private.tsv",
+      "sha256": "ed2d217f922e0cbcb7a26554ee48a094340c8f35c3c6dc6ebcba6ef22f0b531d"
+    },
+    "cohort_method": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelB_cohort_replication.tsv",
+      "sha256": "5ee273b9846f5dfdeda762fcaac3cf45b53a6979bc7a6651a4fa94c4fa0250ba"
+    },
+    "contrast_by_cohort": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelC_contrast_by_cohort.tsv",
+      "sha256": "defccffc222a3beb36d3124103be0b51047c366ca6ff747ea22f34d30a8c979c"
+    },
+    "contrast_summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelC_contrast_summary.tsv",
+      "sha256": "e84571606fd28ed1c569a4f70b7e349c4335dc1273be41a648696b321fae6032"
+    },
+    "matched_k": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelD_matched_k.tsv",
+      "sha256": "1181ba1854b126f52cfa6c2b7b83a6b93b31f6733541b95be1b98b49b4f91c68"
+    },
+    "method_summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelB_method_summary.tsv",
+      "sha256": "235a607d9824665bbae9e295d04e86a4a3fd8978474bc520322cce00b55a1bd2"
+    },
+    "panel_A_design": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_panelA_design.tsv",
+      "sha256": "ca3215e11ebd61f8a16f4762764b471639bf3f3ec3dffb24eeaa3064a39237f1"
+    },
+    "results_summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_results_summary.md",
+      "sha256": "d4d5f9c8ef1dab77e4ac2c9e099aa95d7e203b11dffce361ed6bbd9fee3aa625"
+    },
+    "sensitivity_cohorts": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_sensitivity_cohorts.tsv",
+      "sha256": "b2c0801df10ba5ae15b7b612b595c726c0d7f752015177fc917c52a579dac8a4"
+    },
+    "sensitivity_contrast_by_cohort": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_sensitivity_contrast_by_cohort.tsv",
+      "sha256": "ed880ebc751ef501c7c18121b3783c3a7304deae9dc06b32325b380222de58a0"
+    },
+    "sensitivity_contrast_summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_sensitivity_contrast_summary.tsv",
+      "sha256": "f224685f6ecb76d18758adf197750af8e4a454c8823db57d0ee610187b8b7193"
+    },
+    "sensitivity_method_summary": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_sensitivity_method_summary.tsv",
+      "sha256": "22f60627bb9a203fec47c0379f0e9f86c2d3e7c3744f42a33b7bbb2f2245b832"
+    },
+    "split_method": {
+      "path": "{ANALYSIS_ROOT}/output/priority2b/final_v14_1_3/figure2_split_method_replication.tsv",
+      "sha256": "595b3d2b40e0dc709d2800144cef5b8d4fdc9983dd7af11ac07abc9e673e8aee"
+    }
+  },
+  "p3_literature_labels_used": false,
+  "primary_contrast": {
+    "estimand": "mean within-cohort replication difference",
+    "method_a": "full_audit",
+    "method_b": "q_value_matched",
+    "secondary_comparator": "stability_matched",
+    "superiority_claim_rule": "Do not claim superiority unless the two-sided 95% cohort-bootstrap CI excludes zero in the favorable direction. Report the estimate and CI regardless."
+  },
+  "private_outputs_not_for_public_redistribution": [
+    "figure2_claim_source.private.tsv"
+  ],
+  "raw_pool_comparison_role": "descriptive_only",
+  "repeats": 20,
+  "schema_version": "CRM_R1_P2B_FIGURE2_SOURCE_v14_1_3",
+  "sensitivity_analysis": {
+    "minimum_total_samples_per_group": 25,
+    "purpose": "Check robustness among cohorts expected to contribute at least 10 validation samples per group under the 0.40 split."
+  },
+  "software_versions": {
+    "matplotlib": "3.11.1",
+    "numpy": "2.4.6",
+    "pandas": "3.0.5",
+    "platform": "macOS-26.6.1-arm64-arm-64bit",
+    "python": "3.11.9"
+  },
+  "status": "RATER_INDEPENDENT_OBJECTIVE_FIGURE2_SOURCE_FROZEN"
+}

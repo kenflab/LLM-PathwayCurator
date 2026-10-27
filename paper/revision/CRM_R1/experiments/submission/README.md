@@ -1,4 +1,7 @@
-# Revision source assembly
+# Historical source assembly and reporting
+
+For the manuscript figures, use the [current reproduction guide](../../FIGURE_REPRODUCTION.md).
+The routes below retain historical source packages and figure numbering.
 
 Run `assemble.py --data-root "$CRM_R1_DATA_ROOT"` in the existing checkout.
 It reads saved R06/R07/dex archives, checks their export hashes, collects declared
@@ -40,7 +43,7 @@ labels or replacements for visual review of the manuscript and figures.
 The collected ZIP contains private manuscript and rating records. Keep it in
 the existing data directory. Public Git contains only this code and its guides.
 
-## Render verified main-figure drafts
+## Render historical saved-result figures
 
 Run the reporting step against one explicitly selected, complete collected ZIP:
 
