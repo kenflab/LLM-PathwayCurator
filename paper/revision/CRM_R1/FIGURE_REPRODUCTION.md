@@ -104,6 +104,6 @@ remain available for inspecting original local records.
 The [original figure map](archive/FIGURE_MAP_original.csv), earlier scripts and
 adverse/null results remain available. Historical figure numbers are not current
 manuscript panel numbers. The root citation describes the software; cite the
-exact release or commit used. DOI 10.5281/zenodo.18625777 identifies v0.1.0. A
-separate archive of the manuscript code and required data must be completed
-before citing a new release DOI.
+exact release or commit used. DOI 10.5281/zenodo.18625777 identifies v0.1.0. 
+
+LLM-PathwayCurator v0.2.0; DOI: 10.5281/zenodo.23702739; RRID:SCR_027964.
