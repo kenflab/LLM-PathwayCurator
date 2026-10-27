@@ -10,6 +10,11 @@ on:
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
+      - ".git_archival.txt"
+      - ".gitattributes"
+      - ".github/scripts/**"
+      - "docker/**"
+      - ".github/workflows/docker.yml"
       - "README.md"
       - "LICENSE"
       - ".github/workflows/ci.yml"
@@ -23,6 +28,11 @@ on:
       - "examples/**"
       - "pyproject.toml"
       - "MANIFEST.in"
+      - ".git_archival.txt"
+      - ".gitattributes"
+      - ".github/scripts/**"
+      - "docker/**"
+      - ".github/workflows/docker.yml"
       - "README.md"
       - "LICENSE"
       - ".github/workflows/ci.yml"
@@ -90,3 +100,6 @@ jobs:
       - run: python -m pip install -U build twine
       - run: python -m build
       - run: python -m twine check dist/*
+
+      - name: Check source archive version
+        run: python .github/scripts/check_archive_build.py

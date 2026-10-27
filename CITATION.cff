@@ -2,6 +2,7 @@ cff-version: 1.2.0
 message: "Please cite LLM-PathwayCurator and record the exact software release or commit used."
 title: "LLM-PathwayCurator"
 type: software
+version: "0.2.0"
 authors:
   - family-names: "Furudate"
     given-names: "Ken"

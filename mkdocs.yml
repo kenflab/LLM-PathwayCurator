@@ -24,6 +24,7 @@ nav:
   - User guide: user-guide.md
   - Tutorials: tutorials.md
   - API reference: api-reference.md
+  - Releases and archives: releases.md
 
 plugins:
   - search
