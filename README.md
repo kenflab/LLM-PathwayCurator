@@ -44,7 +44,7 @@ model calls and never automatically approves free prose.
   pip install llm-pathway-curator
 
   ```
-  (See PyPI project page: [https://pypi.org/project/llm-sc-curator/](https://pypi.org/project/llm-pathway-curator/))
+  (See PyPI project page: [https://pypi.org/project/llm-pathway-curator/](https://pypi.org/project/llm-pathway-curator/))
 
 - #### Option B: Install from GitHub (development)
   ```bash
