@@ -38,8 +38,8 @@ The full input/script/output map is [`paper/FIGURE_MAP.csv`](../../FIGURE_MAP.cs
 | Figure 2A–D | Supplementary Data 1 | `figure2/`, rendered by `plot_figure2.py` |
 | Figure 3A–B | Supplementary Data 2 | `figure3/`, rendered by `plot_figure3.py` |
 | Figures S1–S4 | Software scope and Supplementary Data 1–4 | `supplement/`, rendered by `plot_supplement.py` |
-| Table 1; Tables S2–S3 | Adapter, source and proposal contracts | Authored tables in manuscript/supplement; implementation references in figure map |
-| Table S1A–B | TCGA sample counts and source census | `supplement/tables/Table_S1*.tsv` |
+| Table 1; Tables S1–S2 | Adapter, source and proposal contracts | Authored tables in manuscript/supplement; implementation references in figure map |
+| Table S3A–B | TCGA sample counts and source census | `supplement/tables/Table_S3*.tsv` |
 | Table S4A–C | Split, temporal, cross-study and ontology comparisons | `supplement/tables/Table_S4*.tsv` |
 | Table S5A–B | DEX and HNSC returned ratings | `supplement/tables/Table_S5*.tsv`; recomputed summaries in `recomputed_tables/` |
 | Table S6 | Original SRC003/SRC019 responses and source-check outcomes | `supplement/tables/Table_S6_worked_examples.tsv` |
